@@ -17,6 +17,9 @@ coverage/
 .vscode/
 *.log
 
+# Claude Code local settings (keep shared .claude/settings.json trackable)
+.claude/settings.local.json
+
 # Env
 .env
 .env.*
