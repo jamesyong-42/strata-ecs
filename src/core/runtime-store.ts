@@ -33,8 +33,11 @@ import {
   type Tag,
   componentById,
   encodeComponentValue,
+  relationById,
 } from "./schema";
 import type { Batch, MemberCheck, Query, RowFilter } from "./query";
+import type { CommandBuffer, StructuralCommand } from "./command";
+import { devError, devWarn } from "./dev";
 
 /** A component handle paired with a value of its field type — the typed spawn/init form. */
 export type ComponentEntry<S = unknown> = readonly [Component<S>, S];
@@ -60,6 +63,8 @@ export class RuntimeStore {
   private readonly resources = new Map<number, Record<string, unknown>>();
   private readonly archetypeObservers: ((a: Archetype) => void)[] = [];
   private readonly queryMatches = new Map<Query, Archetype[]>();
+  private readonly bufferPool: StructuralCommand[][] = [];
+  private readonly freeBuffers: CommandBuffer[] = [];
   private nextArchetypeId = 0;
 
   constructor() {
@@ -198,13 +203,26 @@ export class RuntimeStore {
   // Entities
   // ---------------------------------------------------------------------------
 
+  /** Place an already-allocated identity into its components' archetype and set its tags. */
+  private placeComposed(
+    e: Entity,
+    componentIds: ComponentId[],
+    fieldValues: ReadonlyMap<FieldId, Stored>,
+    tagIds?: readonly number[],
+  ): void {
+    this.place(e, this.archetypeFor(componentIds), fieldValues);
+    if (tagIds !== undefined && tagIds.length > 0) {
+      const slot = slotOf(e);
+      for (const t of tagIds) this.tags.set(t, slot);
+    }
+  }
+
   /** Create and immediately place a runtime entity (§5.2 — outside iteration, so immediate). */
   spawn(init?: SpawnInit): Entity {
     const e = this.table.allocate();
-    const entries = init?.components ?? [];
     const seen = new Set<ComponentId>();
     const fieldValues = new Map<FieldId, Stored>();
-    for (const [component, value] of entries) {
+    for (const [component, value] of init?.components ?? []) {
       if (seen.has(component.id)) {
         throw new Error(`strata: component "${component.name}" supplied twice to spawn.`);
       }
@@ -213,12 +231,12 @@ export class RuntimeStore {
         fieldValues.set(fid, v);
       }
     }
-    const componentIds = [...seen].sort((a, b) => a - b);
-    this.place(e, this.archetypeFor(componentIds), fieldValues);
-    if (init?.tags !== undefined) {
-      const slot = slotOf(e);
-      for (const t of init.tags) this.tags.set(t.id, slot);
-    }
+    this.placeComposed(
+      e,
+      [...seen].sort((a, b) => a - b),
+      fieldValues,
+      init?.tags?.map((t) => t.id),
+    );
     return e;
   }
 
@@ -463,6 +481,130 @@ export class RuntimeStore {
 
   getResource<S>(res: Resource<S>): S | undefined {
     return this.resources.get(res.id) as S | undefined;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Command buffer — the system-iteration deferral facility (§5.4, §5.5)
+  // ---------------------------------------------------------------------------
+
+  /** Hand out a cleared buffer from the pool (grows the pool only on demand, §5.4). */
+  allocateCommandBuffer(): CommandBuffer {
+    const reused = this.freeBuffers.pop();
+    if (reused !== undefined) {
+      this.bufferPool[reused].length = 0;
+      return reused;
+    }
+    this.bufferPool.push([]);
+    return this.bufferPool.length - 1;
+  }
+
+  /** Append a command (producer-agnostic; only a system's `ctx` calls this, §5.4). */
+  enqueue(buf: CommandBuffer, cmd: StructuralCommand): void {
+    this.bufferPool[buf].push(cmd);
+  }
+
+  /** Single-pass drain: apply every command, then clear. `apply` never enqueues, so no growth (§5.4). */
+  flushCommandBuffer(buf: CommandBuffer): void {
+    const cmds = this.bufferPool[buf];
+    const n = cmds.length; // apply never appends to this buffer → n is stable
+    for (let i = 0; i < n; i++) this.applyCommand(cmds[i]);
+    cmds.length = 0;
+  }
+
+  /** Return a buffer to the pool when its phase is done. */
+  releaseCommandBuffer(buf: CommandBuffer): void {
+    this.bufferPool[buf].length = 0;
+    this.freeBuffers.push(buf);
+  }
+
+  /**
+   * Apply one buffered shape change (§5.5). Validate-on-read first (a command targeting an
+   * entity an earlier command this flush destroyed is skipped), then dispatch to the primitives
+   * with the flush-time precondition policy (idempotent no-ops; dev warn/error + skip).
+   */
+  private applyCommand(cmd: StructuralCommand): void {
+    if (!this.table.isAlive(cmd.entity)) return; // validate-on-read
+    switch (cmd.kind) {
+      case "spawn": {
+        const seen = new Set<ComponentId>();
+        const fieldValues = new Map<FieldId, Stored>();
+        for (const init of cmd.components ?? []) {
+          const c = componentById(init.component);
+          if (c === undefined || seen.has(init.component)) continue;
+          seen.add(init.component);
+          for (const [fid, v] of encodeComponentValue(c, init.value as Record<string, unknown>)) {
+            fieldValues.set(fid, v);
+          }
+        }
+        this.placeComposed(cmd.entity, [...seen].sort((a, b) => a - b), fieldValues, cmd.tags);
+        return;
+      }
+      case "despawn":
+        this.destroy(cmd.entity); // cascade + free (§5.5)
+        return;
+      case "addComponent": {
+        const c = componentById(cmd.component);
+        if (c === undefined) return;
+        if (this.has(cmd.entity, c)) {
+          devError(
+            `addComponent at flush: "${c.name}" is already present (two systems added it in one phase?) — skipped; use a value write to overwrite.`,
+          );
+          return;
+        }
+        const encoded = encodeComponentValue(c, cmd.value as Record<string, unknown>);
+        if (this.table.isIdentityOnly(cmd.entity)) {
+          this.place(cmd.entity, this.archetypeFor([c.id]), encoded);
+        } else {
+          this.migrate(
+            cmd.entity,
+            RuntimeStore.sortedInsert(this.archetypeOfEntity(cmd.entity).componentIds, c.id),
+            encoded,
+          );
+        }
+        return;
+      }
+      case "removeComponent": {
+        const c = componentById(cmd.component);
+        if (c === undefined) return;
+        if (!this.has(cmd.entity, c)) {
+          devWarn(`removeComponent at flush: "${c.name}" is not present — skipped.`);
+          return;
+        }
+        this.migrate(
+          cmd.entity,
+          this.archetypeOfEntity(cmd.entity).componentIds.filter((id) => id !== c.id),
+          EMPTY_FIELD_VALUES,
+        );
+        return;
+      }
+      case "addTag":
+        this.ensurePlaced(cmd.entity);
+        this.tags.set(cmd.tag, slotOf(cmd.entity));
+        return;
+      case "removeTag":
+        this.tags.clear(cmd.tag, slotOf(cmd.entity));
+        return;
+      case "setRelation": {
+        const rel = relationById(cmd.relation);
+        if (rel === undefined || !this.table.isAlive(cmd.target)) return; // drop an edge to a dead target
+        this.ensurePlaced(cmd.entity);
+        this.relations.setOne(rel, cmd.entity, cmd.target);
+        return;
+      }
+      case "addRelation": {
+        const rel = relationById(cmd.relation);
+        if (rel === undefined || !this.table.isAlive(cmd.target)) return;
+        this.ensurePlaced(cmd.entity);
+        this.relations.addMany(rel, cmd.entity, cmd.target);
+        return;
+      }
+      case "removeRelation": {
+        const rel = relationById(cmd.relation);
+        if (rel === undefined) return;
+        this.relations.remove(rel, cmd.entity, cmd.target);
+        return;
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
