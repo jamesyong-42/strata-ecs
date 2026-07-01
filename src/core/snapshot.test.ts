@@ -118,7 +118,7 @@ describe("snapshot errors", () => {
 
   it("rejects an unknown schema name", () => {
     const bogus = encodeJson({
-      meta: { name: "x", formatVersion: 1 },
+      meta: { name: "x", format_version: 1 },
       resources: {},
       entities: [{ id: 0, components: { Nonexistent: {} }, tags: [], relations: {} }],
     });
@@ -126,7 +126,7 @@ describe("snapshot errors", () => {
   });
 
   it("rejects an unsupported format version", () => {
-    const bad = encodeJson({ meta: { name: "x", formatVersion: 99 }, resources: {}, entities: [] });
+    const bad = encodeJson({ meta: { name: "x", format_version: 99 }, resources: {}, entities: [] });
     expect(() => createWorld().import(bad)).toThrow(/format version/);
   });
 });

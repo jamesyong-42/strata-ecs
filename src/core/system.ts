@@ -8,7 +8,15 @@
  */
 
 import type { Entity } from "./entity";
-import type { Component, ComponentId, Relation, Resource, Tag } from "./schema";
+import {
+  type Component,
+  type ComponentId,
+  type FieldId,
+  type Relation,
+  type Resource,
+  type Tag,
+  encodeComponentValue,
+} from "./schema";
 import type { Batch, Query } from "./query";
 import type { CommandBuffer } from "./command";
 import type { RuntimeStore } from "./runtime-store";
@@ -62,6 +70,9 @@ export class SystemCtx {
   getReverse(e: Entity, r: Relation): Entity[] {
     return this.store.getReverse(e, r);
   }
+  readEid(e: Entity, c: Component, field: FieldId): Entity | undefined {
+    return this.store.readEid(e, c, field);
+  }
   firstOf(q: Query): Entity | undefined {
     return this.store.firstOf(q);
   }
@@ -79,17 +90,21 @@ export class SystemCtx {
 
   // --- shape changes (deferred to the phase boundary) ---
   spawn(init?: SpawnInit): Entity {
-    const e = this.store.allocateIdentity(); // identity eager, placement deferred (§5.2)
+    // Validate BEFORE minting identity or enqueueing: a schema error (missing field, bad enum
+    // label) must throw at THIS call site (§4), never at flush where it would strand the rest of
+    // the buffer (§5.5). Validating first also avoids leaking an allocated identity on error.
     let components: { component: ComponentId; value: unknown }[] | undefined;
     if (init?.components !== undefined) {
       const seen = new Set<ComponentId>();
       components = [];
       for (const [c, v] of init.components) {
         if (seen.has(c.id)) throw new Error(`strata: component "${c.name}" supplied twice to spawn.`);
+        encodeComponentValue(c, v as Record<string, unknown>); // throws here on a schema error
         seen.add(c.id);
         components.push({ component: c.id, value: v });
       }
     }
+    const e = this.store.allocateIdentity(); // identity eager, placement deferred (§5.2)
     this.store.enqueue(this.buf, {
       kind: "spawn",
       entity: e,
@@ -109,6 +124,7 @@ export class SystemCtx {
     if (this.store.isPlaced(e) && this.store.has(e, c)) {
       throw new Error(`strata: component "${c.name}" is already present — use edit().set to overwrite its value.`);
     }
+    encodeComponentValue(c, value as Record<string, unknown>); // validate at the call site (§4), not at flush (§5.5)
     this.store.enqueue(this.buf, { kind: "addComponent", entity: e, component: c.id, value });
   }
 

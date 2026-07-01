@@ -8,6 +8,7 @@ import type { Entity } from "./entity";
 const Position = defineComponent<{ x: number; y: number }>("Position", { x: "f32", y: "f32" });
 const Velocity = defineComponent<{ x: number; y: number }>("Velocity", { x: "f32", y: "f32" });
 const Health = defineComponent<{ hp: number }>("Health", { hp: "u16" });
+const Link = defineComponent<{ target: number }>("Link", { target: "eid" });
 const Marker = defineTag("Marker");
 const Trigger = defineTag("Trigger");
 const Targets = defineRelation("Targets", { arity: "many" });
@@ -268,5 +269,38 @@ describe("run conditions & sync", () => {
     const e = w.spawn({ components: [[Position, { x: 1, y: 1 }]] });
     expect(() => w.sync()).not.toThrow();
     expect(w.read(e, Position)).toEqual({ x: 1, y: 1 });
+  });
+});
+
+describe("conformance-audit fixes", () => {
+  it("surfaces a ctx.spawn schema error at the call site, not mid-flush (§4/§5.5)", () => {
+    const BadSpawner = defineSystem(defineQuery([Marker]), (batch, ctx) => {
+      for (const _r of batch) ctx.spawn({ components: [[Health, {} as { hp: number }]] }); // missing hp
+    });
+    const w = createWorld();
+    w.spawn({ tags: [Marker] });
+    expect(() => w.tick([phase("x", [BadSpawner])])).toThrow(/missing required field "hp"/);
+    // The buffer was released despite the throw — a later tick still works.
+    expect(() => w.tick([phase("y", [])])).not.toThrow();
+  });
+
+  it("exposes ctx.readEid and batch.columns", () => {
+    const w = createWorld();
+    const target = w.spawn({ components: [[Position, { x: 1, y: 1 }]] });
+    w.spawn({ components: [[Link, { target }]] });
+    const fid = Link.fields[0].fieldId;
+    let viaReadEid: number | undefined;
+    let viaColumns = -1;
+    const S = defineSystem(defineQuery([Link]), (batch, ctx) => {
+      const linkTarget = batch.columns.Link.target as Uint32Array; // name-keyed convenience
+      for (const r of batch) {
+        viaColumns = linkTarget[r];
+        viaReadEid = ctx.readEid(batch.entity(r), Link, fid);
+      }
+    });
+    w.tick([phase("read", [S])]);
+    expect(viaReadEid).toBe(target); // ctx.readEid validated the eid field
+    expect(viaColumns).toBe(target); // batch.columns exposed the raw column
+    expect(w.readEid(w.firstOf(defineQuery([Link])) as Entity, Link, fid)).toBe(target); // World.readEid too
   });
 });

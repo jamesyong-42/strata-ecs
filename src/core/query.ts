@@ -115,6 +115,11 @@ export interface Batch extends Iterable<number> {
   readonly isDense: boolean;
   /** Raw columns for a component in this chunk, keyed by field name. */
   col(c: Component): Record<string, Column>;
+  /**
+   * Name-keyed columns for every component in this chunk's archetype (`const { Position } =
+   * batch.columns`). Dev/demo sugar, loosely typed — prefer {@link Batch.col} in real code (§6.2).
+   */
+  readonly columns: Record<string, Record<string, Column>>;
   /** The entity handle at row `r`. */
   entity(r: number): Entity;
   /** A target of `rel` for the entity at row `r` (the first, for a many-relation), validated. */

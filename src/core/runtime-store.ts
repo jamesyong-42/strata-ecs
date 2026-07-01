@@ -846,6 +846,15 @@ class ArchetypeChunk implements Batch {
     return out;
   }
 
+  get columns(): Record<string, Record<string, Column>> {
+    const out: Record<string, Record<string, Column>> = {};
+    for (const id of this.arch.componentIds) {
+      const c = componentById(id);
+      if (c !== undefined) out[c.name] = this.col(c);
+    }
+    return out;
+  }
+
   entity(r: number): Entity {
     return this.arch.entities[r] as Entity;
   }

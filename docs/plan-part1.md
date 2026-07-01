@@ -11,6 +11,22 @@
 > - **`Relation.inverse`** — reverse-edge queries (`Related(rel.inverse, …)`).
 > - **Import into a non-empty world** — `world.import` currently requires a fresh world.
 > - **Snapshot compaction** — columnar/binary format instead of JSON (an optimization).
+>
+> **Conformance audit (2026-07-01).** A 6-section multi-agent audit against the design doc found
+> 13 deviations (2 medium, 11 low). The two medium + several cheap conformance wins were **fixed**
+> (call-site schema validation so a `ctx.spawn` error can't strand the flush buffer §5.5; `readEid`
+> on `ctx`/`World`; `batch.columns`; snapshot `format_version` key + arity-one scalar id;
+> exception-safe `tick`). The rest are **intentional/documented deviations**, kept as-is:
+> - **Enum labels are per-enum, not in the shared symbol registry** (§3.4) — deliberate, so a tag
+>   and an enum variant may share a name without colliding; discriminant storage is unaffected.
+> - **Query archetype filter uses component-id arrays + a `Set` test**, not a literal bitmask
+>   (§6.1) — behaviorally identical, `O(terms)` at the (rare, cached) archetype-match step.
+> - **`QueryPlan.seed` is a `{relation,target}` descriptor**, not a `() => Entity[]` thunk (§6.1) —
+>   required to keep the compiled plan store-agnostic; internal, not user-facing.
+> - **`batch.getRelated` returns `Entity | undefined`** (design: `Entity`) and **`isDense` folds in
+>   "no row filters"** (design: unseeded only) — both are strictly *safer* than the reference.
+> - **`ECSStore` interface** not yet extracted (Part II is written against it) — to be defined when
+>   Part II lands; **`EntityKey` brand** on `key` fields is a Part III concern (§14.3).
 
 This is the working plan for **Part I** of strata (the local, non-collaborative ECS).
 It follows the design's own build order (`docs/design.md` §19) but expands it into

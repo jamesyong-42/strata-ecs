@@ -29,11 +29,12 @@ interface EntityRecord {
   id: number;
   components: Record<string, Record<string, unknown>>;
   tags: string[];
-  relations: Record<string, number[]>;
+  // arity "one" → scalar id; arity "many" → array of ids (§8.1: `RelName: id | [id, ...]`).
+  relations: Record<string, number | number[]>;
 }
 
 interface Snapshot {
-  meta: { name: string; formatVersion: number };
+  meta: { name: string; format_version: number };
   resources: Record<string, unknown>;
   entities: EntityRecord[];
 }
@@ -72,21 +73,21 @@ export function exportSnapshot(store: RuntimeStore, name: string): Uint8Array {
 
     const tags = store.tagsOf(e).map((t) => t.name);
 
-    const relations: Record<string, number[]> = {};
+    const relations: Record<string, number | number[]> = {};
     for (const { relation, targets } of store.relationsOf(e)) {
       const ids: number[] = [];
       for (const t of targets) {
         const id = idOf.get(t);
         if (id !== undefined) ids.push(id);
       }
-      if (ids.length > 0) relations[relation.name] = ids;
+      if (ids.length > 0) relations[relation.name] = relation.arity === "one" ? ids[0] : ids;
     }
 
     records.push({ id: i, components, tags, relations });
   }
 
   const snapshot: Snapshot = {
-    meta: { name, formatVersion: FORMAT_VERSION },
+    meta: { name, format_version: FORMAT_VERSION },
     resources,
     entities: records,
   };
@@ -99,8 +100,8 @@ export function importSnapshot(store: RuntimeStore, bytes: Uint8Array): void {
     throw new Error("strata: import() requires an empty world — create a fresh world to load a snapshot.");
   }
   const snapshot = JSON.parse(new TextDecoder().decode(bytes)) as Snapshot;
-  if (snapshot.meta?.formatVersion !== FORMAT_VERSION) {
-    throw new Error(`strata: unsupported snapshot format version ${snapshot.meta?.formatVersion}.`);
+  if (snapshot.meta?.format_version !== FORMAT_VERSION) {
+    throw new Error(`strata: unsupported snapshot format version ${snapshot.meta?.format_version}.`);
   }
 
   for (const [resName, value] of Object.entries(snapshot.resources)) {
@@ -154,9 +155,10 @@ export function importSnapshot(store: RuntimeStore, bytes: Uint8Array): void {
       }
       store.writeComponent(handle, c, resolved);
     }
-    for (const [rName, targetIds] of Object.entries(record.relations)) {
+    for (const [rName, raw] of Object.entries(record.relations)) {
       const rel = relationByName(rName);
       if (rel === undefined) throw new Error(`strata: snapshot references unknown relation "${rName}".`);
+      const targetIds = Array.isArray(raw) ? raw : [raw]; // scalar (arity one) or array (many), §8.1
       for (const tid of targetIds) {
         const target = handleOf.get(tid);
         if (target === undefined) continue;

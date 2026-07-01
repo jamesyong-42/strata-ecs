@@ -8,7 +8,7 @@
  */
 
 import type { Entity } from "./entity";
-import type { Component, Relation, Resource, Tag } from "./schema";
+import type { Component, FieldId, Relation, Resource, Tag } from "./schema";
 import type { Batch, Query } from "./query";
 import { RuntimeStore, type SpawnInit } from "./runtime-store";
 import { type EntityEditor, type Pipeline, SystemCtx, makeEditor } from "./system";
@@ -93,6 +93,9 @@ export class World {
   getReverse(e: Entity, r: Relation): Entity[] {
     return this.store.getReverse(e, r);
   }
+  readEid(e: Entity, c: Component, field: FieldId): Entity | undefined {
+    return this.store.readEid(e, c, field);
+  }
   firstOf(q: Query): Entity | undefined {
     return this.store.firstOf(q);
   }
@@ -118,17 +121,19 @@ export class World {
   tick(pipeline: Pipeline): void {
     for (const phase of pipeline) {
       const buf = this.store.allocateCommandBuffer();
-      const ctx = new SystemCtx(this.store, buf);
-      if (phase.runIf !== undefined && !phase.runIf(ctx)) {
+      try {
+        const ctx = new SystemCtx(this.store, buf);
+        if (phase.runIf !== undefined && !phase.runIf(ctx)) continue;
+        for (const system of phase.systems) {
+          if (system.runIf !== undefined && !system.runIf(ctx)) continue;
+          this.store.query(system.query).each((batch) => system.body(batch, ctx));
+        }
+        this.store.flushCommandBuffer(buf); // phase boundary: shape changes become visible (§7)
+      } finally {
+        // Always return the buffer to the pool — even if a system body throws (the pool must not
+        // leak, and a thrown phase is simply abandoned without flushing).
         this.store.releaseCommandBuffer(buf);
-        continue;
       }
-      for (const system of phase.systems) {
-        if (system.runIf !== undefined && !system.runIf(ctx)) continue;
-        this.store.query(system.query).each((batch) => system.body(batch, ctx));
-      }
-      this.store.flushCommandBuffer(buf); // phase boundary: shape changes become visible (§7)
-      this.store.releaseCommandBuffer(buf);
     }
   }
 
