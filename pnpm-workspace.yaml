@@ -1,0 +1,4 @@
+# The strata library is the workspace root; the comparative benchmark is an isolated member so its
+# rival-ECS dependencies (bitecs, becsy, miniplex, koota, mitata) never enter strata's own package.
+packages:
+  - "bench/compare"
