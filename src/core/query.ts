@@ -103,15 +103,29 @@ export interface Query {
 // --- the batch (chunk) the system body receives ------------------------------
 
 /**
- * The per-archetype chunk handed to a query body (§6.2). Iterate with `for (const r of batch)`
- * to get matching rows (row filters fused); read raw columns via `col`. `denseCount` is the raw
- * archetype row count — the raw `for (r = 0; r < denseCount; r++)` loop is valid ONLY when
- * `isDense` (a dense, unseeded, pure-component chunk).
+ * The per-archetype chunk handed to a query body (§6.2).
+ *
+ * Fastest idiom — a raw loop over the materialized matched rows, valid for EVERY chunk kind (dense,
+ * row-filtered, seeded), with no generator and no per-row filter re-check:
+ *
+ * ```ts
+ * const px = b.col(Position).x as Float64Array;
+ * for (let i = 0; i < b.count; i++) { const r = b.rows[i]; px[r] += 1; }
+ * ```
+ *
+ * `for (const r of batch)` is equivalent (row filters fused) and ergonomic — now backed by `rows`,
+ * not a generator. `denseCount` is the raw archetype row count; the raw `for (r < denseCount)` loop
+ * is valid ONLY when `isDense`. Read columns via `col`. `rows`/columns/`entity` are valid only inside
+ * the current `each` callback (chunk-scoped; the row buffer may be reused for the next chunk).
  */
 export interface Batch extends Iterable<number> {
+  /** Number of MATCHED rows in this chunk (row filters applied). Loop bound for {@link Batch.rows}. */
+  readonly count: number;
+  /** Matched row indices; valid for `rows[0 .. count)`. Chunk-scoped (do not retain past `each`). */
+  readonly rows: Int32Array;
   /** Raw archetype row count. Not a matched-row count (§6.2). */
   readonly denseCount: number;
-  /** True only for a dense, unseeded, no-row-filter chunk (the raw loop is valid). */
+  /** True only for a dense, unseeded, no-row-filter chunk (the raw `denseCount` loop is valid). */
   readonly isDense: boolean;
   /** Raw columns for a component in this chunk, keyed by field name. */
   col(c: Component): Record<string, Column>;

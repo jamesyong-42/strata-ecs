@@ -78,6 +78,28 @@ export class RuntimeStore implements ECSStore {
    * mid-drain). DEV-only; stripped in production.
    */
   private commandBufferWarnThreshold = 1_000_000;
+  /**
+   * Ascending identity `[0,1,2,…]`, grown to the largest archetype seen and shared by every dense
+   * chunk as its `rows` (§6.2). Read-only content, so sharing across (even nested) queries is safe:
+   * growing replaces the array, and an outer chunk keeps its still-correct older reference.
+   */
+  private identityRows = new Int32Array(0);
+  /** Transient scratch for materializing a row-filtered chunk's matches, before the exact-size copy. */
+  private rowScratch = new Int32Array(0);
+
+  private ensureIdentity(n: number): Int32Array {
+    if (this.identityRows.length < n) {
+      const next = new Int32Array(n);
+      for (let i = 0; i < n; i++) next[i] = i;
+      this.identityRows = next;
+    }
+    return this.identityRows;
+  }
+
+  private ensureScratch(n: number): Int32Array {
+    if (this.rowScratch.length < n) this.rowScratch = new Int32Array(n);
+    return this.rowScratch;
+  }
 
   constructor() {
     this.emptyArchetype = this.archetypeFor([]);
@@ -663,9 +685,28 @@ export class RuntimeStore implements ECSStore {
       matches = this.buildMatches(q);
       this.queryMatches.set(q, matches);
     }
+    const dense = q.rowFilters.length === 0;
     for (const arch of matches) {
       if (arch.count === 0) continue; // an empty archetype matches nothing (cheap skip)
-      fn(new ArchetypeChunk(this, arch, q.rowFilters));
+      let rows: Int32Array;
+      let count: number;
+      if (dense) {
+        rows = this.ensureIdentity(arch.count); // shared ascending array; no per-chunk allocation
+        count = arch.count;
+      } else {
+        // Materialize matched rows with ONE filter pass into shared scratch, then copy to an
+        // exact-size buffer the chunk owns — so a query nested inside the body can safely reuse
+        // scratch. Replaces the former per-row generator (~16× faster; see docs/perf-hotpath.md).
+        const scratch = this.ensureScratch(arch.count);
+        let n = 0;
+        for (let r = 0; r < arch.count; r++) {
+          const e = arch.entities[r] as Entity;
+          if (this.passesRowFilters(q.rowFilters, e, arch)) scratch[n++] = r;
+        }
+        rows = scratch.slice(0, n);
+        count = n;
+      }
+      fn(new ArchetypeChunk(this, arch, rows, count, dense));
     }
   }
 
@@ -680,7 +721,7 @@ export class RuntimeStore implements ECSStore {
       const arch = this.archetypeOfEntity(src);
       if (!this.archetypeMatchesQuery(q, arch)) continue;
       if (!this.passesRowFilters(q.rowFilters, src, arch)) continue;
-      fn(new ArchetypeChunk(this, arch, q.rowFilters, [this.table.rowOf(slotOf(src))]));
+      fn(new ArchetypeChunk(this, arch, Int32Array.of(this.table.rowOf(slotOf(src))), 1, false));
     }
   }
 
@@ -848,8 +889,10 @@ class ArchetypeChunk implements Batch {
   constructor(
     private readonly store: RuntimeStore,
     private readonly arch: Archetype,
-    private readonly rowFilters: readonly RowFilter[],
-    private readonly seededRows?: readonly number[],
+    /** Matched row indices, `rows[0 .. count)`. Shared identity array (dense) or an owned copy. */
+    readonly rows: Int32Array,
+    readonly count: number,
+    private readonly dense: boolean,
   ) {}
 
   get denseCount(): number {
@@ -857,7 +900,7 @@ class ArchetypeChunk implements Batch {
   }
 
   get isDense(): boolean {
-    return this.seededRows === undefined && this.rowFilters.length === 0;
+    return this.dense;
   }
 
   col(c: Component): Record<string, Column> {
@@ -896,15 +939,17 @@ class ArchetypeChunk implements Batch {
   }
 
   [Symbol.iterator](): Iterator<number> {
-    if (this.seededRows !== undefined) return this.seededRows[Symbol.iterator]();
-    return this.denseIterator();
-  }
-
-  private *denseIterator(): Generator<number> {
-    const arch = this.arch;
-    for (let r = 0; r < arch.count; r++) {
-      const e = arch.entities[r] as Entity;
-      if (this.store.passesRowFilters(this.rowFilters, e, arch)) yield r;
-    }
+    // A plain (non-generator) iterator over the pre-materialized matched rows — one small object per
+    // `for..of`, O(1) per row. The raw `for (let i = 0; i < b.count; i++) b.rows[i]` loop is faster.
+    const rows = this.rows;
+    const count = this.count;
+    let i = 0;
+    return {
+      next(): IteratorResult<number> {
+        return i < count
+          ? { value: rows[i++], done: false }
+          : { value: undefined as unknown as number, done: true };
+      },
+    };
   }
 }
