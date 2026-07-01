@@ -32,6 +32,10 @@ export interface ECSStore {
   // --- components: read ---
   read<S>(e: Entity, c: Component<S>): S;
   get<S>(e: Entity, c: Component<S>): S | undefined;
+  /** Read ONE field's decoded value with no object allocation — the fast path for random access
+   *  by handle (whole-component `read`/`get` build an object per call). `undefined` if the entity
+   *  lacks the component or the field name is unknown. Generalizes {@link ECSStore.readEid}. */
+  readField<T = number>(e: Entity, c: Component, field: string): T | undefined;
   has(e: Entity, c: Component): boolean;
   readEid(e: Entity, c: Component, field: FieldId): Entity | undefined;
 

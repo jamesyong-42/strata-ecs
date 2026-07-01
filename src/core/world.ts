@@ -78,6 +78,10 @@ export class World {
   get<S>(e: Entity, c: Component<S>): S | undefined {
     return this.store.get(e, c);
   }
+  /** Read one field with no allocation — the fast path for random access by handle (§Part I ref). */
+  readField<T = number>(e: Entity, c: Component, field: string): T | undefined {
+    return this.store.readField<T>(e, c, field);
+  }
   has(e: Entity, c: Component): boolean {
     return this.store.has(e, c);
   }

@@ -412,6 +412,20 @@ export class RuntimeStore implements ECSStore {
     return out as S;
   }
 
+  /**
+   * Read one field's decoded value with NO object allocation — the fast path for random access by
+   * handle (whole-component {@link RuntimeStore.read} builds a value object per call). `undefined`
+   * if the entity lacks `c` or `field` is not one of its fields. Generalizes {@link RuntimeStore.readEid}.
+   */
+  readField<T = number>(e: Entity, c: Component, field: string): T | undefined {
+    if (!this.has(e, c)) return undefined;
+    const meta = c.fieldByName.get(field);
+    if (meta === undefined) return undefined;
+    const A = this.archetypeOfEntity(e);
+    const row = this.table.rowOf(slotOf(e));
+    return decodeField(meta.spec.type, readCell(A.columns.get(meta.fieldId) as Column, meta.kind, row)) as T;
+  }
+
   /** Read a validated `eid` field: the referenced entity, or `undefined` if the ref dangles (§2). */
   readEid(e: Entity, c: Component, field: FieldId): Entity | undefined {
     if (!this.has(e, c)) return undefined;
@@ -696,15 +710,10 @@ export class RuntimeStore implements ECSStore {
       } else {
         // Materialize matched rows with ONE filter pass into shared scratch, then copy to an
         // exact-size buffer the chunk owns — so a query nested inside the body can safely reuse
-        // scratch. Replaces the former per-row generator (~16× faster; see docs/perf-hotpath.md).
+        // scratch. Replaces the former per-row generator (see docs/perf-hotpath.md).
         const scratch = this.ensureScratch(arch.count);
-        let n = 0;
-        for (let r = 0; r < arch.count; r++) {
-          const e = arch.entities[r] as Entity;
-          if (this.passesRowFilters(q.rowFilters, e, arch)) scratch[n++] = r;
-        }
-        rows = scratch.slice(0, n);
-        count = n;
+        count = this.fillMatchedRows(arch, q.rowFilters, scratch);
+        rows = scratch.slice(0, count);
       }
       fn(new ArchetypeChunk(this, arch, rows, count, dense));
     }
@@ -749,7 +758,37 @@ export class RuntimeStore implements ECSStore {
     return true;
   }
 
-  /** @internal Evaluate all per-row filters for an entity (used by the chunk iterator). */
+  /**
+   * Fill `scratch[0..return)` with the rows of `arch` whose entity passes every row filter, and
+   * return the match count (§6.1). Fast path for a single tag filter — the common `tag` / `Not(tag)`
+   * case — hoists the tag's bitset once and inlines the bit test, so there is no per-row `Map`
+   * lookup (the dominant cost of a naive per-row `tags.has`). Other shapes fall back to the general
+   * per-row predicate.
+   */
+  private fillMatchedRows(arch: Archetype, rowFilters: readonly RowFilter[], scratch: Int32Array): number {
+    let n = 0;
+    if (rowFilters.length === 1 && rowFilters[0].kind === "tag") {
+      const rf = rowFilters[0];
+      const bs = this.tags.bitset(rf.tagId as number); // hoisted out of the row loop (was per-row Map.get)
+      const neg = rf.negate;
+      const ents = arch.entities;
+      const cnt = arch.count;
+      for (let r = 0; r < cnt; r++) {
+        const slot = slotOf(ents[r] as Entity);
+        const word = slot >>> 5;
+        const has = bs !== undefined && word < bs.length && ((bs[word] >>> (slot & 31)) & 1) === 1;
+        if (has !== neg) scratch[n++] = r; // pass iff (neg ? !has : has)
+      }
+      return n;
+    }
+    for (let r = 0; r < arch.count; r++) {
+      const e = arch.entities[r] as Entity;
+      if (this.passesRowFilters(rowFilters, e, arch)) scratch[n++] = r;
+    }
+    return n;
+  }
+
+  /** @internal Evaluate all per-row filters for an entity (used by the seeded path + fallback). */
   passesRowFilters(rowFilters: readonly RowFilter[], e: Entity, arch: Archetype): boolean {
     for (const rf of rowFilters) if (!this.passesRowFilter(rf, e, arch)) return false;
     return true;
@@ -939,16 +978,23 @@ class ArchetypeChunk implements Batch {
   }
 
   [Symbol.iterator](): Iterator<number> {
-    // A plain (non-generator) iterator over the pre-materialized matched rows — one small object per
-    // `for..of`, O(1) per row. The raw `for (let i = 0; i < b.count; i++) b.rows[i]` loop is faster.
+    // Non-generator iterator over the pre-materialized matched rows, reusing ONE result object (no
+    // per-row allocation — a generator/naive iterator allocates `{value,done}` every `next()`). Still
+    // pays the iterator-protocol call overhead; the raw `for (let i=0;i<b.count;i++) b.rows[i]` loop
+    // is faster and is the documented hot path (§6.2).
     const rows = this.rows;
     const count = this.count;
     let i = 0;
+    const result: { value: number; done: boolean } = { value: 0, done: false };
     return {
       next(): IteratorResult<number> {
-        return i < count
-          ? { value: rows[i++], done: false }
-          : { value: undefined as unknown as number, done: true };
+        if (i < count) {
+          result.value = rows[i++];
+          result.done = false;
+        } else {
+          result.done = true;
+        }
+        return result as IteratorResult<number>;
       },
     };
   }

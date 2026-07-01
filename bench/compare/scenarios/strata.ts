@@ -271,13 +271,16 @@ const sim_frame: Scenario = {
       if (i % 5 === 0) comps.push([Renderable, { acc: 0 }]);
       w.spawn({ components: comps, tags: i % 4 === 0 ? [Frozen] : [] });
     }
-    // Movement excludes Frozen (per-row tag filter → matched-row iteration), reads Velocity, writes Position.
+    // Movement excludes Frozen (per-row tag filter), reads Velocity, writes Position. Uses the
+    // generator-free matched-row fast path: raw loop over b.rows[0..count).
     const Movement = defineSystem(defineQuery([Position, Velocity, Not(Frozen)]), (b) => {
       const px = b.col(Position).x as F64;
       const py = b.col(Position).y as F64;
       const vx = b.col(Velocity).x as F64;
       const vy = b.col(Velocity).y as F64;
-      for (const r of b) {
+      const rows = b.rows;
+      for (let i = 0; i < b.count; i++) {
+        const r = rows[i];
         px[r] += vx[r];
         py[r] += vy[r];
       }
@@ -337,7 +340,8 @@ const spawn_reap_frame: Scenario = {
       for (let r = 0; r < b.denseCount; r++) ctx.spawn({ components: [[Particle, { life: 1 }]] });
     });
     const Reaper = defineSystem(defineQuery([Particle]), (b, ctx) => {
-      for (const r of b) ctx.destroy(b.entity(r));
+      const rows = b.rows;
+      for (let i = 0; i < b.count; i++) ctx.destroy(b.entity(rows[i]));
     });
     return {
       w, qParticle: defineQuery([Particle]),
