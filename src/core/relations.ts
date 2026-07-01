@@ -135,6 +135,12 @@ export class RelationStore {
     return set !== undefined && set.size > 0;
   }
 
+  /** Whether `source` has an edge to a specific `target` under `rel` (concrete-target row filter). */
+  hasEdge(rel: Relation, source: Entity, target: Entity): boolean {
+    if (rel.arity === "one") return this.oneForward.get(rel.id)?.get(source) === target;
+    return this.manyForward.get(rel.id)?.get(source)?.has(target) ?? false;
+  }
+
   private mapFor<V>(index: Map<RelationId, Map<Entity, V>>, rid: RelationId): Map<Entity, V> {
     let m = index.get(rid);
     if (m === undefined) {

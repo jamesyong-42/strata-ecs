@@ -34,6 +34,7 @@ import {
   componentById,
   encodeComponentValue,
 } from "./schema";
+import type { Batch, MemberCheck, Query, RowFilter } from "./query";
 
 /** A component handle paired with a value of its field type — the typed spawn/init form. */
 export type ComponentEntry<S = unknown> = readonly [Component<S>, S];
@@ -58,10 +59,17 @@ export class RuntimeStore {
   private readonly emptyArchetype: Archetype;
   private readonly resources = new Map<number, Record<string, unknown>>();
   private readonly archetypeObservers: ((a: Archetype) => void)[] = [];
+  private readonly queryMatches = new Map<Query, Archetype[]>();
   private nextArchetypeId = 0;
 
   constructor() {
     this.emptyArchetype = this.archetypeFor([]);
+    // Keep every cached query's matching-archetype list current as new archetypes appear (§6.1).
+    this.observeArchetypes((arch) => {
+      for (const [q, list] of this.queryMatches) {
+        if (this.archetypeMatchesQuery(q, arch)) list.push(arch);
+      }
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -458,11 +466,202 @@ export class RuntimeStore {
   }
 
   // ---------------------------------------------------------------------------
+  // Queries — per-chunk dispatch (§6)
+  // ---------------------------------------------------------------------------
+
+  /** Run a compiled query, dispatching the body once per matching chunk (§6.2). */
+  query(q: Query): { each(fn: (batch: Batch) => void): void } {
+    return { each: (fn) => this.runQuery(q, fn) };
+  }
+
+  /** The first entity matching `q`, or `undefined` (§Part I ref). */
+  firstOf(q: Query): Entity | undefined {
+    let found: Entity | undefined;
+    this.runQuery(q, (batch) => {
+      if (found !== undefined) return;
+      for (const r of batch) {
+        found = batch.entity(r);
+        break;
+      }
+    });
+    return found;
+  }
+
+  private runQuery(q: Query, fn: (batch: Batch) => void): void {
+    if (q.seed !== undefined) {
+      this.runSeeded(q, fn);
+      return;
+    }
+    let matches = this.queryMatches.get(q);
+    if (matches === undefined) {
+      matches = this.buildMatches(q);
+      this.queryMatches.set(q, matches);
+    }
+    for (const arch of matches) {
+      if (arch.count === 0) continue; // an empty archetype matches nothing (cheap skip)
+      fn(new ArchetypeChunk(this, arch, q.rowFilters));
+    }
+  }
+
+  /** Concrete-target relation: start from the reverse-index hit set, then verify every other term (§6.4). */
+  private runSeeded(q: Query, fn: (batch: Batch) => void): void {
+    const seed = q.seed as NonNullable<Query["seed"]>;
+    const sources = this.relations.reverseSet(seed.relation, seed.target);
+    if (sources === undefined) return;
+    for (const src of sources) {
+      if (!this.table.isAlive(src)) continue; // validate-on-read
+      if (!this.table.isPlaced(src)) continue; // needs a row to be readable
+      const arch = this.archetypeOfEntity(src);
+      if (!this.archetypeMatchesQuery(q, arch)) continue;
+      if (!this.passesRowFilters(q.rowFilters, src, arch)) continue;
+      fn(new ArchetypeChunk(this, arch, q.rowFilters, [this.table.rowOf(slotOf(src))]));
+    }
+  }
+
+  private buildMatches(q: Query): Archetype[] {
+    const out: Archetype[] = [];
+    for (const arch of this.archetypesById) {
+      if (arch !== undefined && this.archetypeMatchesQuery(q, arch)) out.push(arch);
+    }
+    return out;
+  }
+
+  private archetypeMatchesQuery(q: Query, arch: Archetype): boolean {
+    for (const id of q.required) if (!arch.hasComponent(id)) return false;
+    for (const id of q.excluded) if (arch.hasComponent(id)) return false;
+    for (const group of q.anyComponentGroups) {
+      let ok = false;
+      for (const id of group) {
+        if (arch.hasComponent(id)) {
+          ok = true;
+          break;
+        }
+      }
+      if (!ok) return false;
+    }
+    return true;
+  }
+
+  /** @internal Evaluate all per-row filters for an entity (used by the chunk iterator). */
+  passesRowFilters(rowFilters: readonly RowFilter[], e: Entity, arch: Archetype): boolean {
+    for (const rf of rowFilters) if (!this.passesRowFilter(rf, e, arch)) return false;
+    return true;
+  }
+
+  private passesRowFilter(rf: RowFilter, e: Entity, arch: Archetype): boolean {
+    switch (rf.kind) {
+      case "tag": {
+        const has = this.tags.has(rf.tagId as number, slotOf(e));
+        return rf.negate ? !has : has;
+      }
+      case "rel": {
+        const rel = rf.relation as Relation;
+        const has =
+          rf.target !== undefined
+            ? this.relations.hasEdge(rel, e, rf.target)
+            : this.relations.hasAny(rel, e);
+        return rf.negate ? !has : has;
+      }
+      case "any": {
+        let ok = false;
+        for (const m of rf.members as readonly MemberCheck[]) {
+          if (this.memberCheck(m, e, arch)) {
+            ok = true;
+            break;
+          }
+        }
+        return rf.negate ? !ok : ok;
+      }
+    }
+  }
+
+  private memberCheck(m: MemberCheck, e: Entity, arch: Archetype): boolean {
+    switch (m.kind) {
+      case "component":
+        return arch.hasComponent(m.componentId as number);
+      case "tag":
+        return this.tags.has(m.tagId as number, slotOf(e));
+      case "rel": {
+        const rel = m.relation as Relation;
+        return m.target !== undefined
+          ? this.relations.hasEdge(rel, e, m.target)
+          : this.relations.hasAny(rel, e);
+      }
+      case "all": {
+        for (const mm of m.members as readonly MemberCheck[]) {
+          if (!this.memberCheck(mm, e, arch)) return false;
+        }
+        return true;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Introspection (for tests / tooling)
   // ---------------------------------------------------------------------------
 
   /** The archetype an entity is currently placed in, or `undefined` if identity-only. */
   debugArchetypeOf(e: Entity): Archetype | undefined {
     return this.table.isPlaced(e) ? this.archetypeOfEntity(e) : undefined;
+  }
+}
+
+/**
+ * The per-archetype chunk (§6.2). For the dense path the iterator yields rows passing the
+ * plan's row filters; for the seeded path it yields the pre-verified seed rows directly.
+ */
+class ArchetypeChunk implements Batch {
+  constructor(
+    private readonly store: RuntimeStore,
+    private readonly arch: Archetype,
+    private readonly rowFilters: readonly RowFilter[],
+    private readonly seededRows?: readonly number[],
+  ) {}
+
+  get denseCount(): number {
+    return this.arch.count;
+  }
+
+  get isDense(): boolean {
+    return this.seededRows === undefined && this.rowFilters.length === 0;
+  }
+
+  col(c: Component): Record<string, Column> {
+    const out: Record<string, Column> = {};
+    for (const f of c.fields) out[f.name] = this.arch.columns.get(f.fieldId) as Column;
+    return out;
+  }
+
+  entity(r: number): Entity {
+    return this.arch.entities[r] as Entity;
+  }
+
+  getRelated(r: number, rel: Relation): Entity | undefined {
+    const e = this.entity(r);
+    if (rel.arity === "one") return this.store.getRelation(e, rel);
+    const all = this.store.getRelations(e, rel);
+    return all.length > 0 ? all[0] : undefined;
+  }
+
+  getAllRelated(r: number, rel: Relation): Entity[] {
+    const e = this.entity(r);
+    if (rel.arity === "one") {
+      const t = this.store.getRelation(e, rel);
+      return t !== undefined ? [t] : [];
+    }
+    return this.store.getRelations(e, rel);
+  }
+
+  [Symbol.iterator](): Iterator<number> {
+    if (this.seededRows !== undefined) return this.seededRows[Symbol.iterator]();
+    return this.denseIterator();
+  }
+
+  private *denseIterator(): Generator<number> {
+    const arch = this.arch;
+    for (let r = 0; r < arch.count; r++) {
+      const e = arch.entities[r] as Entity;
+      if (this.store.passesRowFilters(this.rowFilters, e, arch)) yield r;
+    }
   }
 }
