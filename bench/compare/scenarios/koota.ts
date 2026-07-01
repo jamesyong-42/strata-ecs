@@ -6,7 +6,7 @@
  * `onChange` subscribers are registered, so writes are plain array stores with no tracking overhead.
  */
 
-import { type Trait, type World, createQuery, createWorld, trait } from "koota";
+import { type ConfigurableTrait, type Entity, Not, type Trait, type World, createQuery, createWorld, trait } from "koota";
 import { type LibraryBench, N, RANDOM_ACCESS, type Scenario, accessIndex } from "../contract.ts";
 
 // koota packs [worldId(4) | generation(8) | entityId(20)]; the low 20 bits are the SoA store index.
@@ -16,6 +16,9 @@ const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 type Query = ReturnType<typeof createQuery>;
 type NumStore = { value: number[] };
 type XYStore = { x: number[]; y: number[] };
+type HpStore = { hp: number[] };
+type AmountStore = { amount: number[] };
+type AccStore = { acc: number[] };
 
 // --- packed_5 -----------------------------------------------------------------
 const packed_5: Scenario = {
@@ -196,10 +199,191 @@ const random_access: Scenario = {
   },
 };
 
+// --- frame: sim_frame ---------------------------------------------------------
+// koota has no scheduler, so the "pipeline" is four system-functions called in fixed order per
+// frame. Each system iterates a warmed createQuery via useStores (raw SoA columns indexed by the
+// masked entity id). Movement excludes Frozen (a tag trait) via Not(Frozen); Render reads Position
+// AFTER Movement wrote it. The checksum accumulates across mitata iterations, matching every rival.
+const sim_frame: Scenario = {
+  id: "sim_frame",
+  setup() {
+    const Position = trait({ x: 0, y: 0 });
+    const Velocity = trait({ x: 0, y: 0 });
+    const Health = trait({ hp: 0 });
+    const Damage = trait({ amount: 0 });
+    const Renderable = trait({ acc: 0 });
+    const Frozen = trait(); // tag trait — marks an entity, no data
+    const w = createWorld();
+    const NUM = 10_000;
+    for (let i = 0; i < NUM; i++) {
+      const comps: ConfigurableTrait[] = [Position({ x: 0, y: 0 }), Velocity({ x: 1, y: 2 })];
+      if (i % 2 === 0) comps.push(Health({ hp: 0 }));
+      if (i % 3 === 0) comps.push(Damage({ amount: 1 }));
+      if (i % 5 === 0) comps.push(Renderable({ acc: 0 }));
+      if (i % 4 === 0) comps.push(Frozen);
+      w.spawn(...comps);
+    }
+    // Warm every query once (built here, iterated in run()). Zero onChange subscribers registered.
+    return {
+      w,
+      qMove: createQuery(Position, Velocity, Not(Frozen)),
+      qHealth: createQuery(Health),
+      qHealthDamage: createQuery(Health, Damage),
+      qRenderPos: createQuery(Renderable, Position),
+      qPos: createQuery(Position),
+      qRender: createQuery(Renderable),
+    };
+  },
+  run(state) {
+    const s = state as {
+      w: World;
+      qMove: Query; qHealth: Query; qHealthDamage: Query; qRenderPos: Query; qPos: Query; qRender: Query;
+    };
+    // 1. Movement over [Position, Velocity] EXCLUDING Frozen → Position += Velocity.
+    s.w.query(s.qMove).useStores((stores, entities) => {
+      const px = (stores[0] as XYStore).x;
+      const py = (stores[0] as XYStore).y;
+      const vx = (stores[1] as XYStore).x;
+      const vy = (stores[1] as XYStore).y;
+      for (let i = 0; i < entities.length; i++) {
+        const id = entities[i] & ID_MASK;
+        px[id] += vx[id];
+        py[id] += vy[id];
+      }
+    });
+    // 2. Regen over [Health] → hp += 1.
+    s.w.query(s.qHealth).useStores((stores, entities) => {
+      const hp = (stores[0] as HpStore).hp;
+      for (let i = 0; i < entities.length; i++) hp[entities[i] & ID_MASK] += 1;
+    });
+    // 3. ApplyDamage over [Health, Damage] → hp -= amount.
+    s.w.query(s.qHealthDamage).useStores((stores, entities) => {
+      const hp = (stores[0] as HpStore).hp;
+      const amt = (stores[1] as AmountStore).amount;
+      for (let i = 0; i < entities.length; i++) {
+        const id = entities[i] & ID_MASK;
+        hp[id] -= amt[id];
+      }
+    });
+    // 4. Render over [Renderable, Position] → acc += Position.x (reads Position AFTER Movement).
+    s.w.query(s.qRenderPos).useStores((stores, entities) => {
+      const acc = (stores[0] as AccStore).acc;
+      const px = (stores[1] as XYStore).x;
+      for (let i = 0; i < entities.length; i++) {
+        const id = entities[i] & ID_MASK;
+        acc[id] += px[id];
+      }
+    });
+    // Checksum: sum(Position.x over ALL) + sum(Health.hp over Health) + sum(Renderable.acc over Renderable).
+    let sum = 0;
+    s.w.query(s.qPos).useStores((stores, entities) => {
+      const px = (stores[0] as XYStore).x;
+      for (let i = 0; i < entities.length; i++) sum += px[entities[i] & ID_MASK];
+    });
+    s.w.query(s.qHealth).useStores((stores, entities) => {
+      const hp = (stores[0] as HpStore).hp;
+      for (let i = 0; i < entities.length; i++) sum += hp[entities[i] & ID_MASK];
+    });
+    s.w.query(s.qRender).useStores((stores, entities) => {
+      const acc = (stores[0] as AccStore).acc;
+      for (let i = 0; i < entities.length; i++) sum += acc[entities[i] & ID_MASK];
+    });
+    return sum;
+  },
+};
+
+// --- frame: spawn_reap_frame --------------------------------------------------
+// Movement moves the base, a Spawner spawns one Particle per base (immediate world.spawn), the count
+// is the checksum, then a Reaper destroys every Particle (immediate entity.destroy) → back to
+// baseline. world.query() returns a sliced snapshot, so destroying while iterating it is safe.
+const spawn_reap_frame: Scenario = {
+  id: "spawn_reap_frame",
+  setup() {
+    const Position = trait({ x: 0, y: 0 });
+    const Velocity = trait({ x: 0, y: 0 });
+    const Particle = trait({ life: 0 });
+    const w = createWorld();
+    const NUM = 5000;
+    for (let i = 0; i < NUM; i++) w.spawn(Position({ x: 0, y: 0 }), Velocity({ x: 1, y: 1 }));
+    return { w, Particle, qMove: createQuery(Position, Velocity), qParticle: createQuery(Particle) };
+  },
+  run(state) {
+    const s = state as { w: World; Particle: Trait; qMove: Query; qParticle: Query };
+    // (a) Movement over [Position, Velocity] moves the base.
+    s.w.query(s.qMove).useStores((stores, entities) => {
+      const px = (stores[0] as XYStore).x;
+      const py = (stores[0] as XYStore).y;
+      const vx = (stores[1] as XYStore).x;
+      const vy = (stores[1] as XYStore).y;
+      for (let i = 0; i < entities.length; i++) {
+        const id = entities[i] & ID_MASK;
+        px[id] += vx[id];
+        py[id] += vy[id];
+      }
+    });
+    // (b) Spawner over [Position, Velocity]: one Particle{life:1} per base entity.
+    const base = s.w.query(s.qMove);
+    for (let i = 0; i < base.length; i++) s.w.spawn(s.Particle({ life: 1 }));
+    // (c) count the Particles = checksum.
+    const particles = s.w.query(s.qParticle);
+    const count = particles.length;
+    // (d) Reaper destroys every Particle → baseline (snapshot slice → safe to destroy while iterating).
+    for (let i = 0; i < particles.length; i++) (particles[i] as Entity).destroy();
+    return count;
+  },
+};
+
+// --- frame: toggle_frame ------------------------------------------------------
+// Movement moves all, a Stun system adds Stunned to every [Health] not-Stunned (immediate
+// entity.add), the count is the checksum, then an Unstun system removes Stunned from every [Stunned]
+// (immediate entity.remove) → baseline. Removing Stunned re-admits entities to [Health, Not(Stunned)].
+const toggle_frame: Scenario = {
+  id: "toggle_frame",
+  setup() {
+    const Position = trait({ x: 0, y: 0 });
+    const Velocity = trait({ x: 0, y: 0 });
+    const Health = trait({ hp: 100 });
+    const Stunned = trait({ since: 0 });
+    const w = createWorld();
+    const NUM = 10_000;
+    for (let i = 0; i < NUM; i++) {
+      w.spawn(Position({ x: 0, y: 0 }), Velocity({ x: 1, y: 1 }), Health({ hp: 100 }));
+    }
+    return {
+      w, Stunned,
+      qMove: createQuery(Position, Velocity),
+      qStun: createQuery(Health, Not(Stunned)),
+      qStunned: createQuery(Stunned),
+    };
+  },
+  run(state) {
+    const s = state as { w: World; Stunned: Trait; qMove: Query; qStun: Query; qStunned: Query };
+    // (a) Movement over [Position, Velocity] → Position.x += Velocity.x.
+    s.w.query(s.qMove).useStores((stores, entities) => {
+      const px = (stores[0] as XYStore).x;
+      const vx = (stores[1] as XYStore).x;
+      for (let i = 0; i < entities.length; i++) {
+        const id = entities[i] & ID_MASK;
+        px[id] += vx[id];
+      }
+    });
+    // (b) Stun over [Health] NOT Stunned → add Stunned{since:0} (snapshot slice → safe to add while iterating).
+    const toStun = s.w.query(s.qStun);
+    for (let i = 0; i < toStun.length; i++) (toStun[i] as Entity).add(s.Stunned({ since: 0 }));
+    // (c) count entities now carrying Stunned = checksum.
+    const stunned = s.w.query(s.qStunned);
+    const count = stunned.length;
+    // (d) Unstun over [Stunned] → remove Stunned → baseline.
+    for (let i = 0; i < stunned.length; i++) (stunned[i] as Entity).remove(s.Stunned);
+    return count;
+  },
+};
+
 const bench: LibraryBench = {
   name: "koota",
   version: "0.6.6",
   scenarios: [packed_5, simple_iter, frag_iter, entity_cycle, add_remove],
+  frames: [sim_frame, spawn_reap_frame, toggle_frame],
   extensions: [random_access],
 };
 export default bench;

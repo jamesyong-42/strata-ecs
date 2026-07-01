@@ -7,6 +7,7 @@
  */
 
 import {
+  Not,
   addComponent,
   addEntity,
   createWorld,
@@ -19,6 +20,11 @@ import { type LibraryBench, N, RANDOM_ACCESS, type Scenario, accessIndex } from 
 // Capacity: max concurrent eid any scenario reaches (simple_iter 4000, entity_cycle ~2000). eids are
 // contiguous small ints (versioning off), so this doubles as the typed-array length. 8192 is safe.
 const CAP = 8192;
+
+// Frames reach higher eids: sim/toggle 10000, and spawn_reap holds 5000 base + 5000 particles
+// concurrently (eids start at 1). 16384 covers every frame's max concurrent eid.
+const FRAME_CAP = 16384;
+const f2 = (): C2 => ({ x: new Float64Array(FRAME_CAP), y: new Float64Array(FRAME_CAP) });
 
 type World = ReturnType<typeof createWorld>;
 type C1 = { value: Float64Array };
@@ -245,10 +251,257 @@ const random_access: Scenario = {
   },
 };
 
+// --- frame: sim_frame ---------------------------------------------------------
+// A full frame = calling the four systems as plain functions in order (bitecs has no scheduler).
+// Later systems read earlier writes (Render reads Position AFTER Movement). Structural ops are
+// immediate. Frozen is an empty-object marker excluded via Not(Frozen) in a buffered query.
+type Health = { hp: Float64Array };
+type Damage = { amount: Float64Array };
+type Renderable = { acc: Float64Array };
+type Particle = { life: Float64Array };
+type Stunned = { since: Float64Array };
+type Marker = Record<string, never>;
+
+const sim_frame: Scenario = {
+  id: "sim_frame",
+  setup() {
+    const Position = f2();
+    const Velocity = f2();
+    const Health: Health = { hp: new Float64Array(FRAME_CAP) };
+    const Damage: Damage = { amount: new Float64Array(FRAME_CAP) };
+    const Renderable: Renderable = { acc: new Float64Array(FRAME_CAP) };
+    const Frozen: Marker = {};
+    const w = createWorld();
+    const NUM = 10_000;
+    for (let i = 0; i < NUM; i++) {
+      const e = addEntity(w);
+      addComponent(w, e, Position);
+      Position.x[e] = 0;
+      Position.y[e] = 0;
+      addComponent(w, e, Velocity);
+      Velocity.x[e] = 1;
+      Velocity.y[e] = 2;
+      if (i % 2 === 0) {
+        addComponent(w, e, Health);
+        Health.hp[e] = 0;
+      }
+      if (i % 3 === 0) {
+        addComponent(w, e, Damage);
+        Damage.amount[e] = 1;
+      }
+      if (i % 5 === 0) {
+        addComponent(w, e, Renderable);
+        Renderable.acc[e] = 0;
+      }
+      if (i % 4 === 0) addComponent(w, e, Frozen);
+    }
+    // Movement over [Position, Velocity] EXCLUDING Frozen → Position += Velocity.
+    const Movement = (world: World) => {
+      const es = eids(world, [Position, Velocity, Not(Frozen)]);
+      const px = Position.x;
+      const py = Position.y;
+      const vx = Velocity.x;
+      const vy = Velocity.y;
+      for (let i = 0; i < es.length; i++) {
+        const e = es[i];
+        px[e] += vx[e];
+        py[e] += vy[e];
+      }
+    };
+    // Regen over [Health] → hp += 1.
+    const Regen = (world: World) => {
+      const es = eids(world, [Health]);
+      const hp = Health.hp;
+      for (let i = 0; i < es.length; i++) hp[es[i]] += 1;
+    };
+    // ApplyDamage over [Health, Damage] → hp -= amount.
+    const ApplyDamage = (world: World) => {
+      const es = eids(world, [Health, Damage]);
+      const hp = Health.hp;
+      const amt = Damage.amount;
+      for (let i = 0; i < es.length; i++) {
+        const e = es[i];
+        hp[e] -= amt[e];
+      }
+    };
+    // Render over [Renderable, Position] → acc += Position.x (reads Position AFTER Movement).
+    const Render = (world: World) => {
+      const es = eids(world, [Renderable, Position]);
+      const acc = Renderable.acc;
+      const px = Position.x;
+      for (let i = 0; i < es.length; i++) {
+        const e = es[i];
+        acc[e] += px[e];
+      }
+    };
+    return { w, Position, Health, Renderable, Movement, Regen, ApplyDamage, Render };
+  },
+  run(state) {
+    const s = state as {
+      w: World;
+      Position: C2;
+      Health: Health;
+      Renderable: Renderable;
+      Movement: (w: World) => void;
+      Regen: (w: World) => void;
+      ApplyDamage: (w: World) => void;
+      Render: (w: World) => void;
+    };
+    s.Movement(s.w);
+    s.Regen(s.w);
+    s.ApplyDamage(s.w);
+    s.Render(s.w);
+    // checksum = sum(Position.x over ALL) + sum(Health.hp over Health) + sum(Renderable.acc over Renderable).
+    let sum = 0;
+    const px = s.Position.x;
+    const pe = eids(s.w, [s.Position]);
+    for (let i = 0; i < pe.length; i++) sum += px[pe[i]];
+    const hp = s.Health.hp;
+    const he = eids(s.w, [s.Health]);
+    for (let i = 0; i < he.length; i++) sum += hp[he[i]];
+    const acc = s.Renderable.acc;
+    const re = eids(s.w, [s.Renderable]);
+    for (let i = 0; i < re.length; i++) sum += acc[re[i]];
+    return sum;
+  },
+};
+
+// --- frame: spawn_reap_frame --------------------------------------------------
+// Move the base, spawn one Particle per base (immediate addEntity+addComponent), count Particles,
+// then reap every Particle back to baseline. The Reaper snapshots the buffered eids before removing
+// so swap-remove during iteration can't skip entities.
+const spawn_reap_frame: Scenario = {
+  id: "spawn_reap_frame",
+  setup() {
+    const Position = f2();
+    const Velocity = f2();
+    const Particle: Particle = { life: new Float64Array(FRAME_CAP) };
+    const w = createWorld();
+    const NUM = 5000;
+    for (let i = 0; i < NUM; i++) {
+      const e = addEntity(w);
+      addComponent(w, e, Position);
+      Position.x[e] = 0;
+      Position.y[e] = 0;
+      addComponent(w, e, Velocity);
+      Velocity.x[e] = 1;
+      Velocity.y[e] = 1;
+    }
+    const Movement = (world: World) => {
+      const es = eids(world, [Position, Velocity]);
+      const px = Position.x;
+      const py = Position.y;
+      const vx = Velocity.x;
+      const vy = Velocity.y;
+      for (let i = 0; i < es.length; i++) {
+        const e = es[i];
+        px[e] += vx[e];
+        py[e] += vy[e];
+      }
+    };
+    // One Particle per base entity. New entities lack Position/Velocity so they don't join this
+    // query; capturing the base count up front keeps the loop bounded.
+    const Spawner = (world: World) => {
+      const es = eids(world, [Position, Velocity]);
+      const n = es.length;
+      const life = Particle.life;
+      for (let i = 0; i < n; i++) {
+        const p = addEntity(world);
+        addComponent(world, p, Particle);
+        life[p] = 1;
+      }
+    };
+    const Reaper = (world: World) => {
+      const es = eids(world, [Particle]);
+      const snap = Array.from(es); // snapshot: removeEntity swap-removes from the live query
+      for (let i = 0; i < snap.length; i++) removeEntity(world, snap[i]);
+    };
+    return { w, Particle, Movement, Spawner, Reaper };
+  },
+  run(state) {
+    const s = state as {
+      w: World;
+      Particle: Particle;
+      Movement: (w: World) => void;
+      Spawner: (w: World) => void;
+      Reaper: (w: World) => void;
+    };
+    s.Movement(s.w); // move base
+    s.Spawner(s.w); // spawn NUM particles
+    const count = eids(s.w, [s.Particle]).length; // = 5000
+    s.Reaper(s.w); // destroy every particle → back to baseline
+    return count;
+  },
+};
+
+// --- frame: toggle_frame ------------------------------------------------------
+// Move, add Stunned to every [Health] NOT Stunned, count Stunned, then remove Stunned back to
+// baseline. Stun/Unstun snapshot the buffered eids first since addComponent/removeComponent
+// mutate the live query (swap-remove) during iteration.
+const toggle_frame: Scenario = {
+  id: "toggle_frame",
+  setup() {
+    const Position = f2();
+    const Velocity = f2();
+    const Health: Health = { hp: new Float64Array(FRAME_CAP) };
+    const Stunned: Stunned = { since: new Float64Array(FRAME_CAP) };
+    const w = createWorld();
+    const NUM = 10_000;
+    for (let i = 0; i < NUM; i++) {
+      const e = addEntity(w);
+      addComponent(w, e, Position);
+      Position.x[e] = 0;
+      Position.y[e] = 0;
+      addComponent(w, e, Velocity);
+      Velocity.x[e] = 1;
+      Velocity.y[e] = 1;
+      addComponent(w, e, Health);
+      Health.hp[e] = 100;
+    }
+    const Movement = (world: World) => {
+      const es = eids(world, [Position, Velocity]);
+      const px = Position.x;
+      const vx = Velocity.x;
+      for (let i = 0; i < es.length; i++) px[es[i]] += vx[es[i]];
+    };
+    const Stun = (world: World) => {
+      const es = eids(world, [Health, Not(Stunned)]);
+      const snap = Array.from(es);
+      const since = Stunned.since;
+      for (let i = 0; i < snap.length; i++) {
+        const e = snap[i];
+        addComponent(world, e, Stunned);
+        since[e] = 0;
+      }
+    };
+    const Unstun = (world: World) => {
+      const es = eids(world, [Stunned]);
+      const snap = Array.from(es);
+      for (let i = 0; i < snap.length; i++) removeComponent(world, snap[i], Stunned);
+    };
+    return { w, Stunned, Movement, Stun, Unstun };
+  },
+  run(state) {
+    const s = state as {
+      w: World;
+      Stunned: Stunned;
+      Movement: (w: World) => void;
+      Stun: (w: World) => void;
+      Unstun: (w: World) => void;
+    };
+    s.Movement(s.w); // move base
+    s.Stun(s.w); // add Stunned to every Health entity
+    const count = eids(s.w, [s.Stunned]).length; // = 10000
+    s.Unstun(s.w); // remove Stunned → back to baseline
+    return count;
+  },
+};
+
 const bench: LibraryBench = {
   name: "bitecs",
   version: "0.4.0",
   scenarios: [packed_5, simple_iter, frag_iter, entity_cycle, add_remove],
+  frames: [sim_frame, spawn_reap_frame, toggle_frame],
   extensions: [random_access],
 };
 export default bench;

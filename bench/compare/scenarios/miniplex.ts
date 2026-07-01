@@ -7,7 +7,7 @@
  * cached entity references stay valid for mitata's repeated invocations.
  */
 
-import { World } from "miniplex";
+import { type Query, World } from "miniplex";
 import { type LibraryBench, N, RANDOM_ACCESS, type Scenario, accessIndex } from "../contract.ts";
 
 type Val = { value: number };
@@ -210,10 +210,157 @@ const random_access: Scenario = {
   },
 };
 
+// --- frame: sim_frame (4-system frame; scheduler-less → systems are functions called in order) ---
+// miniplex has no scheduler, so the "pipeline" is a fixed sequence of function calls per frame. Each
+// query is a connected `with(...)`/`without(...)` bucket compiled ONCE in setup; systems mutate the
+// nested component objects in place. Later systems read earlier writes (Render reads Position AFTER
+// Movement) purely by call order — matching strata's phased tick.
+type SimEntity = {
+  position: Vec;
+  velocity: Vec;
+  health?: { hp: number };
+  damage?: { amount: number };
+  renderable?: { acc: number };
+  frozen?: boolean;
+};
+
+const sim_frame: Scenario = {
+  id: "sim_frame",
+  setup() {
+    const world = new World<SimEntity>();
+    const NUM = 10_000;
+    for (let i = 0; i < NUM; i++) {
+      const e: SimEntity = { position: { x: 0, y: 0 }, velocity: { x: 1, y: 2 } };
+      if (i % 2 === 0) e.health = { hp: 0 };
+      if (i % 3 === 0) e.damage = { amount: 1 };
+      if (i % 5 === 0) e.renderable = { acc: 0 };
+      if (i % 4 === 0) e.frozen = true;
+      world.add(e);
+    }
+    return {
+      // Movement excludes Frozen (a plain property → .without('frozen')), reads Velocity, writes Position.
+      qMove: world.with("position", "velocity").without("frozen"),
+      qHealth: world.with("health"),
+      qHealthDamage: world.with("health", "damage"),
+      qRender: world.with("renderable", "position"),
+      qPos: world.with("position"),
+    };
+  },
+  run(state) {
+    const s = state as {
+      qMove: Iterable<Required<Pick<SimEntity, "position" | "velocity">>>;
+      qHealth: Iterable<Required<Pick<SimEntity, "health">>>;
+      qHealthDamage: Iterable<Required<Pick<SimEntity, "health" | "damage">>>;
+      qRender: Iterable<Required<Pick<SimEntity, "renderable" | "position">>>;
+      qPos: Iterable<Required<Pick<SimEntity, "position">>>;
+    };
+    // 1. Movement (non-Frozen): Position += Velocity.
+    for (const e of s.qMove) {
+      e.position.x += e.velocity.x;
+      e.position.y += e.velocity.y;
+    }
+    // 2. Regen: hp += 1.
+    for (const e of s.qHealth) e.health.hp += 1;
+    // 3. ApplyDamage: hp -= amount.
+    for (const e of s.qHealthDamage) e.health.hp -= e.damage.amount;
+    // 4. Render: acc += Position.x (reads Position after Movement).
+    for (const e of s.qRender) e.renderable.acc += e.position.x;
+    let sum = 0;
+    for (const e of s.qPos) sum += e.position.x;
+    for (const e of s.qHealth) sum += e.health.hp;
+    for (const e of s.qRender) sum += e.renderable.acc;
+    return sum;
+  },
+};
+
+// --- frame: spawn_reap_frame (a Spawner spawns then a Reaper destroys — lifecycle churn) ----------
+// miniplex applies structural ops immediately (no deferral), but the spawned Particles carry neither
+// Position nor Velocity, so they never enter the [position,velocity] Movement/Spawner query mid-loop.
+// The Reaper iterates the connected Particle query and `world.remove`s each (reverse-safe under
+// removal), returning the world to its 5000-base baseline so mitata can call run() repeatedly.
+type SREntity = { position?: Vec; velocity?: Vec; particle?: { life: number } };
+
+const spawn_reap_frame: Scenario = {
+  id: "spawn_reap_frame",
+  setup() {
+    const world = new World<SREntity>();
+    const NUM = 5000;
+    for (let i = 0; i < NUM; i++) world.add({ position: { x: 0, y: 0 }, velocity: { x: 1, y: 1 } });
+    return {
+      world,
+      qMove: world.with("position", "velocity"),
+      qParticle: world.with("particle"),
+    };
+  },
+  run(state) {
+    const s = state as {
+      world: World<SREntity>;
+      qMove: Query<Required<Pick<SREntity, "position" | "velocity">>>;
+      qParticle: Query<Required<Pick<SREntity, "particle">>>;
+    };
+    // (a) Movement moves the base.
+    for (const e of s.qMove) {
+      e.position.x += e.velocity.x;
+      e.position.y += e.velocity.y;
+    }
+    // (b) Spawner: one Particle{life:1} per base (5000 new entities).
+    for (const _ of s.qMove) s.world.add({ particle: { life: 1 } });
+    // (c) count the Particles (= 5000) → checksum.
+    const count = s.qParticle.size;
+    // (d) Reaper destroys every Particle → back to baseline.
+    for (const p of s.qParticle) s.world.remove(p);
+    return count;
+  },
+};
+
+// --- frame: toggle_frame (a Stun system adds then an Unstun removes a component — shape churn) -----
+// Stun iterates [health] NOT stunned and `addComponent`s Stunned — which reindexes each entity OUT of
+// that same query as we go (reverse-safe). Unstun iterates the connected Stunned query and
+// `removeComponent`s, returning every entity to its Stunned-free baseline for repeated run() calls.
+type TGEntity = { position: Vec; velocity: Vec; health: { hp: number }; stunned?: { since: number } };
+
+const toggle_frame: Scenario = {
+  id: "toggle_frame",
+  setup() {
+    const world = new World<TGEntity>();
+    const NUM = 10_000;
+    for (let i = 0; i < NUM; i++) {
+      world.add({ position: { x: 0, y: 0 }, velocity: { x: 1, y: 1 }, health: { hp: 100 } });
+    }
+    return {
+      world,
+      qMove: world.with("position", "velocity"),
+      qStun: world.with("health").without("stunned"),
+      qStunned: world.with("stunned"),
+    };
+  },
+  run(state) {
+    const s = state as {
+      world: World<TGEntity>;
+      qMove: Iterable<Required<Pick<TGEntity, "position" | "velocity">>>;
+      qStun: Query<Required<Pick<TGEntity, "health">>>;
+      qStunned: Query<Required<Pick<TGEntity, "stunned">>>;
+    };
+    // (a) Movement.
+    for (const e of s.qMove) {
+      e.position.x += e.velocity.x;
+      e.position.y += e.velocity.y;
+    }
+    // (b) Stun: over [health] NOT stunned → add Stunned{since:0}.
+    for (const e of s.qStun) s.world.addComponent(e, "stunned", { since: 0 });
+    // (c) count entities now carrying Stunned (= 10000) → checksum.
+    const count = s.qStunned.size;
+    // (d) Unstun: over [stunned] → remove Stunned → back to baseline.
+    for (const e of s.qStunned) s.world.removeComponent(e, "stunned");
+    return count;
+  },
+};
+
 const bench: LibraryBench = {
   name: "miniplex",
   version: "2.0.0",
   scenarios: [packed_5, simple_iter, frag_iter, entity_cycle, add_remove],
+  frames: [sim_frame, spawn_reap_frame, toggle_frame],
   extensions: [random_access],
 };
 export default bench;
