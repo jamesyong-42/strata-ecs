@@ -13,6 +13,8 @@
 import { type Entity, slotOf } from "./entity";
 import { EntityTable } from "./entity-table";
 import { Archetype } from "./archetype";
+import { TagStore } from "./tags";
+import { RelationStore } from "./relations";
 import {
   type Column,
   clearCell,
@@ -26,7 +28,9 @@ import {
   type ComponentId,
   type FieldId,
   type FieldMeta,
+  type Relation,
   type Resource,
+  type Tag,
   componentById,
   encodeComponentValue,
 } from "./schema";
@@ -34,9 +38,10 @@ import {
 /** A component handle paired with a value of its field type — the typed spawn/init form. */
 export type ComponentEntry<S = unknown> = readonly [Component<S>, S];
 
-/** What `spawn` accepts. (Tags arrive in M3.) */
+/** What `spawn` accepts. */
 export interface SpawnInit {
   components?: readonly ComponentEntry[];
+  tags?: readonly Tag[];
 }
 
 /** Stored per-field value: a number for typed columns, `string | null` for string columns. */
@@ -46,6 +51,8 @@ const EMPTY_FIELD_VALUES: ReadonlyMap<FieldId, Stored> = new Map();
 
 export class RuntimeStore {
   private readonly table = new EntityTable();
+  private readonly tags = new TagStore();
+  private readonly relations = new RelationStore((e) => this.table.isAlive(e));
   private readonly archetypeIndex = new Map<string, Archetype>();
   private readonly archetypesById: Archetype[] = [];
   private readonly emptyArchetype: Archetype;
@@ -200,13 +207,21 @@ export class RuntimeStore {
     }
     const componentIds = [...seen].sort((a, b) => a - b);
     this.place(e, this.archetypeFor(componentIds), fieldValues);
+    if (init?.tags !== undefined) {
+      const slot = slotOf(e);
+      for (const t of init.tags) this.tags.set(t.id, slot);
+    }
     return e;
   }
 
-  /** Destroy an entity (M2: unplace + free identity; M3 adds the tag/relation cascade). */
+  /** Destroy an entity: clear its tags/relations inline, unplace, then free identity (§5.5). */
   destroy(e: Entity): void {
     if (!this.table.isAlive(e)) return;
     const slot = slotOf(e);
+    // Per-entity state living outside the archetype must be torn down for placed AND
+    // identity-only entities so a reused slot starts clean (§5.5):
+    this.relations.clearEntity(e); // both directions, inline, terminal
+    this.tags.clearAll(slot); // mandatory — bitsets are slot-indexed, not generation-indexed (§3.2)
     if (this.table.isPlaced(e)) {
       const A = this.archetypesById[this.table.archetypeOf(slot)];
       this.unplace(A, this.table.rowOf(slot), e);
@@ -344,6 +359,79 @@ export class RuntimeStore {
     const row = this.table.rowOf(slotOf(e));
     const ref = (readCell(A.columns.get(field) as Column, "u32", row) as number) as Entity;
     return this.table.isAlive(ref) ? ref : undefined;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tags (slot-indexed bitsets, §3.2)
+  // ---------------------------------------------------------------------------
+
+  /** Add a tag; places an identity-only source so it becomes queryable (§5.2). */
+  addTag(e: Entity, t: Tag): void {
+    this.assertAlive(e, "addTag");
+    this.ensurePlaced(e);
+    this.tags.set(t.id, slotOf(e));
+  }
+
+  /** Remove a tag (does not unplace the entity). */
+  removeTag(e: Entity, t: Tag): void {
+    this.assertAlive(e, "removeTag");
+    this.tags.clear(t.id, slotOf(e));
+  }
+
+  /** Generation-guarded tag read: a stale handle reads `false`, never the reused slot's bit (§3.2). */
+  hasTag(e: Entity, t: Tag): boolean {
+    if (!this.table.isAlive(e)) return false;
+    return this.tags.has(t.id, slotOf(e));
+  }
+
+  /** @internal Raw tag bitset — for the query engine's row probes (§6). */
+  tagBitset(t: Tag): Uint32Array | undefined {
+    return this.tags.bitset(t.id);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Relations (bidirectional indices, §3.3)
+  // ---------------------------------------------------------------------------
+
+  /** Arity "one": set/replace the target. Places the source; the target is not placed (§5.2). */
+  setRelation(e: Entity, rel: Relation, target: Entity): void {
+    this.assertAlive(e, "setRelation");
+    if (rel.arity !== "one") {
+      throw new Error(`strata: setRelation is for arity "one" relations — use addRelation for "${rel.name}".`);
+    }
+    this.ensurePlaced(e);
+    this.relations.setOne(rel, e, target);
+  }
+
+  /** Arity "many": add an edge (idempotent). Places the source; the target is not placed. */
+  addRelation(e: Entity, rel: Relation, target: Entity): void {
+    this.assertAlive(e, "addRelation");
+    if (rel.arity !== "many") {
+      throw new Error(`strata: addRelation is for arity "many" relations — use setRelation for "${rel.name}".`);
+    }
+    this.ensurePlaced(e);
+    this.relations.addMany(rel, e, target);
+  }
+
+  /** Remove one edge (if `target` given) or all edges of `rel` from `e`. Does not unplace. */
+  removeRelation(e: Entity, rel: Relation, target?: Entity): void {
+    this.assertAlive(e, "removeRelation");
+    this.relations.remove(rel, e, target);
+  }
+
+  /** The single target of an arity-"one" relation, validated (§3.3). */
+  getRelation(e: Entity, rel: Relation): Entity | undefined {
+    return this.relations.getOne(rel, e);
+  }
+
+  /** The targets of an arity-"many" relation, validated. */
+  getRelations(e: Entity, rel: Relation): Entity[] {
+    return this.relations.getMany(rel, e);
+  }
+
+  /** The entities pointing at `e` via `rel` (reverse index), validated. */
+  getReverse(e: Entity, rel: Relation): Entity[] {
+    return this.relations.getReverse(rel, e);
   }
 
   // ---------------------------------------------------------------------------

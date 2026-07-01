@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RuntimeStore } from "./runtime-store";
-import { defineComponent, defineResource } from "./schema";
+import { defineComponent, defineRelation, defineResource, defineTag } from "./schema";
 import { enumOf, field } from "./field";
 import { slotOf } from "./entity";
 
@@ -20,6 +20,10 @@ const Cfg = defineResource<{ a: number; b: number }>("Cfg", {
   a: field("u32", { default: 7 }),
   b: "u32",
 });
+const Enemy = defineTag("Enemy");
+const Frozen = defineTag("Frozen");
+const ChildOf = defineRelation("ChildOf", { arity: "one" });
+const Targets = defineRelation("Targets", { arity: "many" });
 
 describe("spawn / placement / reads", () => {
   it("spawns a componentless entity into the empty archetype (placed, queryable)", () => {
@@ -269,5 +273,123 @@ describe("column growth", () => {
       expect(s.read(handles[i], Position)).toEqual({ x: i, y: -i });
       expect(slotOf(handles[i])).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+describe("tags", () => {
+  it("spawns with tags into the empty archetype (placed + tagged + queryable)", () => {
+    const s = new RuntimeStore();
+    const e = s.spawn({ tags: [Enemy] });
+    expect(s.isPlaced(e)).toBe(true);
+    expect(s.hasTag(e, Enemy)).toBe(true);
+    expect(s.hasTag(e, Frozen)).toBe(false);
+  });
+
+  it("addTag places an identity-only source; removeTag does not unplace", () => {
+    const s = new RuntimeStore();
+    const e = s.allocateIdentity();
+    s.addTag(e, Enemy);
+    expect(s.isPlaced(e)).toBe(true); // ensurePlaced ran
+    expect(s.hasTag(e, Enemy)).toBe(true);
+    s.removeTag(e, Enemy);
+    expect(s.hasTag(e, Enemy)).toBe(false);
+    expect(s.isPlaced(e)).toBe(true); // still placed
+  });
+
+  it("generation-guards hasTag and starts a reused slot clean", () => {
+    const s = new RuntimeStore();
+    const e = s.spawn({ tags: [Enemy] });
+    s.destroy(e);
+    expect(s.hasTag(e, Enemy)).toBe(false); // stale handle
+    const e2 = s.spawn(); // reuses the slot
+    expect(slotOf(e2)).toBe(slotOf(e));
+    expect(s.hasTag(e2, Enemy)).toBe(false); // reused slot inherits no tags (§5.5)
+  });
+
+  it("keeps a tag across archetype migration (slot-indexed, migration-invariant)", () => {
+    const s = new RuntimeStore();
+    const e = s.spawn({ components: [[Position, { x: 1, y: 2 }]], tags: [Frozen] });
+    s.addComponent(e, Velocity, { x: 0, y: 0 }); // migrates to a new archetype
+    expect(s.hasTag(e, Frozen)).toBe(true);
+    expect(s.read(e, Position)).toEqual({ x: 1, y: 2 });
+  });
+
+  it("addTag on a component-bearing entity does not disturb its archetype or values (§5.2)", () => {
+    const s = new RuntimeStore();
+    const e = s.spawn({ components: [[Position, { x: 1, y: 2 }]] });
+    const arch = s.debugArchetypeOf(e);
+    s.addTag(e, Enemy); // ensurePlaced must no-op — the entity is already placed
+    expect(s.debugArchetypeOf(e)).toBe(arch); // no migration / re-placement
+    expect(s.read(e, Position)).toEqual({ x: 1, y: 2 });
+    expect(s.hasTag(e, Enemy)).toBe(true);
+  });
+});
+
+describe("relations", () => {
+  it("sets an arity-one relation, placing the source but not the target", () => {
+    const s = new RuntimeStore();
+    const source = s.allocateIdentity();
+    const target = s.allocateIdentity();
+    s.setRelation(source, ChildOf, target);
+    expect(s.getRelation(source, ChildOf)).toBe(target);
+    expect(s.getReverse(target, ChildOf)).toEqual([source]);
+    expect(s.isPlaced(source)).toBe(true); // ensurePlaced
+    expect(s.isIdentityOnly(target)).toBe(true); // pointed-at ≠ placed (§5.2)
+  });
+
+  it("adds arity-many edges and reads them back", () => {
+    const s = new RuntimeStore();
+    const a = s.spawn();
+    const b = s.spawn();
+    const c = s.spawn();
+    s.addRelation(a, Targets, b);
+    s.addRelation(a, Targets, c);
+    expect(s.getRelations(a, Targets).sort()).toEqual([b, c].sort());
+    expect(s.getReverse(b, Targets)).toEqual([a]);
+  });
+
+  it("enforces arity", () => {
+    const s = new RuntimeStore();
+    const a = s.spawn();
+    const b = s.spawn();
+    expect(() => s.setRelation(a, Targets, b)).toThrow(/arity "one"/);
+    expect(() => s.addRelation(a, ChildOf, b)).toThrow(/arity "many"/);
+  });
+
+  it("clears both directions on despawn", () => {
+    const s = new RuntimeStore();
+    const parent = s.spawn();
+    const child = s.spawn();
+    s.setRelation(child, ChildOf, parent);
+    // Destroying the TARGET clears the incoming edge from the source.
+    s.destroy(parent);
+    expect(s.getRelation(child, ChildOf)).toBeUndefined();
+
+    const a = s.spawn();
+    const x = s.spawn();
+    s.addRelation(a, Targets, x);
+    // Destroying the SOURCE clears the outgoing edge from the target's reverse set.
+    s.destroy(a);
+    expect(s.getReverse(x, Targets)).toEqual([]);
+  });
+
+  it("removeRelation drops edges through the store surface (both arities)", () => {
+    const s = new RuntimeStore();
+    const a = s.spawn();
+    const b = s.spawn();
+    const c = s.spawn();
+    s.addRelation(a, Targets, b);
+    s.addRelation(a, Targets, c);
+    s.removeRelation(a, Targets, b); // one edge
+    expect(s.getRelations(a, Targets)).toEqual([c]);
+    s.removeRelation(a, Targets); // all remaining edges
+    expect(s.getRelations(a, Targets)).toEqual([]);
+
+    const child = s.spawn();
+    const parent = s.spawn();
+    s.setRelation(child, ChildOf, parent);
+    s.removeRelation(child, ChildOf); // arity-one via the store
+    expect(s.getRelation(child, ChildOf)).toBeUndefined();
+    expect(s.getReverse(parent, ChildOf)).toEqual([]);
   });
 });
