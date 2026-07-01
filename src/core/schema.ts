@@ -82,6 +82,10 @@ let tagsById!: Tag[];
 let relationsById!: Relation[];
 let resourcesById!: Resource[];
 let fieldsById!: FieldMeta[];
+let componentsByName!: Map<string, Component>;
+let tagsByName!: Map<string, Tag>;
+let relationsByName!: Map<string, Relation>;
+let resourcesByName!: Map<string, Resource>;
 let nextComponentId!: number;
 let nextTagId!: number;
 let nextRelationId!: number;
@@ -96,6 +100,10 @@ function initSchemaState(): void {
   relationsById = [];
   resourcesById = [];
   fieldsById = [];
+  componentsByName = new Map();
+  tagsByName = new Map();
+  relationsByName = new Map();
+  resourcesByName = new Map();
   nextComponentId = 0;
   nextTagId = 0;
   nextRelationId = 0;
@@ -128,6 +136,7 @@ export function defineComponent<S = Record<string, unknown>>(
   }
   const handle: Component<S> = { id, name, fields, fieldByName };
   componentsById[id] = handle;
+  componentsByName.set(name, handle);
   return handle;
 }
 
@@ -136,6 +145,7 @@ export function defineTag(name: string): Tag {
   names.define(name);
   const handle: Tag = { id: nextTagId++, name };
   tagsById[handle.id] = handle;
+  tagsByName.set(name, handle);
   return handle;
 }
 
@@ -152,6 +162,7 @@ export function defineRelation(
     ordered: opts?.ordered ?? false,
   };
   relationsById[handle.id] = handle;
+  relationsByName.set(name, handle);
   return handle;
 }
 
@@ -178,6 +189,7 @@ export function defineResource<S = Record<string, unknown>>(
   }
   const handle: Resource<S> = { id, name, fields, fieldByName };
   resourcesById[id] = handle;
+  resourcesByName.set(name, handle);
   return handle;
 }
 
@@ -195,6 +207,9 @@ export function relationById(id: RelationId): Relation | undefined {
 export function fieldById(id: FieldId): FieldMeta | undefined {
   return fieldsById[id];
 }
+export function resourceById(id: ResourceId): Resource | undefined {
+  return resourcesById[id];
+}
 export function componentCount(): number {
   return nextComponentId;
 }
@@ -203,6 +218,21 @@ export function tagCount(): number {
 }
 export function relationCount(): number {
   return nextRelationId;
+}
+
+// --- name lookups (for serialization: durable/snapshot data is name-keyed, §3.4) ---
+
+export function componentByName(name: string): Component | undefined {
+  return componentsByName.get(name);
+}
+export function tagByName(name: string): Tag | undefined {
+  return tagsByName.get(name);
+}
+export function relationByName(name: string): Relation | undefined {
+  return relationsByName.get(name);
+}
+export function resourceByName(name: string): Resource | undefined {
+  return resourcesByName.get(name);
 }
 
 /**

@@ -34,6 +34,10 @@ import {
   componentById,
   encodeComponentValue,
   relationById,
+  relationCount,
+  resourceById,
+  tagById,
+  tagCount,
 } from "./schema";
 import type { Batch, MemberCheck, Query, RowFilter } from "./query";
 import type { CommandBuffer, StructuralCommand } from "./command";
@@ -746,6 +750,74 @@ export class RuntimeStore {
   debugArchetypeOf(e: Entity): Archetype | undefined {
     return this.table.isPlaced(e) ? this.archetypeOfEntity(e) : undefined;
   }
+
+  // ---------------------------------------------------------------------------
+  // Snapshot support (§8) — read-only walks over the live state
+  // ---------------------------------------------------------------------------
+
+  /** Number of live entities (placed + identity-only). */
+  liveCount(): number {
+    return this.table.liveCount;
+  }
+
+  /** Every placed entity, archetype by archetype (the order a snapshot walk emits). */
+  placedEntities(): Entity[] {
+    const out: Entity[] = [];
+    for (const arch of this.archetypesById) {
+      for (let r = 0; r < arch.count; r++) out.push(arch.entities[r] as Entity);
+    }
+    return out;
+  }
+
+  /** The components present on a placed entity. */
+  componentsOf(e: Entity): Component[] {
+    const arch = this.archetypeOfEntity(e);
+    const out: Component[] = [];
+    for (const id of arch.componentIds) {
+      const c = componentById(id);
+      if (c !== undefined) out.push(c);
+    }
+    return out;
+  }
+
+  /** The tags set on an entity (walks every tag type — for serialization). */
+  tagsOf(e: Entity): Tag[] {
+    const slot = slotOf(e);
+    const out: Tag[] = [];
+    for (let id = 0; id < tagCount(); id++) {
+      if (this.tags.has(id, slot)) {
+        const t = tagById(id);
+        if (t !== undefined) out.push(t);
+      }
+    }
+    return out;
+  }
+
+  /** The outgoing relation edges of an entity, validated (for serialization). */
+  relationsOf(e: Entity): Array<{ relation: Relation; targets: Entity[] }> {
+    const out: Array<{ relation: Relation; targets: Entity[] }> = [];
+    for (let id = 0; id < relationCount(); id++) {
+      const rel = relationById(id);
+      if (rel === undefined) continue;
+      const targets = rel.arity === "one" ? boxed(this.getRelation(e, rel)) : this.getRelations(e, rel);
+      if (targets.length > 0) out.push({ relation: rel, targets });
+    }
+    return out;
+  }
+
+  /** Every set resource, with its handle (for serialization). */
+  resourceValues(): Array<{ resource: Resource; value: unknown }> {
+    const out: Array<{ resource: Resource; value: unknown }> = [];
+    for (const [id, value] of this.resources) {
+      const res = resourceById(id);
+      if (res !== undefined) out.push({ resource: res, value });
+    }
+    return out;
+  }
+}
+
+function boxed(e: Entity | undefined): Entity[] {
+  return e !== undefined ? [e] : [];
 }
 
 /**

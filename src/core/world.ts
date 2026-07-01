@@ -12,6 +12,7 @@ import type { Component, Relation, Resource, Tag } from "./schema";
 import type { Query } from "./query";
 import { RuntimeStore, type SpawnInit } from "./runtime-store";
 import { type EntityEditor, type Pipeline, SystemCtx, makeEditor } from "./system";
+import { exportSnapshot, importSnapshot } from "./snapshot";
 
 /** What the world knows about a layer's inbound rhythm — the entire coupling (§16.1). */
 export interface InboundSource {
@@ -130,6 +131,18 @@ export class World {
   /** Register an inbound source (a durable/ephemeral binding registers here on attach, §16). */
   registerInboundSource(source: InboundSource): void {
     this.inbound.push(source);
+  }
+
+  // --- local snapshot (non-collaborative save/load, §8) ---
+
+  /** Serialize the world to bytes (off the hot path — an explicit call, §8). */
+  export(): Uint8Array {
+    return exportSnapshot(this.store, this.name);
+  }
+
+  /** Load a snapshot into this world, which must be empty (§8.2). */
+  import(bytes: Uint8Array): void {
+    importSnapshot(this.store, bytes);
   }
 
   /** @internal The underlying store — the seam Parts II–IV drive projection through. */
