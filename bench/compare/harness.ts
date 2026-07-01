@@ -24,9 +24,9 @@ const lib = mod.default;
 const checksums: Record<string, number> = {};
 for (const sc of lib.scenarios) {
   const state = sc.setup();
-  checksums[sc.id] = sc.run(state); // one run from fresh setup → the parity checksum
-  bench(sc.id, () => {
-    do_not_optimize(sc.run(state));
+  checksums[sc.id] = await sc.run(state); // one run from fresh setup → the parity checksum
+  bench(sc.id, async () => {
+    do_not_optimize(await sc.run(state));
   });
 }
 

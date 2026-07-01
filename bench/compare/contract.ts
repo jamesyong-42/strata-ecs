@@ -32,8 +32,11 @@ export interface Scenario {
   readonly id: ScenarioId;
   /** Build the world once (outside timing). Returns opaque per-scenario state. */
   setup(): unknown;
-  /** One measured operation. Returns a checksum derived from the work (for DCE-guard + parity). */
-  run(state: unknown): number;
+  /**
+   * One measured operation. Returns a checksum derived from the work (for DCE-guard + parity).
+   * May be async (becsy's `world.execute()` is a Promise) — the harness awaits it.
+   */
+  run(state: unknown): number | Promise<number>;
 }
 
 export interface LibraryBench {
