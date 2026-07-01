@@ -41,6 +41,7 @@ import {
 } from "./schema";
 import type { Batch, MemberCheck, Query, RowFilter } from "./query";
 import type { CommandBuffer, StructuralCommand } from "./command";
+import type { ECSStore } from "./ecs-store";
 import { devError, devWarn } from "./dev";
 
 /** A component handle paired with a value of its field type — the typed spawn/init form. */
@@ -57,7 +58,7 @@ type Stored = number | string | null;
 
 const EMPTY_FIELD_VALUES: ReadonlyMap<FieldId, Stored> = new Map();
 
-export class RuntimeStore {
+export class RuntimeStore implements ECSStore {
   private readonly table = new EntityTable();
   private readonly tags = new TagStore();
   private readonly relations = new RelationStore((e) => this.table.isAlive(e));

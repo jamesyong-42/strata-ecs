@@ -25,8 +25,13 @@
 >   required to keep the compiled plan store-agnostic; internal, not user-facing.
 > - **`batch.getRelated` returns `Entity | undefined`** (design: `Entity`) and **`isDense` folds in
 >   "no row filters"** (design: unseeded only) — both are strictly *safer* than the reference.
-> - **`ECSStore` interface** not yet extracted (Part II is written against it) — to be defined when
->   Part II lands; **`EntityKey` brand** on `key` fields is a Part III concern (§14.3).
+> - **`ECSStore` interface** — ✅ RESOLVED: extracted (`src/core/ecs-store.ts`), and
+>   `RuntimeStore implements ECSStore` so conformance is compiler-enforced; it's the
+>   representation-agnostic contract World/ctx/Parts II–IV delegate through.
+> - **`EntityKey` brand** (§14.3) — ✅ RESOLVED: exported branded string + `entityKey()` helper;
+>   enforced on the typed value-write surfaces (`addComponent`/`writeComponent`/`edit().set`).
+>   (Only `spawn`-init values stay loosely typed — that hole is tied to the deferred typed-schema
+>   inference above, not to the brand itself.)
 
 This is the working plan for **Part I** of strata (the local, non-collaborative ECS).
 It follows the design's own build order (`docs/design.md` §19) but expands it into

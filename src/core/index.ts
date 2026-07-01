@@ -34,8 +34,8 @@ export type {
 } from "./schema";
 
 // --- field types ---
-export { field, enumOf } from "./field";
-export type { ScalarType, EnumType, FieldType, FieldSpec, FieldInput, Column } from "./field";
+export { field, enumOf, entityKey } from "./field";
+export type { ScalarType, EnumType, FieldType, FieldSpec, FieldInput, Column, EntityKey } from "./field";
 
 // --- queries ---
 export { defineQuery, Not, Any, All, Related } from "./query";
@@ -49,7 +49,8 @@ export type { System, Phase, Pipeline, Condition, SystemBody, EntityEditor } fro
 export { World, createWorld } from "./world";
 export type { InboundSource } from "./world";
 
-// --- the runtime store + command types (the seam Parts II–IV build on) ---
+// --- the store contract + implementation + command types (the seam Parts II–IV build on) ---
+export type { ECSStore } from "./ecs-store";
 export { RuntimeStore } from "./runtime-store";
 export type { SpawnInit, ComponentEntry } from "./runtime-store";
 export type { StructuralCommand, ComponentInit, CommandBuffer } from "./command";

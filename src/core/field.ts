@@ -24,6 +24,20 @@ export type ScalarType =
   | "key";
 
 /**
+ * A branded string that identifies an entity across stores / persistence (§14.3). A `key` field
+ * reads and writes `EntityKey | null`; the Part I runtime stores it as a plain string column and
+ * is key-ignorant — the brand is a purely type-level guard so an arbitrary `string` cannot be
+ * passed where a key is expected. Annotate the field's value type with it, e.g.
+ * `defineComponent<{ ref: EntityKey | null }>("Ref", { ref: "key" })`.
+ */
+export type EntityKey = string & { readonly __entityKey: unique symbol };
+
+/** Brand a string as an {@link EntityKey} (§14.3). Identity at runtime — the brand is type-only. */
+export function entityKey(s: string): EntityKey {
+  return s as EntityKey;
+}
+
+/**
  * An enum field type — a closed set of string labels interned to small integer discriminants
  * (§4). The label is the value at the API boundary; the discriminant is what gets stored.
  */
