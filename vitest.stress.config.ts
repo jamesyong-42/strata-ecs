@@ -7,7 +7,7 @@ import { defineConfig } from "vitest/config";
  */
 export default defineConfig({
   test: {
-    include: ["src/**/*.stress.ts", "test/stress/**/*.stress.ts"],
+    include: ["src/**/*.stress.ts", "src/**/*.fuzz.ts", "test/stress/**/*.{stress,fuzz}.ts"],
     // Boundary scenarios allocate up to ~1M entities and fuzz runs many cases; give them room.
     testTimeout: 300_000,
     hookTimeout: 300_000,
