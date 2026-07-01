@@ -28,8 +28,24 @@ export const SCENARIO_IDS = [
 ] as const;
 export type ScenarioId = (typeof SCENARIO_IDS)[number];
 
+/**
+ * Extension scenarios — clearly labeled as BEYOND the canonical `ecs_bench_suite` set. They probe
+ * editor/collab-relevant workloads: `serialize` (whole-world save/load round-trip — a strata built-in
+ * that the rivals don't offer, so it's strata-only) and `random_access` (read a component for many
+ * random entities by handle — a gather workload where flat eid-indexed stores have an edge).
+ */
+export const EXTENSION_IDS = ["serialize", "random_access"] as const;
+export type ExtensionId = (typeof EXTENSION_IDS)[number];
+
+/** Shared random-access parameters + the fixed access pattern, so every library reads the SAME
+ *  entity sequence and computes the SAME checksum (parity by construction). Pos.x[i] = i. */
+export const RANDOM_ACCESS = { entities: 10_000, reads: 10_000 } as const;
+export function accessIndex(k: number, num: number): number {
+  return (Math.imul(k, 2654435761) >>> 0) % num; // fixed 32-bit hash → deterministic, cross-library
+}
+
 export interface Scenario {
-  readonly id: ScenarioId;
+  readonly id: ScenarioId | ExtensionId;
   /** Build the world once (outside timing). Returns opaque per-scenario state. */
   setup(): unknown;
   /**
@@ -45,4 +61,6 @@ export interface LibraryBench {
   /** Exact version benchmarked, e.g. "0.4.0". */
   readonly version: string;
   readonly scenarios: readonly Scenario[];
+  /** Optional extension scenarios (a library may implement a subset, or none). */
+  readonly extensions?: readonly Scenario[];
 }

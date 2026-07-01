@@ -10,8 +10,10 @@ import {
   createWorld,
   defineComponent,
   defineQuery,
+  defineRelation,
+  defineTag,
 } from "strata";
-import { type LibraryBench, N, type Scenario } from "../contract.ts";
+import { type LibraryBench, N, RANDOM_ACCESS, type Scenario, accessIndex } from "../contract.ts";
 
 const VALUE = { value: "f64" } as const;
 const XY = { x: "f64", y: "f64" } as const;
@@ -191,9 +193,61 @@ const add_remove: Scenario = {
   },
 };
 
+// --- extension: serialize (strata built-in snapshot round-trip; §8) -----------
+const serialize: Scenario = {
+  id: "serialize",
+  setup() {
+    const Uid = defineComponent<{ id: number }>("XS_Uid", { id: "u32" });
+    const Pos = defineComponent<{ x: number; y: number }>("XS_Pos", XY);
+    const Name = defineComponent<{ label: string }>("XS_Name", { label: "string" });
+    const Tag = defineTag("XS_Tag");
+    const Rel = defineRelation("XS_Rel", { arity: "many" });
+    const w = createWorld();
+    const NUM = 5000;
+    const ents: Entity[] = [];
+    for (let i = 0; i < NUM; i++) {
+      const comps: [Component, Record<string, unknown>][] = [[Uid, { id: i }]];
+      if (i % 2 === 0) comps.push([Pos, { x: i, y: i + 1 }]);
+      if (i % 3 === 0) comps.push([Name, { label: `n-${i}` }]);
+      const e = w.spawn({ components: comps, tags: i % 5 === 0 ? [Tag] : [] });
+      ents.push(e);
+    }
+    for (let i = 0; i < NUM; i += 4) w.addRelation(ents[i], Rel, ents[(i + 1) % NUM]);
+    return { w, NUM };
+  },
+  run(state) {
+    const s = state as { w: World; NUM: number };
+    const bytes = s.w.export(); // read-only: w is unchanged, so run() is repeatable
+    const w2 = createWorld();
+    w2.import(bytes);
+    return w2.runtime.liveCount();
+  },
+};
+
+// --- extension: random_access (read a component for many random entities by handle) ------------
+const random_access: Scenario = {
+  id: "random_access",
+  setup() {
+    const Pos = defineComponent<{ x: number }>("XR_Pos", { x: "f64" });
+    const w = createWorld();
+    const handles: Entity[] = [];
+    for (let i = 0; i < RANDOM_ACCESS.entities; i++) handles.push(w.spawn({ components: [[Pos, { x: i }]] }));
+    return { w, Pos, handles };
+  },
+  run(state) {
+    const { w, Pos, handles } = state as { w: World; Pos: Component<{ x: number }>; handles: Entity[] };
+    let sum = 0;
+    for (let k = 0; k < RANDOM_ACCESS.reads; k++) {
+      sum += w.read(handles[accessIndex(k, RANDOM_ACCESS.entities)], Pos).x;
+    }
+    return sum;
+  },
+};
+
 const bench: LibraryBench = {
   name: "strata",
   version: "0.0.0",
   scenarios: [packed_5, simple_iter, frag_iter, entity_cycle, add_remove],
+  extensions: [serialize, random_access],
 };
 export default bench;

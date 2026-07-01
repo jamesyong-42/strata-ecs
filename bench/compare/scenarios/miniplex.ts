@@ -8,7 +8,7 @@
  */
 
 import { World } from "miniplex";
-import { type LibraryBench, N, type Scenario } from "../contract.ts";
+import { type LibraryBench, N, RANDOM_ACCESS, type Scenario, accessIndex } from "../contract.ts";
 
 type Val = { value: number };
 type Vec = { x: number; y: number };
@@ -191,9 +191,29 @@ const add_remove: Scenario = {
   },
 };
 
+// --- extension: random_access -------------------------------------------------
+type RAEntity = { p: Val };
+
+const random_access: Scenario = {
+  id: "random_access",
+  setup() {
+    const world = new World<RAEntity>();
+    const handles = new Array<RAEntity>(RANDOM_ACCESS.entities);
+    for (let i = 0; i < RANDOM_ACCESS.entities; i++) handles[i] = world.add({ p: { value: i } });
+    return { handles };
+  },
+  run(state) {
+    const { handles } = state as { handles: RAEntity[] };
+    let sum = 0;
+    for (let k = 0; k < RANDOM_ACCESS.reads; k++) sum += handles[accessIndex(k, RANDOM_ACCESS.entities)].p.value;
+    return sum;
+  },
+};
+
 const bench: LibraryBench = {
   name: "miniplex",
   version: "2.0.0",
   scenarios: [packed_5, simple_iter, frag_iter, entity_cycle, add_remove],
+  extensions: [random_access],
 };
 export default bench;

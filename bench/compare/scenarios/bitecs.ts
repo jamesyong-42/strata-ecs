@@ -14,7 +14,7 @@ import {
   removeComponent,
   removeEntity,
 } from "bitecs";
-import { type LibraryBench, N, type Scenario } from "../contract.ts";
+import { type LibraryBench, N, RANDOM_ACCESS, type Scenario, accessIndex } from "../contract.ts";
 
 // Capacity: max concurrent eid any scenario reaches (simple_iter 4000, entity_cycle ~2000). eids are
 // contiguous small ints (versioning off), so this doubles as the typed-array length. 8192 is safe.
@@ -220,9 +220,35 @@ const add_remove: Scenario = {
   },
 };
 
+// --- extension: random_access -------------------------------------------------
+const random_access: Scenario = {
+  id: "random_access",
+  setup() {
+    // Fresh world → eids are contiguous small ints; size the store to cover all of them.
+    const P: C1 = { value: new Float64Array(RANDOM_ACCESS.entities + 16) };
+    const w = createWorld();
+    const handles = new Array<number>(RANDOM_ACCESS.entities);
+    for (let i = 0; i < RANDOM_ACCESS.entities; i++) {
+      const e = addEntity(w);
+      addComponent(w, e, P);
+      P.value[e] = i;
+      handles[i] = e;
+    }
+    return { P, handles };
+  },
+  run(state) {
+    const { P, handles } = state as { P: C1; handles: number[] };
+    const v = P.value;
+    let sum = 0;
+    for (let k = 0; k < RANDOM_ACCESS.reads; k++) sum += v[handles[accessIndex(k, RANDOM_ACCESS.entities)]];
+    return sum;
+  },
+};
+
 const bench: LibraryBench = {
   name: "bitecs",
   version: "0.4.0",
   scenarios: [packed_5, simple_iter, frag_iter, entity_cycle, add_remove],
+  extensions: [random_access],
 };
 export default bench;

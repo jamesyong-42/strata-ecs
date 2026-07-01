@@ -7,7 +7,7 @@
  */
 
 import { type Trait, type World, createQuery, createWorld, trait } from "koota";
-import { type LibraryBench, N, type Scenario } from "../contract.ts";
+import { type LibraryBench, N, RANDOM_ACCESS, type Scenario, accessIndex } from "../contract.ts";
 
 // koota packs [worldId(4) | generation(8) | entityId(20)]; the low 20 bits are the SoA store index.
 const ID_MASK = 0xfffff;
@@ -174,9 +174,32 @@ const add_remove: Scenario = {
   },
 };
 
+// --- extension: random_access -------------------------------------------------
+// koota's idiomatic random read is entity.get(trait) (returns a fresh value snapshot — allocates,
+// like strata's whole-component read). useStores is for query iteration, not random by-handle access.
+const random_access: Scenario = {
+  id: "random_access",
+  setup() {
+    const P = trait({ value: 0 });
+    const w = createWorld();
+    const handles = new Array<number>(RANDOM_ACCESS.entities);
+    for (let i = 0; i < RANDOM_ACCESS.entities; i++) handles[i] = w.spawn(P({ value: i }));
+    return { P, handles };
+  },
+  run(state) {
+    const s = state as { P: Trait; handles: number[] };
+    let sum = 0;
+    for (let k = 0; k < RANDOM_ACCESS.reads; k++) {
+      sum += ((s.handles[accessIndex(k, RANDOM_ACCESS.entities)] as number).get(s.P) as { value: number }).value;
+    }
+    return sum;
+  },
+};
+
 const bench: LibraryBench = {
   name: "koota",
   version: "0.6.6",
   scenarios: [packed_5, simple_iter, frag_iter, entity_cycle, add_remove],
+  extensions: [random_access],
 };
 export default bench;

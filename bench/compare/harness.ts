@@ -22,7 +22,7 @@ const mod = (await import(modPath)) as { default: LibraryBench };
 const lib = mod.default;
 
 const checksums: Record<string, number> = {};
-for (const sc of lib.scenarios) {
+for (const sc of [...lib.scenarios, ...(lib.extensions ?? [])]) {
   const state = sc.setup();
   checksums[sc.id] = await sc.run(state); // one run from fresh setup → the parity checksum
   bench(sc.id, async () => {
