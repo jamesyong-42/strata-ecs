@@ -42,7 +42,7 @@ import {
 import type { Batch, MemberCheck, Query, RowFilter } from "./query";
 import type { CommandBuffer, StructuralCommand } from "./command";
 import type { ECSStore } from "./ecs-store";
-import { devError, devWarn } from "./dev";
+import { DEV, devError, devWarn } from "./dev";
 
 /** A component handle paired with a value of its field type — the typed spawn/init form. */
 export type ComponentEntry<S = unknown> = readonly [Component<S>, S];
@@ -71,6 +71,13 @@ export class RuntimeStore implements ECSStore {
   private readonly bufferPool: StructuralCommand[][] = [];
   private readonly freeBuffers: CommandBuffer[] = [];
   private nextArchetypeId = 0;
+  /**
+   * Soft cap on deferred ops in a single phase. The buffer is otherwise unbounded (§5.4), so a
+   * system deferring per row over a huge query can grow it without limit → OOM with no clean error.
+   * Crossing this emits a one-shot DEV back-pressure warning (never a throw — a flush must not fail
+   * mid-drain). DEV-only; stripped in production.
+   */
+  private commandBufferWarnThreshold = 1_000_000;
 
   constructor() {
     this.emptyArchetype = this.archetypeFor([]);
@@ -505,7 +512,19 @@ export class RuntimeStore implements ECSStore {
 
   /** Append a command (producer-agnostic; only a system's `ctx` calls this, §5.4). */
   enqueue(buf: CommandBuffer, cmd: StructuralCommand): void {
-    this.bufferPool[buf].push(cmd);
+    const arr = this.bufferPool[buf];
+    arr.push(cmd);
+    // Fires once as the buffer crosses the cap (length resets to 0 at flush, so each phase re-arms).
+    if (DEV && arr.length === this.commandBufferWarnThreshold) {
+      devWarn(
+        `command buffer reached ${arr.length} deferred ops in one phase — this is unbounded and may exhaust memory. Split the work across phases/ticks, or apply changes immediately outside iteration (§5.4).`,
+      );
+    }
+  }
+
+  /** @internal Test-only: lower the command-buffer soft cap to exercise the back-pressure warning. */
+  setCommandBufferWarnThresholdForTesting(n: number): void {
+    this.commandBufferWarnThreshold = n;
   }
 
   /** Single-pass drain: apply every command, then clear. `apply` never enqueues, so no growth (§5.4). */

@@ -59,10 +59,11 @@ describe("pack / slotOf / genOf", () => {
     expect(a).not.toBe(b);
   });
 
-  it("masks off bits that overflow their field", () => {
-    // index beyond 20 bits wraps; generation beyond 12 bits wraps.
-    expect(slotOf(pack(MAX_SLOTS, 1))).toBe(0); // 2^20 & INDEX_MASK === 0
-    expect(genOf(pack(0, MAX_GENERATION + 1))).toBe(0); // 4096 & GEN_MASK === 0
+  it("rejects out-of-range fields in dev instead of silently masking them", () => {
+    // The raw bit-ops mask overflow (`index & INDEX_MASK`, `gen & GEN_MASK`) — which in production
+    // would ALIAS a different handle. The DEV guard (§2) turns that latent corruption into a throw.
+    expect(() => pack(MAX_SLOTS, 1)).toThrow(/out of range/); // 2^20 would mask to slot 0
+    expect(() => pack(0, MAX_GENERATION + 1)).toThrow(/out of range/); // 4096 would mask to gen 0
   });
 
   it("NULL_ENTITY is slot 0 / generation 0", () => {

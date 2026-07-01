@@ -20,6 +20,7 @@ import {
   pack,
   slotOf,
 } from "./entity";
+import { devWarn } from "./dev";
 
 /**
  * Sentinel for "this slot has identity but no placement". A `Uint32Array` cannot hold
@@ -88,7 +89,15 @@ export class EntityTable {
     if (!this.isAlive(e)) return false;
     const slot = slotOf(e);
     let next = this.generations[slot] + 1;
-    if (next > MAX_GENERATION) next = 1; // wrap skips 0 so it stays distinct from "never issued"
+    if (next > MAX_GENERATION) {
+      // Wrap skips 0 so it stays distinct from "never issued". Surface the moment ABA risk begins:
+      // past here a stale handle to this slot can alias the live entity (a defined but lossy limit
+      // of the 20/12 split, §2). DEV-only; stripped in production.
+      next = 1;
+      devWarn(
+        `entity slot ${slot} exhausted its ${MAX_GENERATION} generations and wrapped — a stale handle to this slot can now read as alive (ABA). Defined but lossy under the 20/12 handle split (§2).`,
+      );
+    }
     this.generations[slot] = next;
     this.archetypeIds[slot] = NO_ARCHETYPE;
     this.rows[slot] = NO_ROW;

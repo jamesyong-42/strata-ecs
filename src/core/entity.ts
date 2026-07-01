@@ -24,6 +24,8 @@
  * through the helpers here so the unsigned discipline is enforced in exactly one place.
  */
 
+import { DEV } from "./dev";
+
 /** An opaque entity handle. Runtime-local and disposable (§2). */
 export type Entity = number & { readonly __brand: "Entity" };
 
@@ -51,6 +53,14 @@ export const NULL_ENTITY = 0 as Entity;
 
 /** Pack a slot index and generation into a handle. Result is always unsigned (0 … 2³²−1). */
 export function pack(index: number, generation: number): Entity {
+  // DEV guard (§2): pack() masks both fields, so an out-of-range slot/generation would silently
+  // ALIAS a different handle rather than fail. Correctness depends on upstream clamping; assert it
+  // here in dev so any future path that overflows the 20/12 split throws instead of corrupting.
+  if (DEV && (index < 0 || index >= MAX_SLOTS || generation < 0 || generation > MAX_GENERATION)) {
+    throw new Error(
+      `strata: pack() out of range — index ${index} must be in [0, ${MAX_SLOTS}) and generation ${generation} in [0, ${MAX_GENERATION}] for the 20/12 handle split (§2). An upstream slot/generation overflow would otherwise alias silently.`,
+    );
+  }
   return ((((generation & GEN_MASK) << INDEX_BITS) | (index & INDEX_MASK)) >>> 0) as Entity;
 }
 

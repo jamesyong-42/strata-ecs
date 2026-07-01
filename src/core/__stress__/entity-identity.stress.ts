@@ -8,12 +8,13 @@
  *    these tests PIN the exact behavior so a future change can't alter it unnoticed.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type Entity, MAX_GENERATION, MAX_SLOTS, genOf, slotOf } from "../entity";
 import { EntityTable } from "../entity-table";
 
 describe("stress: generation wraparound (pinned ABA tradeoff, §2)", () => {
   it("one slot's generation cycles 1→MAX_GENERATION→1; a stale handle collides after exactly 4095 recycles", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {}); // the wrap emits a DEV notice
     const t = new EntityTable(1); // force single-slot reuse: the free list only ever holds slot 0
     const h0 = t.allocate();
     expect(slotOf(h0)).toBe(0);
@@ -25,6 +26,8 @@ describe("stress: generation wraparound (pinned ABA tradeoff, §2)", () => {
       t.free(current);
       current = t.allocate();
     }
+    const warnCalls = warn.mock.calls.length;
+    warn.mockRestore();
 
     // 4095 recycles later the generation has wrapped back to 1 → bit-identical to h0.
     expect(slotOf(current)).toBe(0);
@@ -33,6 +36,8 @@ describe("stress: generation wraparound (pinned ABA tradeoff, §2)", () => {
 
     // The documented ABA: the ORIGINAL stale handle now reads alive again, aliasing the new occupant.
     expect(t.isAlive(h0)).toBe(true);
+    // The DEV guard fired exactly once, at the single generation wrap.
+    expect(warnCalls).toBe(1);
   });
 
   it("one recycle short of the wrap, the stale handle is still correctly detected as dead", () => {
@@ -50,6 +55,7 @@ describe("stress: generation wraparound (pinned ABA tradeoff, §2)", () => {
   });
 
   it("generation 0 is never issued across a full double-wrap (0 = 'never issued')", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const t = new EntityTable(1);
     let current = t.allocate();
     const seen = new Set<number>();
@@ -58,8 +64,12 @@ describe("stress: generation wraparound (pinned ABA tradeoff, §2)", () => {
       t.free(current);
       current = t.allocate();
     }
+    const warnCalls = warn.mock.calls.length;
+    warn.mockRestore();
+
     expect(seen.has(0)).toBe(false);
     expect(seen.size).toBe(MAX_GENERATION); // exactly 4095 distinct non-zero generations
+    expect(warnCalls).toBe(2); // two full generation cycles → two wrap notices
   });
 });
 
