@@ -41,7 +41,7 @@ const packed_5: Scenario = {
     let sum = 0;
     w.query(queries[0]).useStores((stores, entities) => {
       const vals = (stores[0] as NumStore).value;
-      for (let i = 0; i < entities.length; i++) sum += vals[entities[i] & ID_MASK];
+      let sc = 0; for (let i = 0; i < entities.length; i++) sc += vals[entities[i] & ID_MASK]; sum += sc;
     });
     return sum;
   },
@@ -87,7 +87,7 @@ const simple_iter: Scenario = {
     let sum = 0;
     s.w.query(s.qAB).useStores((stores, entities) => {
       const ax = (stores[0] as XYStore).x;
-      for (let i = 0; i < entities.length; i++) sum += ax[entities[i] & ID_MASK];
+      let sc = 0; for (let i = 0; i < entities.length; i++) sc += ax[entities[i] & ID_MASK]; sum += sc;
     });
     return sum;
   },
@@ -118,11 +118,11 @@ const frag_iter: Scenario = {
     let sum = 0;
     s.w.query(s.qData).useStores((stores, entities) => {
       const vals = (stores[0] as NumStore).value;
-      for (let i = 0; i < entities.length; i++) sum += vals[entities[i] & ID_MASK];
+      let sc = 0; for (let i = 0; i < entities.length; i++) sc += vals[entities[i] & ID_MASK]; sum += sc;
     });
     s.w.query(s.qZ).useStores((stores, entities) => {
       const vals = (stores[0] as NumStore).value;
-      for (let i = 0; i < entities.length; i++) sum += vals[entities[i] & ID_MASK];
+      let sc = 0; for (let i = 0; i < entities.length; i++) sc += vals[entities[i] & ID_MASK]; sum += sc;
     });
     return sum;
   },
@@ -145,7 +145,7 @@ const entity_cycle: Scenario = {
     let sum = 0;
     s.w.query(s.qB).useStores((stores, entities) => {
       const vals = (stores[0] as NumStore).value;
-      for (let i = 0; i < entities.length; i++) sum += vals[entities[i] & ID_MASK];
+      let sc = 0; for (let i = 0; i < entities.length; i++) sc += vals[entities[i] & ID_MASK]; sum += sc;
     });
     for (let i = 0; i < spawned.length; i++) (spawned[i] as number).destroy();
     return sum;
@@ -170,7 +170,7 @@ const add_remove: Scenario = {
     let sum = 0;
     s.w.query(s.qB).useStores((stores, entities) => {
       const vals = (stores[0] as NumStore).value;
-      for (let i = 0; i < entities.length; i++) sum += vals[entities[i] & ID_MASK];
+      let sc = 0; for (let i = 0; i < entities.length; i++) sc += vals[entities[i] & ID_MASK]; sum += sc;
     });
     for (let i = 0; i < ents.length; i++) (ents[i] as number).remove(s.B);
     return sum;
@@ -278,15 +278,15 @@ const sim_frame: Scenario = {
     let sum = 0;
     s.w.query(s.qPos).useStores((stores, entities) => {
       const px = (stores[0] as XYStore).x;
-      for (let i = 0; i < entities.length; i++) sum += px[entities[i] & ID_MASK];
+      let sc = 0; for (let i = 0; i < entities.length; i++) sc += px[entities[i] & ID_MASK]; sum += sc;
     });
     s.w.query(s.qHealth).useStores((stores, entities) => {
       const hp = (stores[0] as HpStore).hp;
-      for (let i = 0; i < entities.length; i++) sum += hp[entities[i] & ID_MASK];
+      let sc = 0; for (let i = 0; i < entities.length; i++) sc += hp[entities[i] & ID_MASK]; sum += sc;
     });
     s.w.query(s.qRender).useStores((stores, entities) => {
       const acc = (stores[0] as AccStore).acc;
-      for (let i = 0; i < entities.length; i++) sum += acc[entities[i] & ID_MASK];
+      let sc = 0; for (let i = 0; i < entities.length; i++) sc += acc[entities[i] & ID_MASK]; sum += sc;
     });
     return sum;
   },

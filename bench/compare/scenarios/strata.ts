@@ -48,11 +48,15 @@ const packed_5: Scenario = {
         for (let r = 0; r < b.denseCount; r++) col[r] += 1;
       });
     }
+    // Reduction: accumulate per-chunk into a local, add to `sum` once per chunk. A captured `sum +=`
+    // in the row loop would be a heap Context write every row (see docs/perf-hotpath.md).
     let sum = 0;
     const first = queries[0];
     w.query(first.q).each((b) => {
       const col = b.col(first.c).value as Float64Array;
-      for (let r = 0; r < b.denseCount; r++) sum += col[r];
+      let s = 0;
+      for (let r = 0; r < b.denseCount; r++) s += col[r];
+      sum += s;
     });
     return sum;
   },
@@ -107,7 +111,9 @@ const simple_iter: Scenario = {
     let sum = 0;
     s.w.query(s.qAB).each((b) => {
       const a = b.col(s.A).x as Float64Array;
-      for (let r = 0; r < b.denseCount; r++) sum += a[r];
+      let sc = 0;
+      for (let r = 0; r < b.denseCount; r++) sc += a[r];
+      sum += sc;
     });
     return sum;
   },
@@ -140,11 +146,15 @@ const frag_iter: Scenario = {
     let sum = 0;
     s.w.query(s.qData).each((b) => {
       const col = b.col(s.Data).value as Float64Array;
-      for (let r = 0; r < b.denseCount; r++) sum += col[r];
+      let sc = 0;
+      for (let r = 0; r < b.denseCount; r++) sc += col[r];
+      sum += sc;
     });
     s.w.query(s.qZ).each((b) => {
       const col = b.col(s.Z).value as Float64Array;
-      for (let r = 0; r < b.denseCount; r++) sum += col[r];
+      let sc = 0;
+      for (let r = 0; r < b.denseCount; r++) sc += col[r];
+      sum += sc;
     });
     return sum;
   },
@@ -167,7 +177,9 @@ const entity_cycle: Scenario = {
     let sum = 0;
     s.w.query(s.qB).each((b) => {
       const col = b.col(s.B).value as Float64Array;
-      for (let r = 0; r < b.denseCount; r++) sum += col[r];
+      let sc = 0;
+      for (let r = 0; r < b.denseCount; r++) sc += col[r];
+      sum += sc;
     });
     for (const e of spawned) s.w.destroy(e);
     return sum;
@@ -191,7 +203,9 @@ const add_remove: Scenario = {
     let sum = 0;
     s.w.query(s.qB).each((b) => {
       const col = b.col(s.B).value as Float64Array;
-      for (let r = 0; r < b.denseCount; r++) sum += col[r];
+      let sc = 0;
+      for (let r = 0; r < b.denseCount; r++) sc += col[r];
+      sum += sc;
     });
     for (const e of s.ents) s.w.removeComponent(e, s.B);
     return sum;
@@ -242,8 +256,9 @@ const random_access: Scenario = {
   run(state) {
     const { w, Pos, handles } = state as { w: World; Pos: Component<{ x: number }>; handles: Entity[] };
     let sum = 0;
+    // readField: allocation-free single-field read (whole-component read() builds an object per call).
     for (let k = 0; k < RANDOM_ACCESS.reads; k++) {
-      sum += w.read(handles[accessIndex(k, RANDOM_ACCESS.entities)], Pos).x;
+      sum += w.readField<number>(handles[accessIndex(k, RANDOM_ACCESS.entities)], Pos, "x") as number;
     }
     return sum;
   },
@@ -312,9 +327,9 @@ const sim_frame: Scenario = {
     };
     s.w.tick(s.pipeline);
     let sum = 0;
-    s.w.query(s.qPos).each((b) => { const px = b.col(s.Position).x as F64; for (let r = 0; r < b.denseCount; r++) sum += px[r]; });
-    s.w.query(s.qHealth).each((b) => { const hp = b.col(s.Health).hp as F64; for (let r = 0; r < b.denseCount; r++) sum += hp[r]; });
-    s.w.query(s.qRender).each((b) => { const acc = b.col(s.Renderable).acc as F64; for (let r = 0; r < b.denseCount; r++) sum += acc[r]; });
+    s.w.query(s.qPos).each((b) => { const px = b.col(s.Position).x as F64; let sc = 0; for (let r = 0; r < b.denseCount; r++) sc += px[r]; sum += sc; });
+    s.w.query(s.qHealth).each((b) => { const hp = b.col(s.Health).hp as F64; let sc = 0; for (let r = 0; r < b.denseCount; r++) sc += hp[r]; sum += sc; });
+    s.w.query(s.qRender).each((b) => { const acc = b.col(s.Renderable).acc as F64; let sc = 0; for (let r = 0; r < b.denseCount; r++) sc += acc[r]; sum += sc; });
     return sum;
   },
 };
