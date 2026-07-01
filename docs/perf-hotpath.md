@@ -1,9 +1,14 @@
 # Design note — hot-path optimizations (query iteration + random-access reads)
 
-**Status:** PROPOSED (2026-07-01). Surfaced by the comparative benchmark (`BENCHMARKS.md`,
-`bench/compare/`). Two additive, backward-compatible changes to the Part I runtime, grounded in a
-profiling attribution rather than intuition. No change to timing (§0), placement/migration (§5.5),
-or query semantics (§6) — only how rows and field values are *handed to* the caller.
+**Status:** IMPLEMENTED (2026-07-01) — with a corrected attribution; see the addendum at the bottom.
+Surfaced by the comparative benchmark (`BENCHMARKS.md`, `bench/compare/`). Additive,
+backward-compatible changes to the Part I runtime. No change to timing (§0), placement/migration
+(§5.5), or query semantics (§6) — only how rows and field values are *handed to* the caller.
+
+> ⚠️ The attribution in the "Profiling" section below is the ORIGINAL (approved) analysis and is
+> partly WRONG — the V3 experiment removed the row filter as well as the generator, so it over-credited
+> the generator. The corrected, evidence-based breakdown is in the **addendum** at the end. The
+> optimizations still landed; their real impact just differs from the first estimate.
 
 ## Motivation
 
@@ -183,6 +188,45 @@ readField(e, c, field) {
    variant using `readField` and re-benchmark.
 4. Update `docs/plan-part1.md` deferred-list to mark these done, and note any residual per-chunk
    `col()` object cost (a possible C follow-up: a cached/scalar column accessor) if it still shows.
+
+## Addendum — corrected attribution & what actually landed (2026-07-01)
+
+Deeper profiling (decomposing `sim_frame` piece by piece rather than swapping tag→component, which
+conflated two costs) gave the real breakdown of the original 392µs:
+
+| cost | µs | fixed by |
+|---|---:|---|
+| checksum reduction into a callback-**captured accumulator** (heap Context write per row) | ~120 | benchmark fix: chunk-local accumulate, add once |
+| per-row `Map.get` in the filtered row-check (`tags.has` per row) | ~50 | **filter hoist** (this work) |
+| generator per-`yield` on `for (const r of b)` | ~35 | **generator removal / A** (this work) |
+| actual 4-system frame work | ~77 | — |
+
+So the single largest factor was **not** a runtime cost at all — it was our benchmark accumulating the
+checksum into a scalar captured by the `.each` callback (~7ns/row heap write). That penalized the
+callback-based libraries (strata, koota) and not the in-scope-loop libraries (bitecs, miniplex). It is
+now fixed for all libraries (`BENCHMARKS.md` › Methodology). **Recommended strata idiom for a reduction:
+accumulate per-chunk into a local, add to the outer total once per chunk.**
+
+What actually landed:
+
+- **A — generator-free iteration:** DONE. Real win for `for (const r of b)` (removes the per-`yield`
+  cost); also the substrate the filter hoist needed. `for..of` now reuses one result object (no
+  per-row allocation). Materialized `rows`/`count` added to `Batch`.
+- **Filter hoist (unplanned, discovered):** DONE. `fillMatchedRows` resolves a single `tag`/`Not(tag)`
+  filter's bitset once and inlines the bit test — no per-row `Map.get`. The dominant *runtime* win for
+  filtered queries (`Movement` on `sim_frame`).
+- **B — `readField`:** DONE, but a **smaller win than estimated** (989→816µs on `random_access`, not
+  ~500µs). Profiling showed the object allocation was only ~7ns/read; the real cost is the archetype
+  handle→slot→archetype→row→column indirection, which is inherent to the model. `readField` is still
+  worth it (allocation-free, useful API) but does not close the gap to bitecs's flat eid array.
+- **A′ — reuse `ArchetypeChunk` across archetypes:** DEFERRED. Measurement showed per-chunk allocation
+  is negligible (a mixed 8-archetype dense frame runs in ~20µs), so the win doesn't justify the
+  nesting-safe chunk-pool complexity. Revisit only if a future workload shows chunk-alloc pressure.
+- **Read-only-phase tick fast-path:** DROPPED (measured ~2%, as originally noted).
+
+Net effect on the fair benchmark: strata moved to top-tier on dense iteration (ties/beats bitecs on
+`packed_5`/`simple_iter`/`frag_iter`) — mostly from the benchmark reduction fix, with the generator +
+filter-hoist runtime wins contributing on the filtered/`for..of` paths.
 
 ## Open decisions (for review)
 
