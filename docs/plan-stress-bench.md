@@ -1,5 +1,11 @@
 # Plan — Stress-Testing & Comparative Benchmarking (post Part I)
 
+> **Status: COMPLETE (2026-07-01).** Both workstreams landed. Stress & fuzz found **no correctness
+> bug**; results in [`stress-report.md`](stress-report.md). Comparative benchmark done; analysis in
+> [`../BENCHMARKS.md`](../BENCHMARKS.md), generated table in
+> [`../bench/compare/RESULTS.md`](../bench/compare/RESULTS.md). Run: `pnpm test:stress` (heavy suite)
+> and `cd bench/compare && node run.mjs` (benchmark).
+
 Part I (the Runtime Core) is feature-complete, adversarially reviewed, and conformance-audited.
 This plan hardens it under adversarial load and measures it honestly against the field.
 
