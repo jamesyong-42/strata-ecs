@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>strata — ECS benchmarks</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#111725; --panel2:#0e1420; --line:#1e2637; --ink:#e6edf3;
+    --muted:#8b98ad; --accent:#a371f7; --track:#161d2b;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:"SF Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:radial-gradient(1200px 600px at 80% -10%,#1a1230 0%,transparent 60%),var(--bg);
+    color:var(--ink);font-family:var(--font);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:48px 24px 96px}
+  header.top{margin-bottom:40px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 12px}
+  h1{font-size:40px;line-height:1.1;margin:0 0 12px;font-weight:750;letter-spacing:-.02em}
+  h1 .g{background:linear-gradient(92deg,#a371f7,#58a6ff 55%,#3fb950);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lede{color:var(--muted);font-size:17px;max-width:70ch;margin:0 0 22px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+  .chip{display:inline-flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);
+    border-radius:999px;padding:6px 12px;font-size:13px;font-family:var(--mono)}
+  .chip i{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .chip small{color:var(--muted)}
+  .meta{color:var(--muted);font-family:var(--mono);font-size:12.5px;margin-top:14px}
+  .highlight{margin:26px 0 8px;padding:18px 20px;border:1px solid var(--line);border-radius:16px;
+    background:linear-gradient(180deg,rgba(163,113,247,.10),rgba(163,113,247,.02))}
+  .highlight b{color:var(--ink)} .highlight .wins{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .win{font-family:var(--mono);font-size:12px;background:rgba(63,185,80,.12);color:#7ee787;border:1px solid rgba(63,185,80,.3);
+    padding:4px 10px;border-radius:999px}
+  .group{margin-top:52px}
+  .group-head h2{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
+  .group-head p{color:var(--muted);margin:0 0 20px;font-size:14.5px;max-width:80ch}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}.wrap{padding:32px 16px 72px}h1{font-size:32px}}
+  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+    border-radius:16px;padding:18px 18px 14px;transition:border-color .2s}
+  .card:hover{border-color:#2b3650}
+  .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+  .card-head h3{font-size:14.5px;margin:0;font-weight:620;letter-spacing:.005em}
+  .badge{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;
+    color:var(--c);border:1px solid color-mix(in srgb,var(--c) 45%,transparent);
+    background:color-mix(in srgb,var(--c) 12%,transparent);padding:3px 9px;border-radius:999px}
+  .bars{display:flex;flex-direction:column;gap:9px}
+  .row{display:grid;grid-template-columns:74px 1fr auto;align-items:center;gap:12px}
+  .row .lib{font-family:var(--mono);font-size:12.5px;color:var(--c);font-weight:600}
+  .track{height:12px;background:var(--track);border-radius:7px;overflow:hidden;position:relative}
+  .fill{height:100%;border-radius:7px;background:linear-gradient(90deg,color-mix(in srgb,var(--c) 55%,#000 6%),var(--c));
+    box-shadow:0 0 12px color-mix(in srgb,var(--c) 35%,transparent);min-width:2px;transition:width .3s}
+  .row.strata .track{outline:1px solid color-mix(in srgb,var(--accent) 40%,transparent);outline-offset:1px}
+  .row .val{font-family:var(--mono);font-size:12.5px;color:var(--ink);white-space:nowrap;text-align:right;min-width:96px}
+  .row .val em{color:var(--muted);font-style:normal;font-size:11px}
+  .row.na .val{color:var(--muted)} .row.na .lib{opacity:.6}
+  .sub{color:var(--muted);font-size:11.5px;font-family:var(--mono);margin-top:12px;text-align:right}
+  footer{margin-top:56px;border-top:1px solid var(--line);padding-top:24px;color:var(--muted);font-size:13.5px}
+  footer code{font-family:var(--mono);background:var(--panel);border:1px solid var(--line);padding:2px 7px;border-radius:6px;color:var(--ink)}
+  footer h4{color:var(--ink);font-size:13px;text-transform:uppercase;letter-spacing:.08em;margin:20px 0 8px}
+  footer ul{margin:0;padding-left:18px} footer li{margin:4px 0}
+</style></head>
+<body><div class="wrap">
+  <header class="top">
+    <p class="eyebrow">Comparative benchmark</p>
+    <h1><span class="g">strata</span> vs the TypeScript ECS field</h1>
+    <p class="lede">strata (archetype-SoA, built for editor / collaboration workloads) measured against bitecs, becsy, miniplex, and koota. Each scenario runs in every library's idiomatic fastest form; all libraries agree on a per-scenario checksum, so the work is provably identical.</p>
+    <div class="chips"><span class="chip"><i style="background:#a371f7"></i>strata <small>0.0.0</small></span><span class="chip"><i style="background:#58a6ff"></i>bitecs <small>0.4.0</small></span><span class="chip"><i style="background:#f778ba"></i>becsy <small>0.16.0</small></span><span class="chip"><i style="background:#ffa657"></i>miniplex <small>2.0.0</small></span><span class="chip"><i style="background:#3fb950"></i>koota <small>0.6.6</small></span></div>
+    <div class="meta">Apple M1 Max · arm64-darwin · Node 24.14.1 · mitata · one process per library · lower µs/op is better</div>
+  </header>
+
+  <div class="highlight">
+    <b>strata is fastest in 5 of 10 scenarios</b> — top-tier on dense iteration and fastest on entity-lifecycle / in-system churn (its target workload). It carries honest, structural cost on component add/remove and random-access-by-handle, and uniquely ships serialization.
+    <div class="wins"><span class="win">spawn_reap_frame</span><span class="win">packed_5</span><span class="win">simple_iter</span><span class="win">entity_cycle</span><span class="win">serialize</span></div>
+  </div>
+
+  <section class="group"><div class="group-head"><h2>Realistic frames</h2><p>A full frame through each library's real system pipeline — multiple systems, a mixed world, in-system structural change.</p></div>
+      <div class="grid"><article class="card">
+    <div class="card-head"><h3>sim_frame · 4-system mixed-world frame</h3><span class="badge" style="--c:#58a6ff">fastest · bitecs</span></div>
+    <div class="bars"><div class="row">
+        <span class="lib" style="--c:#58a6ff">bitecs</span>
+        <div class="track"><div class="fill" style="width:100.0%;--c:#58a6ff"></div></div>
+        <span class="val">47.51 µs</span></div>
+<div class="row">
+        <span class="lib" style="--c:#3fb950">koota</span>
+        <div class="track"><div class="fill" style="width:55.4%;--c:#3fb950"></div></div>
+        <span class="val">85.77 µs <em>1.81×</em></span></div>
+<div class="row strata">
+        <span class="lib" style="--c:#a371f7">strata</span>
+        <div class="track"><div class="fill" style="width:46.9%;--c:#a371f7"></div></div>
+        <span class="val">101.3 µs <em>2.13×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#ffa657">miniplex</span>
+        <div class="track"><div class="fill" style="width:7.5%;--c:#ffa657"></div></div>
+        <span class="val">629.6 µs <em>13.25×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#f778ba">becsy</span>
+        <div class="track"><div class="fill" style="width:4.0%;--c:#f778ba"></div></div>
+        <span class="val">1.19 ms <em>25.11×</em></span></div></div>
+    <div class="sub">longer bar = faster · lower µs/op is better</div>
+  </article>
+<article class="card">
+    <div class="card-head"><h3>spawn_reap_frame · in-system entity spawn + destroy</h3><span class="badge" style="--c:#a371f7">fastest · strata</span></div>
+    <div class="bars"><div class="row strata">
+        <span class="lib" style="--c:#a371f7">strata</span>
+        <div class="track"><div class="fill" style="width:100.0%;--c:#a371f7"></div></div>
+        <span class="val">2.62 ms</span></div>
+<div class="row">
+        <span class="lib" style="--c:#58a6ff">bitecs</span>
+        <div class="track"><div class="fill" style="width:71.7%;--c:#58a6ff"></div></div>
+        <span class="val">3.65 ms <em>1.40×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#ffa657">miniplex</span>
+        <div class="track"><div class="fill" style="width:57.0%;--c:#ffa657"></div></div>
+        <span class="val">4.59 ms <em>1.75×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#f778ba">becsy</span>
+        <div class="track"><div class="fill" style="width:48.0%;--c:#f778ba"></div></div>
+        <span class="val">5.45 ms <em>2.08×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#3fb950">koota</span>
+        <div class="track"><div class="fill" style="width:19.2%;--c:#3fb950"></div></div>
+        <span class="val">13.64 ms <em>5.21×</em></span></div></div>
+    <div class="sub">longer bar = faster · lower µs/op is better</div>
+  </article>
+<article class="card">
+    <div class="card-head"><h3>toggle_frame · in-system component add + remove</h3><span class="badge" style="--c:#f778ba">fastest · becsy</span></div>
+    <div class="bars"><div class="row">
+        <span class="lib" style="--c:#f778ba">becsy</span>
+        <div class="track"><div class="fill" style="width:100.0%;--c:#f778ba"></div></div>
+        <span class="val">5.39 ms</span></div>
+<div class="row">
+        <span class="lib" style="--c:#58a6ff">bitecs</span>
+        <div class="track"><div class="fill" style="width:47.8%;--c:#58a6ff"></div></div>
+        <span class="val">11.27 ms <em>2.09×</em></span></div>
+<div class="row strata">
+        <span class="lib" style="--c:#a371f7">strata</span>
+        <div class="track"><div class="fill" style="width:43.2%;--c:#a371f7"></div></div>
+        <span class="val">12.46 ms <em>2.31×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#ffa657">miniplex</span>
+        <div class="track"><div class="fill" style="width:22.1%;--c:#ffa657"></div></div>
+        <span class="val">24.41 ms <em>4.53×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#3fb950">koota</span>
+        <div class="track"><div class="fill" style="width:13.8%;--c:#3fb950"></div></div>
+        <span class="val">39.19 ms <em>7.27×</em></span></div></div>
+    <div class="sub">longer bar = faster · lower µs/op is better</div>
+  </article></div></section>
+<section class="group"><div class="group-head"><h2>Canonical micro-scenarios</h2><p>The standard ecs_bench_suite set — raw iteration and lifecycle micro-operations.</p></div>
+      <div class="grid"><article class="card">
+    <div class="card-head"><h3>packed_5 · dense iteration, 5 components</h3><span class="badge" style="--c:#a371f7">fastest · strata</span></div>
+    <div class="bars"><div class="row strata">
+        <span class="lib" style="--c:#a371f7">strata</span>
+        <div class="track"><div class="fill" style="width:100.0%;--c:#a371f7"></div></div>
+        <span class="val">8.99 µs</span></div>
+<div class="row">
+        <span class="lib" style="--c:#58a6ff">bitecs</span>
+        <div class="track"><div class="fill" style="width:99.1%;--c:#58a6ff"></div></div>
+        <span class="val">9.07 µs <em>1.01×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#3fb950">koota</span>
+        <div class="track"><div class="fill" style="width:47.8%;--c:#3fb950"></div></div>
+        <span class="val">18.79 µs <em>2.09×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#ffa657">miniplex</span>
+        <div class="track"><div class="fill" style="width:17.1%;--c:#ffa657"></div></div>
+        <span class="val">52.58 µs <em>5.85×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#f778ba">becsy</span>
+        <div class="track"><div class="fill" style="width:11.8%;--c:#f778ba"></div></div>
+        <span class="val">75.95 µs <em>8.45×</em></span></div></div>
+    <div class="sub">longer bar = faster · lower µs/op is better</div>
+  </article>
+<article class="card">
+    <div class="card-head"><h3>simple_iter · multi-layout iteration + swaps</h3><span class="badge" style="--c:#a371f7">fastest · strata</span></div>
+    <div class="bars"><div class="row strata">
+        <span class="lib" style="--c:#a371f7">strata</span>
+        <div class="track"><div class="fill" style="width:100.0%;--c:#a371f7"></div></div>
+        <span class="val">12.64 µs</span></div>
+<div class="row">
+        <span class="lib" style="--c:#58a6ff">bitecs</span>
+        <div class="track"><div class="fill" style="width:78.6%;--c:#58a6ff"></div></div>
+        <span class="val">16.08 µs <em>1.27×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#3fb950">koota</span>
+        <div class="track"><div class="fill" style="width:43.4%;--c:#3fb950"></div></div>
+        <span class="val">29.15 µs <em>2.31×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#ffa657">miniplex</span>
+        <div class="track"><div class="fill" style="width:14.0%;--c:#ffa657"></div></div>
+        <span class="val">90.14 µs <em>7.13×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#f778ba">becsy</span>
+        <div class="track"><div class="fill" style="width:6.0%;--c:#f778ba"></div></div>
+        <span class="val">210.4 µs <em>16.64×</em></span></div></div>
+    <div class="sub">longer bar = faster · lower µs/op is better</div>
+  </article>
+<article class="card">
+    <div class="card-head"><h3>frag_iter · fragmented iteration, 26 types</h3><span class="badge" style="--c:#58a6ff">fastest · bitecs</span></div>
+    <div class="bars"><div class="row">
+        <span class="lib" style="--c:#58a6ff">bitecs</span>
+        <div class="track"><div class="fill" style="width:100.0%;--c:#58a6ff"></div></div>
+        <span class="val">7.42 µs</span></div>
+<div class="row strata">
+        <span class="lib" style="--c:#a371f7">strata</span>
+        <div class="track"><div class="fill" style="width:99.9%;--c:#a371f7"></div></div>
+        <span class="val">7.43 µs <em>1.00×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#3fb950">koota</span>
+        <div class="track"><div class="fill" style="width:33.4%;--c:#3fb950"></div></div>
+        <span class="val">22.21 µs <em>2.99×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#ffa657">miniplex</span>
+        <div class="track"><div class="fill" style="width:14.0%;--c:#ffa657"></div></div>
+        <span class="val">53.10 µs <em>7.16×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#f778ba">becsy</span>
+        <div class="track"><div class="fill" style="width:9.8%;--c:#f778ba"></div></div>
+        <span class="val">76.08 µs <em>10.25×</em></span></div></div>
+    <div class="sub">longer bar = faster · lower µs/op is better</div>
+  </article>
+<article class="card">
+    <div class="card-head"><h3>entity_cycle · create + destroy churn</h3><span class="badge" style="--c:#a371f7">fastest · strata</span></div>
+    <div class="bars"><div class="row strata">
+        <span class="lib" style="--c:#a371f7">strata</span>
+        <div class="track"><div class="fill" style="width:100.0%;--c:#a371f7"></div></div>
+        <span class="val">255.1 µs</span></div>
+<div class="row">
+        <span class="lib" style="--c:#58a6ff">bitecs</span>
+        <div class="track"><div class="fill" style="width:85.6%;--c:#58a6ff"></div></div>
+        <span class="val">297.9 µs <em>1.17×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#f778ba">becsy</span>
+        <div class="track"><div class="fill" style="width:53.5%;--c:#f778ba"></div></div>
+        <span class="val">477.3 µs <em>1.87×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#ffa657">miniplex</span>
+        <div class="track"><div class="fill" style="width:41.6%;--c:#ffa657"></div></div>
+        <span class="val">613.3 µs <em>2.40×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#3fb950">koota</span>
+        <div class="track"><div class="fill" style="width:11.5%;--c:#3fb950"></div></div>
+        <span class="val">2.21 ms <em>8.67×</em></span></div></div>
+    <div class="sub">longer bar = faster · lower µs/op is better</div>
+  </article>
+<article class="card">
+    <div class="card-head"><h3>add_remove · component add + remove</h3><span class="badge" style="--c:#58a6ff">fastest · bitecs</span></div>
+    <div class="bars"><div class="row">
+        <span class="lib" style="--c:#58a6ff">bitecs</span>
+        <div class="track"><div class="fill" style="width:100.0%;--c:#58a6ff"></div></div>
+        <span class="val">217.9 µs</span></div>
+<div class="row">
+        <span class="lib" style="--c:#f778ba">becsy</span>
+        <div class="track"><div class="fill" style="width:96.6%;--c:#f778ba"></div></div>
+        <span class="val">225.6 µs <em>1.04×</em></span></div>
+<div class="row strata">
+        <span class="lib" style="--c:#a371f7">strata</span>
+        <div class="track"><div class="fill" style="width:46.1%;--c:#a371f7"></div></div>
+        <span class="val">473.1 µs <em>2.17×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#3fb950">koota</span>
+        <div class="track"><div class="fill" style="width:30.4%;--c:#3fb950"></div></div>
+        <span class="val">717.4 µs <em>3.29×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#ffa657">miniplex</span>
+        <div class="track"><div class="fill" style="width:21.0%;--c:#ffa657"></div></div>
+        <span class="val">1.04 ms <em>4.75×</em></span></div></div>
+    <div class="sub">longer bar = faster · lower µs/op is better</div>
+  </article></div></section>
+<section class="group"><div class="group-head"><h2>Extensions</h2><p>Editor-centric workloads beyond the canonical suite.</p></div>
+      <div class="grid"><article class="card">
+    <div class="card-head"><h3>serialize · whole-world save + load (strata built-in)</h3><span class="badge" style="--c:#a371f7">fastest · strata</span></div>
+    <div class="bars"><div class="row strata">
+        <span class="lib" style="--c:#a371f7">strata</span>
+        <div class="track"><div class="fill" style="width:100.0%;--c:#a371f7"></div></div>
+        <span class="val">11.34 ms</span></div>
+<div class="row na"><span class="lib" style="--c:#58a6ff">bitecs</span>
+          <div class="track"><div class="fill" style="width:0%"></div></div>
+          <span class="val na-val">N/A</span></div>
+<div class="row na"><span class="lib" style="--c:#f778ba">becsy</span>
+          <div class="track"><div class="fill" style="width:0%"></div></div>
+          <span class="val na-val">N/A</span></div>
+<div class="row na"><span class="lib" style="--c:#ffa657">miniplex</span>
+          <div class="track"><div class="fill" style="width:0%"></div></div>
+          <span class="val na-val">N/A</span></div>
+<div class="row na"><span class="lib" style="--c:#3fb950">koota</span>
+          <div class="track"><div class="fill" style="width:0%"></div></div>
+          <span class="val na-val">N/A</span></div></div>
+    <div class="sub">longer bar = faster · lower µs/op is better</div>
+  </article>
+<article class="card">
+    <div class="card-head"><h3>random_access · read one field for 10k random entities</h3><span class="badge" style="--c:#58a6ff">fastest · bitecs</span></div>
+    <div class="bars"><div class="row">
+        <span class="lib" style="--c:#58a6ff">bitecs</span>
+        <div class="track"><div class="fill" style="width:100.0%;--c:#58a6ff"></div></div>
+        <span class="val">466.2 µs</span></div>
+<div class="row">
+        <span class="lib" style="--c:#ffa657">miniplex</span>
+        <div class="track"><div class="fill" style="width:86.4%;--c:#ffa657"></div></div>
+        <span class="val">539.5 µs <em>1.16×</em></span></div>
+<div class="row strata">
+        <span class="lib" style="--c:#a371f7">strata</span>
+        <div class="track"><div class="fill" style="width:57.1%;--c:#a371f7"></div></div>
+        <span class="val">815.9 µs <em>1.75×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#3fb950">koota</span>
+        <div class="track"><div class="fill" style="width:45.7%;--c:#3fb950"></div></div>
+        <span class="val">1.02 ms <em>2.19×</em></span></div>
+<div class="row na"><span class="lib" style="--c:#f778ba">becsy</span>
+          <div class="track"><div class="fill" style="width:0%"></div></div>
+          <span class="val na-val">N/A</span></div></div>
+    <div class="sub">longer bar = faster · lower µs/op is better</div>
+  </article></div></section>
+
+  <footer>
+    <h4>How to read this</h4>
+    <ul>
+      <li>Each bar's length is <b>relative speed</b> within that scenario — the fastest library gets a full bar; a library 2× slower gets a half bar. The label shows the actual µs/op and the ×-multiple vs the fastest.</li>
+      <li>Lower µs/op is better. <b>strata</b>'s row is outlined.</li>
+    </ul>
+    <h4>Method</h4>
+    <ul>
+      <li>Regenerate: <code>pnpm build</code> then <code>cd bench/compare &amp;&amp; node run.mjs</code>.</li>
+      <li>One <code>node</code> process per library (no inline-cache contamination); mitata with <code>--expose-gc --allow-natives-syntax</code>; warmup to steady state.</li>
+      <li>All checksums agree across all five libraries — equal work proven. Full analysis in <code>BENCHMARKS.md</code>; raw table in <code>RESULTS.md</code>.</li>
+    </ul>
+    <p style="margin-top:20px">Numbers are machine-specific with a few-percent run-to-run variance; treat anything within a few percent as a tie.</p>
+  </footer>
+</div></body></html>

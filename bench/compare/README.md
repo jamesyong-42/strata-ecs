@@ -11,8 +11,13 @@ only in this package's `devDependencies`, so strata's own dependency graph stays
 ```sh
 pnpm build                    # from repo root — bench imports strata's built dist
 cd bench/compare
-node run.mjs                  # spawns one process per library; writes RESULTS.md
+node run.mjs                  # spawns one process per library; writes RESULTS.md, results.json, report.html
+open report.html              # a self-contained visual report (charts) — no build, no CDN
 ```
+
+`node run.mjs` emits three artifacts: `RESULTS.md` (the raw table), `results.json` (structured data),
+and **`report.html`** — a dependency-free page with per-scenario bar charts. Regenerate just the page
+from existing data with `node report.mjs`.
 
 Requires Node ≥ 24 (native TS type-stripping; mitata needs `--expose-gc --allow-natives-syntax`,
 which `run.mjs` passes).

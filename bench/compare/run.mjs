@@ -12,6 +12,7 @@ import { execFileSync } from "node:child_process";
 import { readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderReport } from "./report.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCENARIOS = ["packed_5", "simple_iter", "frag_iter", "entity_cycle", "add_remove"];
@@ -179,6 +180,14 @@ for (const sc of [...SCENARIOS, ...FRAMES, ...EXTENSIONS]) {
 const md = L.join("\n") + "\n";
 writeFileSync(join(HERE, "RESULTS.md"), md);
 process.stdout.write("\n" + md);
+
+// Persist structured data + render the HTML report (charts).
+const versions = {};
+for (const l of okLibs) versions[l] = data[l].version;
+const payload = { context, libs: okLibs, versions, byLib };
+writeFileSync(join(HERE, "results.json"), JSON.stringify(payload, null, 2));
+writeFileSync(join(HERE, "report.html"), renderReport(payload));
+process.stderr.write("\nwrote RESULTS.md · results.json · report.html\n");
 
 // warn on any parity mismatch
 let mismatches = 0;

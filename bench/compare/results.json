@@ -1,0 +1,62 @@
+{
+  "context": { "cpu": "Apple M1 Max", "arch": "arm64-darwin", "node": "24.14.1" },
+  "libs": ["strata", "bitecs", "becsy", "miniplex", "koota"],
+  "versions": { "strata": "0.0.0", "bitecs": "0.4.0", "becsy": "0.16.0", "miniplex": "2.0.0", "koota": "0.6.6" },
+  "byLib": {
+    "strata": {
+      "packed_5": { "avg_ns": 8990 },
+      "simple_iter": { "avg_ns": 12640 },
+      "frag_iter": { "avg_ns": 7430 },
+      "entity_cycle": { "avg_ns": 255120 },
+      "add_remove": { "avg_ns": 473050 },
+      "sim_frame": { "avg_ns": 101290 },
+      "spawn_reap_frame": { "avg_ns": 2616350 },
+      "toggle_frame": { "avg_ns": 12462130 },
+      "serialize": { "avg_ns": 11344820 },
+      "random_access": { "avg_ns": 815940 }
+    },
+    "bitecs": {
+      "packed_5": { "avg_ns": 9070 },
+      "simple_iter": { "avg_ns": 16080 },
+      "frag_iter": { "avg_ns": 7420 },
+      "entity_cycle": { "avg_ns": 297890 },
+      "add_remove": { "avg_ns": 217890 },
+      "sim_frame": { "avg_ns": 47510 },
+      "spawn_reap_frame": { "avg_ns": 3650600 },
+      "toggle_frame": { "avg_ns": 11271390 },
+      "random_access": { "avg_ns": 466240 }
+    },
+    "becsy": {
+      "packed_5": { "avg_ns": 75950 },
+      "simple_iter": { "avg_ns": 210390 },
+      "frag_iter": { "avg_ns": 76080 },
+      "entity_cycle": { "avg_ns": 477260 },
+      "add_remove": { "avg_ns": 225590 },
+      "sim_frame": { "avg_ns": 1193120 },
+      "spawn_reap_frame": { "avg_ns": 5447190 },
+      "toggle_frame": { "avg_ns": 5389630 }
+    },
+    "miniplex": {
+      "packed_5": { "avg_ns": 52580 },
+      "simple_iter": { "avg_ns": 90140 },
+      "frag_iter": { "avg_ns": 53100 },
+      "entity_cycle": { "avg_ns": 613300 },
+      "add_remove": { "avg_ns": 1035290 },
+      "sim_frame": { "avg_ns": 629600 },
+      "spawn_reap_frame": { "avg_ns": 4588550 },
+      "toggle_frame": { "avg_ns": 24411510 },
+      "random_access": { "avg_ns": 539540 }
+    },
+    "koota": {
+      "packed_5": { "avg_ns": 18790 },
+      "simple_iter": { "avg_ns": 29150 },
+      "frag_iter": { "avg_ns": 22210 },
+      "entity_cycle": { "avg_ns": 2212430 },
+      "add_remove": { "avg_ns": 717360 },
+      "sim_frame": { "avg_ns": 85770 },
+      "spawn_reap_frame": { "avg_ns": 13639810 },
+      "toggle_frame": { "avg_ns": 39191100 },
+      "random_access": { "avg_ns": 1020160 }
+    }
+  }
+}
