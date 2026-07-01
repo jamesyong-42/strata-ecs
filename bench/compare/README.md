@@ -1,9 +1,10 @@
 # bench/compare — cross-library ECS benchmark
 
 Isolated pnpm workspace member. Benchmarks **strata** against **bitecs**, **becsy**, **miniplex**,
-and **koota** on the canonical `ecs_bench_suite` scenarios plus two editor-centric extensions. The
-rival libraries live only in this package's `devDependencies`, so strata's own dependency graph
-stays clean.
+and **koota** across three families: **realistic frames** (a full frame through each library's real
+system pipeline — multiple systems, mixed world, in-system structural change), the canonical
+`ecs_bench_suite` **micro-scenarios**, and editor-centric **extensions**. The rival libraries live
+only in this package's `devDependencies`, so strata's own dependency graph stays clean.
 
 ## Run
 
