@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCENARIOS = ["packed_5", "simple_iter", "frag_iter", "entity_cycle", "add_remove"];
+const FRAMES = ["sim_frame", "spawn_reap_frame", "toggle_frame"]; // realistic system-pipeline flows
 const EXTENSIONS = ["serialize", "random_access"]; // beyond the canonical suite; libs may omit
 // Preferred display order; any other scenario files present are appended.
 const ORDER = ["strata", "bitecs", "becsy", "miniplex", "koota"];
@@ -59,7 +60,7 @@ const opsPerSec = (ns) => (ns == null ? "—" : Math.round(1e9 / ns).toLocaleStr
 
 // --- checksum parity (per scenario, across libraries that implement it) ---
 const parity = {};
-for (const sc of [...SCENARIOS, ...EXTENSIONS]) {
+for (const sc of [...SCENARIOS, ...FRAMES, ...EXTENSIONS]) {
   const seen = new Map(); // checksum -> [libs]
   for (const lib of okLibs) {
     const r = byLib[lib][sc];
@@ -125,6 +126,23 @@ for (const sc of SCENARIOS) {
   L.push(`| ${sc} | ${cells.join(" | ")} |`);
 }
 
+// realistic frames (full system pipeline per op)
+L.push("\n## Realistic frames — µs/op (a full frame through each library's system pipeline)\n");
+L.push("`sim_frame` = 4 systems over a mixed world (exclusion + joins + raw column read/write). `spawn_reap_frame` = systems spawn then destroy entities in-frame. `toggle_frame` = a system adds then removes a component in-frame.\n");
+L.push(`| scenario | ${okLibs.join(" | ")} |`);
+L.push(`|---|${okLibs.map(() => "---:").join("|")}|`);
+for (const fr of FRAMES) {
+  const times = okLibs.map((lib) => byLib[lib][fr]?.avg_ns).filter((x) => x != null);
+  const best = times.length ? Math.min(...times) : null;
+  const rendered = okLibs.map((lib) => {
+    const r = byLib[lib][fr];
+    if (!r) return "N/A";
+    const s = fmtUs(r.avg_ns);
+    return best != null && r.avg_ns === best ? `**${s}**` : s;
+  });
+  L.push(`| ${fr} | ${rendered.join(" | ")} |`);
+}
+
 // extensions (beyond canonical; N/A where a library doesn't implement one)
 L.push("\n## Extension scenarios — µs/op (beyond the canonical suite)\n");
 L.push("`serialize` = whole-world save+load round-trip (strata built-in; rivals have no equivalent). `random_access` = read a component for 10k random entities by handle.\n");
@@ -146,7 +164,7 @@ for (const ex of EXTENSIONS) {
 L.push("\n## Checksum parity (proof of equal work)\n");
 L.push("| scenario | checksum | libraries in agreement | mismatches |");
 L.push("|---|---:|---|---|");
-for (const sc of [...SCENARIOS, ...EXTENSIONS]) {
+for (const sc of [...SCENARIOS, ...FRAMES, ...EXTENSIONS]) {
   const groups = [...parity[sc].entries()];
   if (groups.length === 0) {
     L.push(`| ${sc} | — | (none implemented) | |`);
@@ -164,6 +182,6 @@ process.stdout.write("\n" + md);
 
 // warn on any parity mismatch
 let mismatches = 0;
-for (const sc of [...SCENARIOS, ...EXTENSIONS]) if (parity[sc].size > 1) mismatches++;
+for (const sc of [...SCENARIOS, ...FRAMES, ...EXTENSIONS]) if (parity[sc].size > 1) mismatches++;
 if (mismatches) process.stderr.write(`\n⚠ ${mismatches} scenario(s) have checksum mismatches — investigate before trusting those rows.\n`);
 else process.stderr.write("\n✓ all implemented scenarios agree on checksums.\n");

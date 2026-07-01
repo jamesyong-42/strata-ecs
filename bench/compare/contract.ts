@@ -37,6 +37,20 @@ export type ScenarioId = (typeof SCENARIO_IDS)[number];
 export const EXTENSION_IDS = ["serialize", "random_access"] as const;
 export type ExtensionId = (typeof EXTENSION_IDS)[number];
 
+/**
+ * Realistic ECS-flow scenarios — a full frame run through EACH library's real system pipeline
+ * (strata `world.tick`, becsy `world.execute`, or a hand-composed function pipeline for the
+ * scheduler-less libs), not isolated micro-ops. They exercise what the abeimler / fireveined suites
+ * emphasize: multiple interdependent systems, a heterogeneous world (query joins + exclusions +
+ * per-row filters), raw column read/write inside systems, and in-system deferred structural change.
+ *
+ *  - sim_frame        — a 4-system frame over a mixed world (Not-exclusion + multi-component joins).
+ *  - spawn_reap_frame — systems that spawn then destroy entities during iteration (lifecycle churn).
+ *  - toggle_frame     — a system that adds then removes a component during iteration (shape churn).
+ */
+export const FRAME_IDS = ["sim_frame", "spawn_reap_frame", "toggle_frame"] as const;
+export type FrameId = (typeof FRAME_IDS)[number];
+
 /** Shared random-access parameters + the fixed access pattern, so every library reads the SAME
  *  entity sequence and computes the SAME checksum (parity by construction). Pos.x[i] = i. */
 export const RANDOM_ACCESS = { entities: 10_000, reads: 10_000 } as const;
@@ -45,7 +59,7 @@ export function accessIndex(k: number, num: number): number {
 }
 
 export interface Scenario {
-  readonly id: ScenarioId | ExtensionId;
+  readonly id: ScenarioId | ExtensionId | FrameId;
   /** Build the world once (outside timing). Returns opaque per-scenario state. */
   setup(): unknown;
   /**
@@ -63,4 +77,6 @@ export interface LibraryBench {
   readonly scenarios: readonly Scenario[];
   /** Optional extension scenarios (a library may implement a subset, or none). */
   readonly extensions?: readonly Scenario[];
+  /** Optional realistic-frame scenarios run through the library's real system pipeline. */
+  readonly frames?: readonly Scenario[];
 }

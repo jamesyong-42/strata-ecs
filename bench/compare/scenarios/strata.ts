@@ -7,16 +7,21 @@
 import {
   type Component,
   type Entity,
+  Not,
+  type Pipeline,
   createWorld,
   defineComponent,
   defineQuery,
   defineRelation,
+  defineSystem,
   defineTag,
+  phase,
 } from "strata";
 import { type LibraryBench, N, RANDOM_ACCESS, type Scenario, accessIndex } from "../contract.ts";
 
 const VALUE = { value: "f64" } as const;
 const XY = { x: "f64", y: "f64" } as const;
+type F64 = Float64Array;
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
 type World = ReturnType<typeof createWorld>;
@@ -244,10 +249,157 @@ const random_access: Scenario = {
   },
 };
 
+// --- frame: sim_frame (4-system frame over a mixed world; run via world.tick) ------------------
+const sim_frame: Scenario = {
+  id: "sim_frame",
+  setup() {
+    const Position = defineComponent<{ x: number; y: number }>("SF_Pos", XY);
+    const Velocity = defineComponent<{ x: number; y: number }>("SF_Vel", XY);
+    const Health = defineComponent<{ hp: number }>("SF_Health", { hp: "f64" });
+    const Damage = defineComponent<{ amount: number }>("SF_Damage", { amount: "f64" });
+    const Renderable = defineComponent<{ acc: number }>("SF_Render", { acc: "f64" });
+    const Frozen = defineTag("SF_Frozen");
+    const w = createWorld();
+    const NUM = 10_000;
+    for (let i = 0; i < NUM; i++) {
+      const comps: [Component, Record<string, unknown>][] = [
+        [Position, { x: 0, y: 0 }],
+        [Velocity, { x: 1, y: 2 }],
+      ];
+      if (i % 2 === 0) comps.push([Health, { hp: 0 }]);
+      if (i % 3 === 0) comps.push([Damage, { amount: 1 }]);
+      if (i % 5 === 0) comps.push([Renderable, { acc: 0 }]);
+      w.spawn({ components: comps, tags: i % 4 === 0 ? [Frozen] : [] });
+    }
+    // Movement excludes Frozen (per-row tag filter → matched-row iteration), reads Velocity, writes Position.
+    const Movement = defineSystem(defineQuery([Position, Velocity, Not(Frozen)]), (b) => {
+      const px = b.col(Position).x as F64;
+      const py = b.col(Position).y as F64;
+      const vx = b.col(Velocity).x as F64;
+      const vy = b.col(Velocity).y as F64;
+      for (const r of b) {
+        px[r] += vx[r];
+        py[r] += vy[r];
+      }
+    });
+    const Regen = defineSystem(defineQuery([Health]), (b) => {
+      const hp = b.col(Health).hp as F64;
+      for (let r = 0; r < b.denseCount; r++) hp[r] += 1;
+    });
+    const ApplyDamage = defineSystem(defineQuery([Health, Damage]), (b) => {
+      const hp = b.col(Health).hp as F64;
+      const amt = b.col(Damage).amount as F64;
+      for (let r = 0; r < b.denseCount; r++) hp[r] -= amt[r];
+    });
+    const Render = defineSystem(defineQuery([Renderable, Position]), (b) => {
+      const acc = b.col(Renderable).acc as F64;
+      const px = b.col(Position).x as F64;
+      for (let r = 0; r < b.denseCount; r++) acc[r] += px[r];
+    });
+    const pipeline: Pipeline = [phase("frame", [Movement, Regen, ApplyDamage, Render])];
+    return {
+      w, Position, Health, Renderable, pipeline,
+      qPos: defineQuery([Position]), qHealth: defineQuery([Health]), qRender: defineQuery([Renderable]),
+    };
+  },
+  run(state) {
+    const s = state as {
+      w: World; Position: Component; Health: Component; Renderable: Component; pipeline: Pipeline;
+      qPos: ReturnType<typeof defineQuery>; qHealth: ReturnType<typeof defineQuery>; qRender: ReturnType<typeof defineQuery>;
+    };
+    s.w.tick(s.pipeline);
+    let sum = 0;
+    s.w.query(s.qPos).each((b) => { const px = b.col(s.Position).x as F64; for (let r = 0; r < b.denseCount; r++) sum += px[r]; });
+    s.w.query(s.qHealth).each((b) => { const hp = b.col(s.Health).hp as F64; for (let r = 0; r < b.denseCount; r++) sum += hp[r]; });
+    s.w.query(s.qRender).each((b) => { const acc = b.col(s.Renderable).acc as F64; for (let r = 0; r < b.denseCount; r++) sum += acc[r]; });
+    return sum;
+  },
+};
+
+// --- frame: spawn_reap_frame (systems spawn then destroy entities via ctx, deferred) -----------
+const spawn_reap_frame: Scenario = {
+  id: "spawn_reap_frame",
+  setup() {
+    const Position = defineComponent<{ x: number; y: number }>("SR_Pos", XY);
+    const Velocity = defineComponent<{ x: number; y: number }>("SR_Vel", XY);
+    const Particle = defineComponent<{ life: number }>("SR_Particle", { life: "f64" });
+    const w = createWorld();
+    const NUM = 5000;
+    for (let i = 0; i < NUM; i++) w.spawn({ components: [[Position, { x: 0, y: 0 }], [Velocity, { x: 1, y: 1 }]] });
+    const Movement = defineSystem(defineQuery([Position, Velocity]), (b) => {
+      const px = b.col(Position).x as F64;
+      const py = b.col(Position).y as F64;
+      const vx = b.col(Velocity).x as F64;
+      const vy = b.col(Velocity).y as F64;
+      for (let r = 0; r < b.denseCount; r++) { px[r] += vx[r]; py[r] += vy[r]; }
+    });
+    const Spawner = defineSystem(defineQuery([Position, Velocity]), (b, ctx) => {
+      for (let r = 0; r < b.denseCount; r++) ctx.spawn({ components: [[Particle, { life: 1 }]] });
+    });
+    const Reaper = defineSystem(defineQuery([Particle]), (b, ctx) => {
+      for (const r of b) ctx.destroy(b.entity(r));
+    });
+    return {
+      w, qParticle: defineQuery([Particle]),
+      spawnPhase: [phase("spawn", [Movement, Spawner])] as Pipeline,
+      reapPhase: [phase("reap", [Reaper])] as Pipeline,
+    };
+  },
+  run(state) {
+    const s = state as { w: World; qParticle: ReturnType<typeof defineQuery>; spawnPhase: Pipeline; reapPhase: Pipeline };
+    s.w.tick(s.spawnPhase); // move base + defer NUM ctx.spawns (applied at the phase boundary)
+    let count = 0;
+    s.w.query(s.qParticle).each((b) => { count += b.denseCount; });
+    s.w.tick(s.reapPhase); // ctx.destroy every particle → back to baseline
+    return count;
+  },
+};
+
+// --- frame: toggle_frame (a system adds then removes a component via ctx, deferred) ------------
+const toggle_frame: Scenario = {
+  id: "toggle_frame",
+  setup() {
+    const Position = defineComponent<{ x: number; y: number }>("TG_Pos", XY);
+    const Velocity = defineComponent<{ x: number; y: number }>("TG_Vel", XY);
+    const Health = defineComponent<{ hp: number }>("TG_Health", { hp: "f64" });
+    const Stunned = defineComponent<{ since: number }>("TG_Stunned", { since: "f64" });
+    const w = createWorld();
+    const NUM = 10_000;
+    for (let i = 0; i < NUM; i++) {
+      w.spawn({ components: [[Position, { x: 0, y: 0 }], [Velocity, { x: 1, y: 1 }], [Health, { hp: 100 }]] });
+    }
+    const Movement = defineSystem(defineQuery([Position, Velocity]), (b) => {
+      const px = b.col(Position).x as F64;
+      const vx = b.col(Velocity).x as F64;
+      for (let r = 0; r < b.denseCount; r++) px[r] += vx[r];
+    });
+    const Stun = defineSystem(defineQuery([Health, Not(Stunned)]), (b, ctx) => {
+      for (let r = 0; r < b.denseCount; r++) ctx.addComponent(b.entity(r), Stunned, { since: 0 });
+    });
+    const Unstun = defineSystem(defineQuery([Stunned]), (b, ctx) => {
+      for (let r = 0; r < b.denseCount; r++) ctx.removeComponent(b.entity(r), Stunned);
+    });
+    return {
+      w, qStunned: defineQuery([Stunned]),
+      stunPhase: [phase("stun", [Movement, Stun])] as Pipeline,
+      unstunPhase: [phase("unstun", [Unstun])] as Pipeline,
+    };
+  },
+  run(state) {
+    const s = state as { w: World; qStunned: ReturnType<typeof defineQuery>; stunPhase: Pipeline; unstunPhase: Pipeline };
+    s.w.tick(s.stunPhase); // defer addComponent Stunned to every Health entity (archetype migration at boundary)
+    let count = 0;
+    s.w.query(s.qStunned).each((b) => { count += b.denseCount; });
+    s.w.tick(s.unstunPhase); // defer removeComponent → back to baseline
+    return count;
+  },
+};
+
 const bench: LibraryBench = {
   name: "strata",
   version: "0.0.0",
   scenarios: [packed_5, simple_iter, frag_iter, entity_cycle, add_remove],
+  frames: [sim_frame, spawn_reap_frame, toggle_frame],
   extensions: [serialize, random_access],
 };
 export default bench;
