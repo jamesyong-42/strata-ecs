@@ -28,6 +28,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src", "**/*.config.ts"],
+  "include": ["src", "bench", "**/*.config.ts"],
   "exclude": ["dist", "node_modules"]
 }

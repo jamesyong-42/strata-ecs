@@ -1,5 +1,17 @@
 # Part I — The Runtime Core: Build Plan
 
+> **Status: ✅ COMPLETE (2026-07-01).** All milestones M0–M7 landed and committed, each
+> adversarially reviewed (multi-agent) with confirmed findings fixed. 147 tests green; the
+> movement hot loop runs 10k entities in ~0.23 ms. Part I is a usable standalone product.
+>
+> **Deferred follow-ups (type-level / ergonomic only — runtime is complete and tested):**
+> - **Typed `col<S>`** — precise per-field column typing (`batch.col(Position).x` as `Float32Array`
+>   without a cast). Needs `defineComponent` to infer the field-type map into the handle; a
+>   contained TS-types refactor.
+> - **`Relation.inverse`** — reverse-edge queries (`Related(rel.inverse, …)`).
+> - **Import into a non-empty world** — `world.import` currently requires a fresh world.
+> - **Snapshot compaction** — columnar/binary format instead of JSON (an optimization).
+
 This is the working plan for **Part I** of strata (the local, non-collaborative ECS).
 It follows the design's own build order (`docs/design.md` §19) but expands it into
 milestones with scope, deliverables, tests, and the design decisions we lock in now.

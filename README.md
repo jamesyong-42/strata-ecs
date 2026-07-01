@@ -41,10 +41,50 @@ optional and quarantine Loro to exactly two adapter classes.
 
 | Part | Package | Status |
 |---|---|---|
-| I — Runtime Core | `strata` | 🚧 in progress |
+| I — Runtime Core | `strata` | ✅ **feature-complete** — 147 tests, benchmarked, adversarially reviewed |
 | II — Storage Substrate | (internal) | ⏳ not started |
 | III — Durable Layer | `strata/durable` | ⏳ not started |
 | IV — Ephemeral Layer | `strata/ephemeral` | ⏳ not started |
+
+Part I performance (Node 24, 10k entities): a movement tick runs in **~0.23 ms**
+(≈44M entity-updates/s) with no per-row allocation in the hot loop.
+
+## Quick start
+
+```ts
+import {
+  createWorld, defineComponent, defineTag, defineQuery,
+  defineSystem, phase,
+} from "strata";
+
+const Position = defineComponent("Position", { x: "f32", y: "f32" });
+const Velocity = defineComponent("Velocity", { x: "f32", y: "f32" });
+const Frozen = defineTag("Frozen");
+
+const Movement = defineSystem(defineQuery([Position, Velocity]), (batch) => {
+  // Raw columns. (Precise per-field typing — Float32Array here — is a planned
+  // ergonomic improvement; for now cast to the backing array.)
+  const px = batch.col(Position).x as Float32Array;
+  const py = batch.col(Position).y as Float32Array;
+  const vx = batch.col(Velocity).x as Float32Array;
+  const vy = batch.col(Velocity).y as Float32Array;
+  for (const r of batch) {           // matched rows; filters fused
+    px[r] += vx[r];                  // immediate typed-array writes
+    py[r] += vy[r];
+  }
+});
+
+const world = createWorld();
+const e = world.spawn({ components: [[Position, { x: 0, y: 0 }], [Velocity, { x: 1, y: 2 }]] });
+
+world.tick([phase("sim", [Movement])]);
+world.read(e, Position); // { x: 1, y: 2 }
+
+// Save / load (non-collaborative)
+const bytes = world.export();
+const restored = createWorld();
+restored.import(bytes);
+```
 
 ## Development
 

@@ -9,7 +9,7 @@
 
 import type { Entity } from "./entity";
 import type { Component, Relation, Resource, Tag } from "./schema";
-import type { Query } from "./query";
+import type { Batch, Query } from "./query";
 import { RuntimeStore, type SpawnInit } from "./runtime-store";
 import { type EntityEditor, type Pipeline, SystemCtx, makeEditor } from "./system";
 import { exportSnapshot, importSnapshot } from "./snapshot";
@@ -95,6 +95,15 @@ export class World {
   }
   firstOf(q: Query): Entity | undefined {
     return this.store.firstOf(q);
+  }
+
+  /**
+   * Iterate a query outside a tick — e.g. to render after `tick()` returns (§16). The body runs
+   * once per matching chunk, exactly as a system's does; it should only READ (there is no command
+   * buffer here, so shape changes are not deferred — use a system for those).
+   */
+  query(q: Query): { each(fn: (batch: Batch) => void): void } {
+    return this.store.query(q);
   }
   setResource<S>(res: Resource<S>, value: S): void {
     this.store.setResource(res, value);
