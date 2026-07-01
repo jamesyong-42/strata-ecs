@@ -29,5 +29,8 @@
     "types": ["node"]
   },
   "include": ["src", "bench", "**/*.config.ts"],
-  "exclude": ["dist", "node_modules"]
+  // bench/compare is a separate workspace member (the cross-library comparison harness). It imports
+  // rival ECS packages and is executed via Node's TS type-stripping, not tsc — so it is excluded
+  // from strata's own typecheck. strata's own bench (bench/ecs.bench.ts) stays covered.
+  "exclude": ["dist", "node_modules", "bench/compare"]
 }

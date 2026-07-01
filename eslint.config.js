@@ -2,7 +2,9 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/", "coverage/", "node_modules/"] },
+  // bench/compare is a separate workspace member (cross-library harness) with its own toolchain;
+  // it uses intentional `any` for the untyped rival ECS APIs and is not part of strata's lint.
+  { ignores: ["dist/", "coverage/", "node_modules/", "bench/compare/"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
