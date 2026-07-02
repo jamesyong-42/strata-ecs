@@ -150,6 +150,7 @@ body {
 
 #hud .hud-body {
   white-space: pre;
+  overflow: hidden; /* worst-case stats line at 100k must not blow the panel open */
 }
 
 #hud .hud-note {

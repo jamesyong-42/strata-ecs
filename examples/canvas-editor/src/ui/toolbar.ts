@@ -4,6 +4,7 @@
  */
 
 import { deleteSelection, duplicateSelection } from "../app/editorOps";
+import { downloadDoc, loadDocFile, saveToLocalStorage } from "../app/persistence";
 import { onToolChange, setTool, type ToolId } from "../app/tools";
 
 const TOOLS: { id: ToolId; label: string; title: string }[] = [
@@ -47,4 +48,34 @@ export function buildToolbar(root: HTMLElement, notify: (msg: string) => void): 
     const d = duplicateSelection();
     if (d.count > 0) notify(`duplicated ${d.count.toLocaleString()} shapes in ${d.ms.toFixed(1)}ms`);
   });
+
+  const sep2 = document.createElement("span");
+  sep2.className = "sep";
+  root.appendChild(sep2);
+
+  // persistence = world.export()/import() — the built-in serialization no rival ECS ships
+  btn("⤓", "Save: autosave now + download strata-canvas.json").addEventListener("click", () => {
+    const autosaved = saveToLocalStorage();
+    downloadDoc();
+    notify(
+      autosaved
+        ? "saved — autosave + strata-canvas.json (world.export)"
+        : "downloaded strata-canvas.json — autosave skipped (localStorage quota)",
+    );
+  });
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = "application/json";
+  fileInput.style.display = "none";
+  root.appendChild(fileInput);
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files?.[0];
+    if (f === undefined) return;
+    void loadDocFile(f).then(
+      () => notify(`loaded ${f.name} (world.import into a fresh world)`),
+      (err: unknown) => notify(`load failed: ${String(err)}`),
+    );
+    fileInput.value = "";
+  });
+  btn("⤒", "Open a strata-canvas.json document").addEventListener("click", () => fileInput.click());
 }

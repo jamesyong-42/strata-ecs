@@ -214,4 +214,7 @@ export function cancelGesture(): void {
   interaction.pendingDx = 0;
   interaction.pendingDy = 0;
   interaction.mode = "idle";
+  // force the next frame to rewrite the Gesture resource — after a world restore, the
+  // imported resource may hold a mid-gesture snapshot that must be normalized to idle
+  lastSyncedIdle = false;
 }

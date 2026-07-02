@@ -7,6 +7,7 @@
 
 import { simulated } from "../ecs/queries";
 import { SimMode, Velocity } from "../ecs/schema";
+import { scheduleAutosave } from "./persistence";
 import { worldRef } from "./worldRef";
 
 export function isSimOn(): boolean {
@@ -44,4 +45,5 @@ export function setSimulate(on: boolean): void {
     });
   }
   w.setResource(SimMode, { on, bound });
+  scheduleAutosave(); // velocities + SimMode are document state — they ride in the snapshot
 }

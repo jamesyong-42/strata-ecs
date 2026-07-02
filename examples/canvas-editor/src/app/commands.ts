@@ -17,9 +17,16 @@ export const dirty = {
  *  stays explicit app data (row order is never stacking order in an archetype ECS). */
 export const stats = { entities: 0, zTop: 0 };
 
+/** Fired after every mutate() — persistence hangs its debounced autosave here. */
+let onMutate: (() => void) | null = null;
+export function setOnMutate(fn: () => void): void {
+  onMutate = fn;
+}
+
 /** `repaint: false` is for overlay-only mutations (selection tags): the overlay repaints
  *  every frame anyway, and forcing a full content repaint + z-sort for them is waste. */
 export function mutate(_label: string, fn: () => void, opts?: { repaint?: boolean }): void {
   fn();
   if (opts?.repaint !== false) dirty.doc = true;
+  onMutate?.();
 }

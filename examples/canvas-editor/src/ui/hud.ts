@@ -38,6 +38,8 @@ export class Hud {
   private readonly frameRing = new Float32Array(SAMPLES);
   private readonly ecsRing = new Float32Array(SAMPLES);
   private ringIdx = 0;
+  private simOn = false;
+  private simBtn!: HTMLButtonElement;
 
   constructor(root: HTMLElement, actions: HudActions) {
     root.innerHTML =
@@ -64,13 +66,14 @@ export class Hud {
       el.appendChild(b);
       return b;
     };
-    let simOn = false;
-    btn("▶ simulate", "Give every shape a velocity and run the simulate phase — keep editing while it storms", (b) => {
-      simOn = !simOn;
-      b.textContent = simOn ? "⏸ simulate" : "▶ simulate";
-      b.classList.toggle("on", simOn);
-      a.onSimToggle(simOn);
-    });
+    this.simBtn = btn(
+      "▶ simulate",
+      "Give every shape a velocity and run the simulate phase — keep editing while it storms",
+      () => {
+        this.setSimState(!this.simOn);
+        a.onSimToggle(this.simOn);
+      },
+    );
     btn("+1k", "Spawn 1,000 fully-initialized shapes", () => a.onSpawn(1000));
     btn("+10k", "Spawn 10,000 fully-initialized shapes", () => a.onSpawn(10_000));
     btn("clear", "Destroy the whole document (arrows cascade)", () => a.onClear());
@@ -101,6 +104,14 @@ export class Hud {
 
   setNote(text: string): void {
     this.note.textContent = text;
+  }
+
+  /** Keep the button in step with the WORLD's SimMode (boot ?sim=1, autosave restore) —
+   *  a desynced button would re-randomize a running storm instead of pausing it. */
+  setSimState(on: boolean): void {
+    this.simOn = on;
+    this.simBtn.textContent = on ? "⏸ simulate" : "▶ simulate";
+    this.simBtn.classList.toggle("on", on);
   }
 
   frame(s: FrameStats, selected = 0): void {

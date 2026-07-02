@@ -1,6 +1,9 @@
 # Plan — `examples/canvas-editor`: the flagship infinite-canvas example
 
-**Status: PROPOSED** (awaiting sign-off; supersedes nothing — first entry in `examples/`)
+**Status: IMPLEMENTED** (MVP: T0 `e14a1bc` · E0 `aeae407` · E1 `3c0d03b` + review sweep
+`08f69af` · T1 `c6b35f4` · E2 `707cff1` · E3 — each milestone adversarially reviewed and
+headless-Chrome verified. §11 extensions remain open; the separate app inspector was
+dropped as redundant — the `strata/tools` observer's detail pane covers it.)
 
 An infinite-canvas whiteboard built on strata Part I, in **vanilla TypeScript** (no UI
 framework), rendered with **Canvas2D**, at **MVP scope first**. It exists to answer one

@@ -1,6 +1,8 @@
 # Plan — `strata/tools`: first-party dev tools, starting with the Observer
 
-**Status: PROPOSED** (companion to `plan-example-canvas.md`)
+**Status: IMPLEMENTED** (T0 core observability `e14a1bc` — bench-gated within noise; T1
+panel `c6b35f4` — 15 adversarial-review findings fixed pre-commit. Companion to
+`plan-example-canvas.md`.)
 
 James's direction: profilers/inspectors are **out-of-the-box framework tools**, not app code.
 They live in a `src/tools/` folder shipped as the **`strata/tools`** subpath export

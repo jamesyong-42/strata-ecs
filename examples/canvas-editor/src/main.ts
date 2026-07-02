@@ -8,16 +8,17 @@
  * verification screenshots; also a handy smoke test after refactors).
  */
 
-import { attachObserver } from "strata/tools";
+import { attachObserver, type ObserverOptions } from "strata/tools";
 import { cam, setViewportSize, zoomToFit } from "./app/camera";
-import { dirty, stats } from "./app/commands";
+import { dirty, setOnMutate, stats } from "./app/commands";
 import { duplicateSelection, setSelection } from "./app/editorOps";
 import { describeShape } from "./app/describe";
 import { startFrameLoop } from "./app/frameLoop";
 import { hitTestPoint, hitTestRegion } from "./app/hitTest";
 import { attachInput } from "./app/input";
+import { hasAutosave, loadAutosave, onRestore, saveToLocalStorage, scheduleAutosave } from "./app/persistence";
 import { seedBoard } from "./app/seed";
-import { setSimBound, setSimulate } from "./app/sim";
+import { isSimOn, setSimBound, setSimulate } from "./app/sim";
 import { clearBoard, stressSpawn } from "./app/stress";
 import { interaction, pointerDown, pointerMove, pointerUp, setTool } from "./app/tools";
 import { worldRef } from "./app/worldRef";
@@ -64,6 +65,7 @@ const hud = new Hud(document.getElementById("hud") as HTMLElement, {
     if (enabled) disabledSystems.delete(name as SystemName);
     else disabledSystems.add(name as SystemName);
     pipeline = buildPipeline(disabledSystems); // just a new array — no scheduler, no registration
+    dirty.doc = true; // toggling Cull changes what the next paint shows
     notify(`${name} ${enabled ? "re-enabled" : "removed from the pipeline"}`);
   },
   onCullTestToggle(enabled) {
@@ -90,10 +92,26 @@ function fitCanvases(): void {
 window.addEventListener("resize", fitCanvases);
 fitCanvases();
 
-const seeded = seedBoard(worldRef.current, count);
-setSimBound(Math.sqrt(count) * 55 * 1.5); // fit the bounce box to the seeded spread
-notify(`seeded ${seeded.count.toLocaleString()} shapes + ${seeded.arrows} arrows in ${seeded.ms.toFixed(1)}ms`);
-zoomToFit();
+// Boot document: an explicit ?count= (or ?fresh=1) always seeds; otherwise the autosave —
+// world.export() bytes in localStorage — restores the last session, viewport included.
+// An incompatible autosave (schema drift) is quarantined by loadAutosave, never a brick.
+let booted = false;
+if (!params.has("count") && params.get("fresh") !== "1" && hasAutosave()) {
+  const load = loadAutosave();
+  if (load === "restored") {
+    notify(`restored autosave — ${stats.entities.toLocaleString()} shapes (world.import)`);
+    booted = true;
+  } else if (load === "incompatible") {
+    notify("autosave was incompatible with the current schema — seeded a fresh board");
+  }
+}
+if (!booted) {
+  const seeded = seedBoard(worldRef.current, count);
+  setSimBound(Math.sqrt(count) * 55 * 1.5); // fit the bounce box to the seeded spread
+  notify(`seeded ${seeded.count.toLocaleString()} shapes + ${seeded.arrows} arrows in ${seeded.ms.toFixed(1)}ms`);
+  zoomToFit();
+}
+setOnMutate(scheduleAutosave); // every document mutation debounces an idle-time export
 
 buildToolbar(document.getElementById("toolbar") as HTMLElement, notify);
 attachInput(overlay, notify);
@@ -101,10 +119,17 @@ attachInput(overlay, notify);
 // lifecycle timeline — the app only supplies the labeling. ?obs=systems|timeline picks the
 // starting tab for shareable links.
 const obsTab = params.get("obs");
-attachObserver(worldRef.current, {
+const obsOpts: ObserverOptions = {
   describe: describeShape,
   // `tab` (not defaultTab): a shared ?obs= link must win over this browser's persisted layout
   tab: obsTab === "systems" || obsTab === "timeline" || obsTab === "entities" ? obsTab : undefined,
+};
+let observer = attachObserver(worldRef.current, obsOpts);
+// a restore swaps the World instance — re-attach the observer and re-sync chrome state
+onRestore(() => {
+  observer.dispose();
+  observer = attachObserver(worldRef.current, obsOpts);
+  hud.setSimState(isSimOn()); // SimMode rides in the snapshot — a restored storm resumes
 });
 startFrameLoop(
   () => pipeline,
@@ -115,6 +140,28 @@ startFrameLoop(
 
 // ?sim=1 boots straight into simulate mode (headless verification / shareable links).
 if (params.get("sim") === "1") setSimulate(true);
+hud.setSimState(isSimOn()); // boot may have restored (or forced) a running storm
+
+// ?script=persist exercises the full save→clear→restore cycle in-process: export bytes,
+// wipe the world, import into a FRESH world (ref swap + observer re-attach) — the same
+// code path the autosave boot-restore takes.
+if (params.get("script") === "persist") {
+  setTimeout(() => {
+    const before = stats.entities;
+    if (!saveToLocalStorage()) {
+      notify("persist test ABORTED — export exceeded the localStorage quota (board untouched)");
+      return;
+    }
+    clearBoard();
+    const cleared = stats.entities;
+    const load = loadAutosave();
+    notify(
+      load === "restored"
+        ? `persist test: saved ${before.toLocaleString()} → cleared ${cleared} → restored ${stats.entities.toLocaleString()} into a fresh world`
+        : `persist test FAILED at restore (${load})`,
+    );
+  }, 600);
+}
 
 // Scripted interaction demo — the same code paths real input drives, minus the DOM events.
 if (params.get("script") === "demo") {
