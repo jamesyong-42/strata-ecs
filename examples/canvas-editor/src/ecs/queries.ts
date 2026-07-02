@@ -18,5 +18,8 @@ export const notes = defineQuery([Position, Kind, Label]);
 /** The drag gesture writes these columns in one dense pass (E1). */
 export const movableSelected = defineQuery([Position, Selected]);
 
+/** Selection outlines + bounds (overlay layer, delete/duplicate collect from this). */
+export const selectedBoxes = defineQuery([Position, Size, Selected]);
+
 /** The simulate phase integrates these (E2). */
 export const simulated = defineQuery([Position, Velocity]);

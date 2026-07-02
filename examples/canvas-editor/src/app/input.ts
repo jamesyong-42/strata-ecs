@@ -1,58 +1,130 @@
 /**
- * DOM input → camera (E0). Handlers run BETWEEN frames and mutate app state / the camera —
- * the frame loop syncs the Camera resource before each tick (design.md §18.4's "input
- * writes land between frames" rule). E1 re-routes left-drag to the tool state machines;
- * space-drag and middle-drag stay pan forever.
+ * DOM input layer. Handlers run BETWEEN frames (design.md §18.4): they convert pointer
+ * events to world space, route them through the active tool state machine (tools.ts), and
+ * mutate the app camera. Nothing here touches Batch/columns or runs inside a tick.
+ *
+ * Camera gestures that always work, regardless of tool: wheel pan, ctrl/pinch zoom,
+ * middle-drag or space-drag pan, Shift+1 zoom-to-fit.
  */
 
-import { panBy, zoomAt, zoomToFit } from "./camera";
+import { panBy, screenToWorld, zoomAt, zoomToFit } from "./camera";
+import { clearSelection, deleteSelection, duplicateSelection } from "./editorOps";
+import {
+  cancelGesture,
+  gestureActive,
+  interaction,
+  onToolChange,
+  pointerDown,
+  pointerMove,
+  pointerUp,
+  setTool,
+  type PointerInfo,
+  type ToolId,
+} from "./tools";
 
-export function attachInput(target: HTMLElement): void {
+const TOOL_KEYS: Record<string, ToolId> = {
+  KeyV: "select",
+  KeyH: "pan",
+  KeyR: "rect",
+  KeyO: "ellipse",
+  KeyN: "note",
+};
+
+const TOOL_CURSOR: Record<ToolId, string> = {
+  select: "default",
+  pan: "grab",
+  rect: "crosshair",
+  ellipse: "crosshair",
+  note: "crosshair",
+};
+
+export function attachInput(target: HTMLElement, notify: (msg: string) => void): void {
   let spaceHeld = false;
-  let panning: { id: number } | null = null;
+  let panDrag: { id: number } | null = null;
+
+  onToolChange((t) => {
+    target.style.cursor = TOOL_CURSOR[t];
+  });
+
+  const info = (e: PointerEvent): PointerInfo => {
+    const w = screenToWorld(e.clientX, e.clientY);
+    return { sx: e.clientX, sy: e.clientY, wx: w.x, wy: w.y, shift: e.shiftKey };
+  };
 
   target.addEventListener(
     "wheel",
     (e) => {
       e.preventDefault();
-      if (e.ctrlKey || e.metaKey) {
-        // trackpad pinch / ctrl+wheel — zoom around the cursor
-        zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.01));
-      } else {
-        // two-finger scroll — pan
-        panBy(-e.deltaX, -e.deltaY);
-      }
+      if (e.ctrlKey || e.metaKey) zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.01));
+      else panBy(-e.deltaX, -e.deltaY);
     },
     { passive: false },
   );
 
   target.addEventListener("pointerdown", (e) => {
-    // E0: any drag pans (space/middle keep panning once tools land in E1)
-    if (e.button === 1 || e.button === 0 || spaceHeld) {
-      panning = { id: e.pointerId };
+    if (e.button === 1 || spaceHeld) {
+      panDrag = { id: e.pointerId };
       target.setPointerCapture(e.pointerId);
       target.style.cursor = "grabbing";
       e.preventDefault();
+      return;
     }
+    if (e.button !== 0) return;
+    target.setPointerCapture(e.pointerId);
+    pointerDown(info(e));
   });
+
   target.addEventListener("pointermove", (e) => {
-    if (panning?.id !== e.pointerId) return;
-    panBy(e.movementX, e.movementY);
+    if (panDrag?.id === e.pointerId) {
+      panBy(e.movementX, e.movementY);
+      return;
+    }
+    pointerMove(info(e), e.movementX, e.movementY);
   });
-  const endPan = (e: PointerEvent): void => {
-    if (panning?.id !== e.pointerId) return;
-    panning = null;
-    target.style.cursor = "";
+
+  const up = (e: PointerEvent): void => {
+    if (panDrag?.id === e.pointerId) {
+      panDrag = null;
+      target.style.cursor = TOOL_CURSOR[interaction.tool];
+      return;
+    }
+    if (gestureActive()) pointerUp(info(e));
   };
-  target.addEventListener("pointerup", endPan);
-  target.addEventListener("pointercancel", endPan);
+  target.addEventListener("pointerup", up);
+  target.addEventListener("pointercancel", up);
 
   window.addEventListener("keydown", (e) => {
-    if (e.code === "Space") {
-      spaceHeld = true;
-      if (e.target === document.body) e.preventDefault(); // keep the page from scrolling
+    const tool = TOOL_KEYS[e.code];
+    if (tool !== undefined && !e.metaKey && !e.ctrlKey) {
+      setTool(tool);
+      return;
     }
-    if (e.shiftKey && e.code === "Digit1") zoomToFit();
+    switch (e.code) {
+      case "Space":
+        spaceHeld = true;
+        if (e.target === document.body) e.preventDefault();
+        break;
+      case "Digit1":
+        if (e.shiftKey) zoomToFit();
+        break;
+      case "Backspace":
+      case "Delete": {
+        const n = deleteSelection();
+        if (n > 0) notify(`deleted ${n.toLocaleString()} shape${n === 1 ? "" : "s"} (arrows cascaded for free)`);
+        break;
+      }
+      case "KeyD":
+        if (e.metaKey || e.ctrlKey) {
+          e.preventDefault();
+          const d = duplicateSelection();
+          if (d.count > 0) notify(`duplicated ${d.count.toLocaleString()} shapes in ${d.ms.toFixed(1)}ms`);
+        }
+        break;
+      case "Escape":
+        if (gestureActive()) cancelGesture();
+        else clearSelection();
+        break;
+    }
   });
   window.addEventListener("keyup", (e) => {
     if (e.code === "Space") spaceHeld = false;

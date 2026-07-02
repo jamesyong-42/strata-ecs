@@ -13,8 +13,9 @@ export const dirty = {
   camera: true,
 };
 
-/** App-side counters the HUD reads (cheaper and more honest than querying per frame). */
-export const stats = { entities: 0 };
+/** App-side counters: HUD reads `entities`; new shapes take `++zTop` so creation order
+ *  stays explicit app data (row order is never stacking order in an archetype ECS). */
+export const stats = { entities: 0, zTop: 0 };
 
 export function mutate(_label: string, fn: () => void): void {
   fn();

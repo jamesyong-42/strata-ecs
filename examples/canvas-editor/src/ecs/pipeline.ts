@@ -8,7 +8,11 @@
 import type { Pipeline } from "strata";
 import { phase } from "strata";
 import { CullSystem } from "./systems/cull";
+import { DragMoveSystem } from "./systems/dragMove";
 
 export function buildPipeline(): Pipeline {
-  return [phase("renderPrep", [CullSystem])];
+  return [
+    phase("gesture", [DragMoveSystem]), // runIf-gated: free when no drag is active
+    phase("renderPrep", [CullSystem]),
+  ];
 }

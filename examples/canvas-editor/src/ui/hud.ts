@@ -29,7 +29,7 @@ export class Hud {
     this.note.textContent = text;
   }
 
-  frame(s: FrameStats): void {
+  frame(s: FrameStats, selected = 0): void {
     const a = 0.08;
     this.fpsEma += (1000 / Math.max(s.frameMs, 0.01) - this.fpsEma) * a;
     this.ecsEma += (s.ecsMs - this.ecsEma) * a;
@@ -40,6 +40,7 @@ export class Hud {
     this.lastText = now;
     this.body.textContent =
       `${this.fpsEma.toFixed(0)} fps · ecs ${fmtMs(this.ecsEma)} · paint ${fmtMs(this.paintEma)}\n` +
-      `${stats.entities.toLocaleString()} entities · ${drawBuffer.count.toLocaleString()} visible · zoom ${(cam.zoom * 100).toFixed(0)}%`;
+      `${stats.entities.toLocaleString()} entities · ${drawBuffer.count.toLocaleString()} visible · ` +
+      `${selected.toLocaleString()} selected · zoom ${(cam.zoom * 100).toFixed(0)}%`;
   }
 }

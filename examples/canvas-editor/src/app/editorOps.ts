@@ -1,0 +1,166 @@
+/**
+ * Editor verbs. Selection is the `Selected` TAG — the ECS is the single source of truth,
+ * there is no mirror set to drift. Every op collects entities first, then mutates through
+ * the commands.ts funnel (collect-then-mutate: out-of-tick query walks must not see shape
+ * changes mid-iteration, §16). Tags are committed once per verb, never per frame — the
+ * marquee's live preview is an app-side array until pointer-up.
+ */
+
+import type { Entity } from "strata";
+import { selectedBoxes } from "../ecs/queries";
+import { Fill, Kind, Label, Position, Selected, Size, Velocity, ZIndex } from "../ecs/schema";
+import { mutate, stats } from "./commands";
+import { worldRef } from "./worldRef";
+
+/** Collect the current selection (read-only walk). */
+export function selectedEntities(): Entity[] {
+  const out: Entity[] = [];
+  worldRef.current.query(selectedBoxes).each((b) => {
+    for (const r of b) out.push(b.entity(r));
+  });
+  return out;
+}
+
+export function selectedCount(): number {
+  let n = 0;
+  worldRef.current.query(selectedBoxes).each((b) => {
+    n += b.count;
+  });
+  return n;
+}
+
+/** Replace (or extend, with `additive`) the selection — one bulk tag commit. */
+export function setSelection(entities: readonly Entity[], additive = false): void {
+  const w = worldRef.current;
+  const prev = additive ? [] : selectedEntities();
+  mutate("select", () => {
+    for (const e of prev) w.removeTag(e, Selected);
+    for (const e of entities) if (!w.hasTag(e, Selected)) w.addTag(e, Selected);
+  });
+}
+
+export function toggleSelection(e: Entity): void {
+  const w = worldRef.current;
+  mutate("toggle-select", () => {
+    if (w.hasTag(e, Selected)) w.removeTag(e, Selected);
+    else w.addTag(e, Selected);
+  });
+}
+
+export function clearSelection(): void {
+  setSelection([]);
+}
+
+/** Delete the selection. Connector arrows touching a deleted shape vanish with ZERO app
+ *  code — relation edges cascade-clean on destroy (the framework demo moment). */
+export function deleteSelection(): number {
+  const doomed = selectedEntities(); // collect BEFORE mutating
+  const w = worldRef.current;
+  mutate("delete", () => {
+    for (const e of doomed) w.destroy(e);
+  });
+  stats.entities -= doomed.length;
+  return doomed.length;
+}
+
+export interface DuplicateResult {
+  count: number;
+  ms: number;
+}
+
+/** Cmd-D: clone every selected shape (+16,+16), selection moves to the clones. The timing
+ *  toast this feeds is honest evidence of strata's measured lifecycle win. */
+export function duplicateSelection(): DuplicateResult {
+  const w = worldRef.current;
+  const originals = selectedEntities();
+  const t0 = performance.now();
+  const clones: Entity[] = [];
+  mutate("duplicate", () => {
+    for (const e of originals) {
+      const pos = w.read(e, Position);
+      const size = w.read(e, Size);
+      const fill = w.read(e, Fill);
+      const kind = w.read(e, Kind);
+      const label = w.get(e, Label);
+      const clone = w.spawn({
+        components: label
+          ? [
+              [Position, { x: pos.x + 16, y: pos.y + 16 }],
+              [Size, size],
+              [Fill, fill],
+              [ZIndex, { z: ++stats.zTop }],
+              [Kind, kind],
+              [Velocity, {}],
+              [Label, label],
+            ]
+          : [
+              [Position, { x: pos.x + 16, y: pos.y + 16 }],
+              [Size, size],
+              [Fill, fill],
+              [ZIndex, { z: ++stats.zTop }],
+              [Kind, kind],
+              [Velocity, {}],
+            ],
+        tags: [Selected],
+      });
+      clones.push(clone);
+    }
+    for (const e of originals) w.removeTag(e, Selected);
+  });
+  stats.entities += clones.length;
+  return { count: clones.length, ms: performance.now() - t0 };
+}
+
+export type ShapeKind = "rect" | "ellipse" | "note";
+
+const CREATE_FILL: Record<ShapeKind, { r: number; g: number; b: number; a: number }> = {
+  rect: { r: 88, g: 166, b: 255, a: 210 },
+  ellipse: { r: 163, g: 113, b: 247, a: 210 },
+  note: { r: 255, g: 223, b: 93, a: 255 },
+};
+
+/** Draw-tool entry: spawn a shape at a point (drag-to-size updates it live afterwards). */
+export function createShape(kind: ShapeKind, x: number, y: number): Entity {
+  const w = worldRef.current;
+  let e!: Entity;
+  mutate("create", () => {
+    e = w.spawn({
+      components:
+        kind === "note"
+          ? [
+              [Position, { x, y }],
+              [Size, { w: 1, h: 1 }],
+              [Fill, CREATE_FILL.note],
+              [ZIndex, { z: ++stats.zTop }],
+              [Kind, { shape: "note" }],
+              [Velocity, {}],
+              [Label, { text: "new note" }],
+            ]
+          : [
+              [Position, { x, y }],
+              [Size, { w: 1, h: 1 }],
+              [Fill, CREATE_FILL[kind]],
+              [ZIndex, { z: ++stats.zTop }],
+              [Kind, { shape: kind }],
+              [Velocity, {}],
+            ],
+    });
+  });
+  stats.entities += 1;
+  return e;
+}
+
+/** Live drag-to-size during creation — whole-value `edit().set` on present components:
+ *  the immediate outside-tick value-write surface (§5.6, row 1). */
+export function resizeShape(e: Entity, cx: number, cy: number, w2: number, h2: number): void {
+  const w = worldRef.current;
+  mutate("size", () => {
+    w.edit(e).set(Position, { x: cx, y: cy }).set(Size, { w: Math.max(w2, 1), h: Math.max(h2, 1) });
+  });
+}
+
+export function destroyShape(e: Entity): void {
+  const w = worldRef.current;
+  mutate("destroy", () => w.destroy(e));
+  stats.entities -= 1;
+}

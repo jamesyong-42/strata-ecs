@@ -119,6 +119,7 @@ export function seedBoard(world: World, count: number, seed = 42): SeedResult {
   }
 
   stats.entities += count;
+  stats.zTop = Math.max(stats.zTop, count);
   dirty.doc = true;
   return { count, arrows, ms: performance.now() - t0 };
 }
