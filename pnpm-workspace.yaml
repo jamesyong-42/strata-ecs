@@ -1,4 +1,6 @@
 # The strata library is the workspace root; the comparative benchmark is an isolated member so its
 # rival-ECS dependencies (bitecs, becsy, miniplex, koota, mitata) never enter strata's own package.
+# The canvas-editor example is isolated the same way (vite/typescript stay out of strata's graph).
 packages:
   - "bench/compare"
+  - "examples/canvas-editor"

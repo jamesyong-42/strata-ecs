@@ -1,0 +1,113 @@
+/**
+ * THE schema module — every `define*` call in the example lives here, and only here.
+ *
+ * strata's schema registry is process-global (each name is defined once per process), so a
+ * Vite HMR re-execution of this module would throw `"Position" is already defined`. Two
+ * guards make dev painless:
+ *
+ *   1. the HMR hook at the bottom — editing this file always escalates to a full page
+ *      reload, never a hot re-run (autosave will make the reload invisible once E3 lands).
+ *   2. a define-once cache on `globalThis` — absorbs the one re-execution HMR performs
+ *      before the reload lands, and any other re-execution path.
+ *
+ * This is the reference pattern for any strata + Vite app.
+ *
+ * The schema is split DOCUMENT CONTENT vs INTERACTION STATE on purpose. Document content is
+ * what Part III (`strata/durable`) will make collaborative later; interaction state stays
+ * runtime-only forever. Durability is a creation path, not a flag (design.md §11.1) — this
+ * file draws that line on day one so collaboration attaches without a rewrite.
+ */
+
+import { defineComponent, defineRelation, defineResource, defineTag, enumOf, field } from "strata";
+
+function defineSchema() {
+  return {
+    // ── document content (future-durable) ─────────────────────────────────────────────
+    // Split at conflict granularity (design.md §4/§13.4): Position / Size / Fill are
+    // separate components, not a fat Transform — the component is the future conflict unit.
+
+    /** World-space center of a shape. */
+    Position: defineComponent<{ x: number; y: number }>("Position", { x: "f32", y: "f32" }),
+    /** Width/height in world units. */
+    Size: defineComponent<{ w: number; h: number }>("Size", { w: "f32", h: "f32" }),
+    /** RGBA fill, 0–255 per channel. */
+    Fill: defineComponent<{ r: number; g: number; b: number; a: number }>("Fill", {
+      r: "u8",
+      g: "u8",
+      b: "u8",
+      a: field("u8", { default: 255 }),
+    }),
+    /** Explicit z-order — row order is unstable in an archetype ECS (swap-and-pop), so
+     *  stacking is app data, never iteration order. */
+    ZIndex: defineComponent<{ z: number }>("ZIndex", { z: "i32" }),
+    /** What to draw. Explicit discriminants: this enum outlives the process via snapshots
+     *  (design.md §8.1) — positional enums are for local-only state (see Gesture below). */
+    Kind: defineComponent<{ shape: "rect" | "ellipse" | "note" }>("Kind", {
+      shape: enumOf({ rect: 1, ellipse: 2, note: 3 }),
+    }),
+    /** Sticky-note text. */
+    Label: defineComponent<{ text: string }>("Label", { text: "string" }),
+    /**
+     * Velocity lives on EVERY shape from birth (defaults 0) so simulate mode is a `runIf`
+     * phase gate costing zero archetype migrations — bulk add/remove churn is strata's
+     * measured weak path, dense iteration over two extra columns is its measured strength.
+     */
+    Velocity: defineComponent<{ vx: number; vy: number }>("Velocity", {
+      vx: field("f32", { default: 0 }),
+      vy: field("f32", { default: 0 }),
+    }),
+    /** Connector edges between shapes. Deleting either endpoint cascade-cleans the edge —
+     *  the seeded arrows vanish with zero app cleanup code. */
+    ConnectedTo: defineRelation("ConnectedTo", { arity: "many" }),
+
+    // ── interaction state (runtime-only forever) ──────────────────────────────────────
+
+    /** Selection. Committed in bulk at gesture end — never toggled per frame. */
+    Selected: defineTag("Selected"),
+    /** The active pointer gesture, written by the input layer between frames. Positional
+     *  enum on purpose: local-only state, deliberately contrasted with Kind's explicit
+     *  discriminants. */
+    Gesture: defineResource<{ mode: "idle" | "drag" | "marquee" | "draw"; dx: number; dy: number }>(
+      "Gesture",
+      { mode: enumOf(["idle", "drag", "marquee", "draw"]), dx: "f32", dy: "f32" },
+    ),
+    /** The viewport: world coords of the view center, zoom (px per world unit), and the
+     *  canvas size in CSS px — everything CullSystem needs to build the view rect. */
+    Camera: defineResource<{ x: number; y: number; zoom: number; w: number; h: number }>("Camera", {
+      x: "f32",
+      y: "f32",
+      zoom: "f32",
+      w: "f32",
+      h: "f32",
+    }),
+    /** Gates the simulate phase (E2). */
+    SimMode: defineResource<{ on: boolean }>("SimMode", { on: "bool" }),
+  };
+}
+
+type Schema = ReturnType<typeof defineSchema>;
+const CACHE_KEY = "__strata_canvas_editor_schema__";
+const cache = globalThis as typeof globalThis & { [CACHE_KEY]?: Schema };
+const schema: Schema = (cache[CACHE_KEY] ??= defineSchema());
+
+export const {
+  Position,
+  Size,
+  Fill,
+  ZIndex,
+  Kind,
+  Label,
+  Velocity,
+  ConnectedTo,
+  Selected,
+  Gesture,
+  Camera,
+  SimMode,
+} = schema;
+
+// Editing the schema = full page reload, never a hot re-run (the registry is process-global).
+// The globalThis cache above absorbs the one re-execution HMR does before invalidate() lands,
+// then the reload gives the edited schema a clean process to define itself in.
+if (import.meta.hot) {
+  import.meta.hot.accept(() => import.meta.hot?.invalidate());
+}

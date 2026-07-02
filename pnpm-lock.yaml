@@ -58,6 +58,22 @@ importers:
         specifier: 1.0.34
         version: 1.0.34
 
+  examples/canvas-editor:
+    dependencies:
+      strata:
+        specifier: workspace:*
+        version: link:../..
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.2
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vite:
+        specifier: ^7.0.0
+        version: 7.3.6(@types/node@24.13.2)
+
 packages:
 
   '@esbuild/aix-ppc64@0.27.7':

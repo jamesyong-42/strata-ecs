@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    /* Browser app — same strictness as the root tsconfig, plus DOM libs (the root deliberately
+       has none: that absence is what enforces "the framework core never touches the browser"). */
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "moduleDetection": "force",
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowUnreachableCode": false,
+
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["vite/client", "node"],
+
+    /* Types follow the vite alias (live framework source), so they are never stale dist d.ts. */
+    "paths": {
+      "strata": ["../../src/index.ts"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}

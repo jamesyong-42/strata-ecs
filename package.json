@@ -41,7 +41,13 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "ci": "pnpm typecheck && pnpm lint && pnpm test"
+    "ci": "pnpm typecheck && pnpm lint && pnpm test",
+    "example:canvas": "pnpm --filter @strata/example-canvas-editor dev"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
