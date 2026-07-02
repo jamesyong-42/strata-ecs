@@ -19,8 +19,9 @@ export default defineConfig({
     alias: useDist
       ? []
       : [
-          // Exact-match regex: a plain string alias uses prefix semantics and would also
-          // rewrite future `strata/durable` imports into `<src/index.ts>/durable`.
+          // Exact-match regexes, subpaths BEFORE the bare name: a plain string alias uses
+          // prefix semantics and would rewrite `strata/tools` into `<src/index.ts>/tools`.
+          { find: /^strata\/tools$/, replacement: fileURLToPath(new URL("../../src/tools/index.ts", import.meta.url)) },
           { find: /^strata$/, replacement: fileURLToPath(new URL("../../src/index.ts", import.meta.url)) },
         ],
   },

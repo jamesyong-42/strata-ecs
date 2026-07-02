@@ -8,13 +8,15 @@
  * verification screenshots; also a handy smoke test after refactors).
  */
 
+import { attachObserver } from "strata/tools";
 import { cam, setViewportSize, zoomToFit } from "./app/camera";
 import { duplicateSelection, setSelection } from "./app/editorOps";
+import { describeShape } from "./app/describe";
 import { startFrameLoop } from "./app/frameLoop";
-import { hitTestRegion } from "./app/hitTest";
+import { hitTestPoint, hitTestRegion } from "./app/hitTest";
 import { attachInput } from "./app/input";
 import { seedBoard } from "./app/seed";
-import { interaction } from "./app/tools";
+import { interaction, pointerDown, pointerMove, pointerUp, setTool } from "./app/tools";
 import { worldRef } from "./app/worldRef";
 import { buildPipeline } from "./ecs/pipeline";
 import { ContentLayer } from "./render/contentLayer";
@@ -52,6 +54,15 @@ zoomToFit();
 
 buildToolbar(document.getElementById("toolbar") as HTMLElement, notify);
 attachInput(overlay, notify);
+// The framework's own observer panel (strata/tools): entity inspector, per-system µs,
+// lifecycle timeline — the app only supplies the labeling. ?obs=systems|timeline picks the
+// starting tab for shareable links.
+const obsTab = params.get("obs");
+attachObserver(worldRef.current, {
+  describe: describeShape,
+  // `tab` (not defaultTab): a shared ?obs= link must win over this browser's persisted layout
+  tab: obsTab === "systems" || obsTab === "timeline" || obsTab === "entities" ? obsTab : undefined,
+});
 startFrameLoop(
   () => pipeline,
   () => contentLayer.paint(drawBuffer),
@@ -70,9 +81,20 @@ if (params.get("script") === "demo") {
     interaction.pendingDx = 260 / cam.zoom;
     interaction.pendingDy = 140 / cam.zoom;
     setTimeout(() => {
-      interaction.mode = "idle";
+      interaction.mode = "dragEnd";
       const d = duplicateSelection();
-      notify(`demo: marquee ${hits.entities.length.toLocaleString()} → drag → duplicated ${d.count.toLocaleString()} in ${d.ms.toFixed(1)}ms`);
+      // regression check for the review-caught critical: a completed draw gesture must
+      // PERSIST its shape (setTool used to cancel-destroy it at commit)
+      const dx = cam.x - (cam.w / 2 - 60) / cam.zoom;
+      const dy = cam.y - (cam.h / 2 - 160) / cam.zoom;
+      setTool("rect");
+      pointerDown({ sx: 0, sy: 0, wx: dx, wy: dy, shift: false });
+      pointerMove({ sx: 0, sy: 0, wx: dx + 180 / cam.zoom, wy: dy + 120 / cam.zoom, shift: false }, 180, 120);
+      pointerUp({ sx: 0, sy: 0, wx: dx + 180 / cam.zoom, wy: dy + 120 / cam.zoom, shift: false });
+      const drawn = hitTestPoint(dx + 90 / cam.zoom, dy + 60 / cam.zoom);
+      notify(
+        `demo: marquee ${hits.entities.length.toLocaleString()} → drag → dup ${d.count.toLocaleString()} in ${d.ms.toFixed(1)}ms · draw persisted: ${drawn !== undefined ? "YES" : "NO"}`,
+      );
     }, 400);
   }, 400);
 }

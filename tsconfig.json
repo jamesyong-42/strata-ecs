@@ -34,5 +34,7 @@
   // from strata's own typecheck. strata's own bench (bench/ecs.bench.ts) stays covered.
   // examples/* are separate workspace members with their own tsconfigs (DOM lib, vite types) —
   // the "**/*.config.ts" include above would otherwise pull their vite.config.ts into this program.
-  "exclude": ["dist", "node_modules", "bench/compare", "examples"]
+  // src/tools is the browser dev-tools entry (strata/tools): it typechecks under its own
+  // tsconfig WITH the DOM lib; excluding it here is what keeps the core provably DOM-free.
+  "exclude": ["dist", "node_modules", "bench/compare", "examples", "src/tools"]
 }

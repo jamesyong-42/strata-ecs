@@ -30,7 +30,7 @@ A draggable, resizable, layout-persisted inspector window with three surfaces:
 | Original (`reactive-ecs`) | strata today | Verdict |
 |---|---|---|
 | `world.getAllEntities()` | `world.runtime.archetypes()` → `arch.entities[0..count)` (`RuntimeStore` is already exported; `Archetype` exposes `entities`, `count`, `componentIds`) | ✅ tools-side walk |
-| `world.getComponentsOf(e)` | `runtime.archetypeOfEntity(e).componentIds` + component registry | ✅ tools-side |
+| `world.getComponentsOf(e)` | `runtime.archetypeOf(e)?.componentIds` + component registry (one small `@internal` accessor added alongside the three core gaps) | ✅ tools-side |
 | `world.getTagsOf(e)` | iterate registered tags + `world.hasTag(e, t)` (registries `componentByName`/`tagByName`/`relationByName` exist in `schema.ts`, unexported from the public entry — first-party tools import them in-repo) | ✅ tools-side |
 | `world.getComponent(e, type)` | `world.get(e, C)` (16 Hz on expanded rows only — allocation acceptable) | ✅ exists |
 | `world.currentTick` | — | ❌ **core gap 1**: `world.tickCount` |

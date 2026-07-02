@@ -28,12 +28,16 @@
       "types": "./dist/ephemeral/index.d.ts",
       "import": "./dist/ephemeral/index.js"
     },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "import": "./dist/tools/index.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p src/tools --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:stress": "vitest run --config vitest.stress.config.ts",

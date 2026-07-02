@@ -216,6 +216,12 @@ export class RuntimeStore implements ECSStore {
     return this.archetypesById;
   }
 
+  /** @internal The archetype an entity occupies — undefined for identity-only/dead handles
+   *  (first-party tools use this for reflection; apps should stick to queries). */
+  archetypeOf(e: Entity): Archetype | undefined {
+    return this.table.isPlaced(e) ? this.archetypesById[this.table.archetypeOf(slotOf(e))] : undefined;
+  }
+
   private archetypeOfEntity(e: Entity): Archetype {
     return this.archetypesById[this.table.archetypeOf(slotOf(e))];
   }
@@ -938,7 +944,7 @@ export class RuntimeStore implements ECSStore {
 
   /** The archetype an entity is currently placed in, or `undefined` if identity-only. */
   debugArchetypeOf(e: Entity): Archetype | undefined {
-    return this.table.isPlaced(e) ? this.archetypeOfEntity(e) : undefined;
+    return this.archetypeOf(e); // legacy alias — archetypeOf is the sanctioned reflection seam
   }
 
   // ---------------------------------------------------------------------------
