@@ -12,7 +12,7 @@ function freshWorld(): World {
   const w = createWorld({ name: "canvas" });
   w.setResource(Camera, { x: 0, y: 0, zoom: 1, w: 0, h: 0 });
   w.setResource(Gesture, { mode: "idle", dx: 0, dy: 0 });
-  w.setResource(SimMode, { on: false });
+  w.setResource(SimMode, { on: false, bound: 4000 });
   return w;
 }
 

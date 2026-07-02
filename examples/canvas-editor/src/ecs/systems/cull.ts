@@ -14,11 +14,16 @@ import { drawBuffer } from "../../render/drawBuffer";
 import { renderable } from "../queries";
 import { Camera, Fill, Kind, Position, Size, ZIndex } from "../schema";
 
+/** HUD toggle: with the viewport test off, EVERY shape is pushed to paint — self-inflicted
+ *  jank that shows exactly what the brute-force cull is saving (flip it back, it heals). */
+export const cullFlags = { viewportTest: true };
+
 export const CullSystem = defineSystem(
   renderable,
   (b: Batch, ctx) => {
     const cam = ctx.getResource(Camera);
     if (cam === undefined) return;
+    const test = cullFlags.viewportTest;
     // View rect in world space (camera x/y = view center, zoom = px per world unit).
     const halfW = cam.w / 2 / cam.zoom;
     const halfH = cam.h / 2 / cam.zoom;
@@ -48,7 +53,7 @@ export const CullSystem = defineSystem(
       const hh = sh[r] / 2;
       const cx = px[r];
       const cy = py[r];
-      if (cx + hw < minX || cx - hw > maxX || cy + hh < minY || cy - hh > maxY) continue;
+      if (test && (cx + hw < minX || cx - hw > maxX || cy + hh < minY || cy - hh > maxY)) continue;
       const color = ((fr[r] << 24) | (fg[r] << 16) | (fb[r] << 8) | fa[r]) >>> 0;
       db.push(cx, cy, sw[r], sh[r], color, kk[r], zz[r], b.entity(r));
     }

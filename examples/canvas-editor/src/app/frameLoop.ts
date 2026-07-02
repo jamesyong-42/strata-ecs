@@ -13,6 +13,7 @@ import type { Pipeline } from "strata";
 import { drawBuffer } from "../render/drawBuffer";
 import { syncCameraResource } from "./camera";
 import { dirty } from "./commands";
+import { isSimOn } from "./sim";
 import { gestureActive, syncGestureResource } from "./tools";
 import { worldRef } from "./worldRef";
 
@@ -49,7 +50,7 @@ export function startFrameLoop(
     // Content paint is dirty-gated (no change events exist — the commands.ts funnel, the
     // camera, and an active gesture are the only writers, so their flags ARE the change
     // detection). The overlay repaints every frame; it never forces a content repaint.
-    const painted = dirty.doc || dirty.camera || gestureActive();
+    const painted = dirty.doc || dirty.camera || gestureActive() || isSimOn();
     const p0 = performance.now();
     if (painted) {
       drawBuffer.sortByZ(); // app-side prep, honestly billed to paint, not to the ECS

@@ -10,16 +10,20 @@
 
 import { attachObserver } from "strata/tools";
 import { cam, setViewportSize, zoomToFit } from "./app/camera";
+import { dirty, stats } from "./app/commands";
 import { duplicateSelection, setSelection } from "./app/editorOps";
 import { describeShape } from "./app/describe";
 import { startFrameLoop } from "./app/frameLoop";
 import { hitTestPoint, hitTestRegion } from "./app/hitTest";
 import { attachInput } from "./app/input";
 import { seedBoard } from "./app/seed";
+import { setSimBound, setSimulate } from "./app/sim";
+import { clearBoard, stressSpawn } from "./app/stress";
 import { interaction, pointerDown, pointerMove, pointerUp, setTool } from "./app/tools";
 import { worldRef } from "./app/worldRef";
-import { buildPipeline } from "./ecs/pipeline";
-import { ContentLayer } from "./render/contentLayer";
+import { buildPipeline, SYSTEM_NAMES, type SystemName } from "./ecs/pipeline";
+import { cullFlags } from "./ecs/systems/cull";
+import { ContentLayer, lodFlags } from "./render/contentLayer";
 import { drawBuffer } from "./render/drawBuffer";
 import { OverlayLayer } from "./render/overlayLayer";
 import { Hud } from "./ui/hud";
@@ -30,12 +34,50 @@ const count = Math.min(100_000, Math.max(100, Number(params.get("count") ?? 10_0
 
 const content = document.getElementById("content") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLCanvasElement;
-const hud = new Hud(document.getElementById("hud") as HTMLElement);
-const notify = (msg: string): void => hud.setNote(msg);
 
 const contentLayer = new ContentLayer(content);
 const overlayLayer = new OverlayLayer(overlay);
-const pipeline = buildPipeline();
+
+// The schedule is a value — the HUD's checkboxes rebuild it live (schedule-as-data).
+const disabledSystems = new Set<SystemName>();
+let pipeline = buildPipeline(disabledSystems);
+
+const hud = new Hud(document.getElementById("hud") as HTMLElement, {
+  systemNames: SYSTEM_NAMES,
+  onSimToggle(on) {
+    setSimulate(on);
+    notify(on ? "simulate ON — every shape got a velocity; keep editing" : "simulate off — frozen mid-flight");
+  },
+  onSpawn(n) {
+    const r = stressSpawn(n);
+    notify(
+      r.spawned === 0
+        ? `at the ${(100_000).toLocaleString()}-shape cap`
+        : `spawned ${r.spawned.toLocaleString()} fully-initialized shapes in ${r.ms.toFixed(1)}ms`,
+    );
+  },
+  onClear() {
+    const n = clearBoard();
+    notify(`destroyed ${n.toLocaleString()} shapes (relations cascaded)`);
+  },
+  onSystemToggle(name, enabled) {
+    if (enabled) disabledSystems.delete(name as SystemName);
+    else disabledSystems.add(name as SystemName);
+    pipeline = buildPipeline(disabledSystems); // just a new array — no scheduler, no registration
+    notify(`${name} ${enabled ? "re-enabled" : "removed from the pipeline"}`);
+  },
+  onCullTestToggle(enabled) {
+    cullFlags.viewportTest = enabled;
+    dirty.doc = true;
+    notify(enabled ? "viewport cull back on" : `cull test OFF — painting all ${stats.entities.toLocaleString()} shapes`);
+  },
+  onLodToggle(enabled) {
+    lodFlags.enabled = enabled;
+    dirty.doc = true;
+    notify(enabled ? "LOD on (greeked text far out)" : "LOD OFF — full text + strokes at every zoom");
+  },
+});
+const notify = (msg: string): void => hud.setNote(msg);
 
 function fitCanvases(): void {
   const w = window.innerWidth;
@@ -49,6 +91,7 @@ window.addEventListener("resize", fitCanvases);
 fitCanvases();
 
 const seeded = seedBoard(worldRef.current, count);
+setSimBound(Math.sqrt(count) * 55 * 1.5); // fit the bounce box to the seeded spread
 notify(`seeded ${seeded.count.toLocaleString()} shapes + ${seeded.arrows} arrows in ${seeded.ms.toFixed(1)}ms`);
 zoomToFit();
 
@@ -69,6 +112,9 @@ startFrameLoop(
   () => overlayLayer.paint(),
   (s) => hud.frame(s, overlayLayer.selectedCount),
 );
+
+// ?sim=1 boots straight into simulate mode (headless verification / shareable links).
+if (params.get("sim") === "1") setSimulate(true);
 
 // Scripted interaction demo — the same code paths real input drives, minus the DOM events.
 if (params.get("script") === "demo") {

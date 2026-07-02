@@ -80,8 +80,12 @@ function defineSchema() {
       w: "f32",
       h: "f32",
     }),
-    /** Gates the simulate phase (E2). */
-    SimMode: defineResource<{ on: boolean }>("SimMode", { on: "bool" }),
+    /** Gates the simulate phase; `bound` is the half-extent of the bounce box (set from the
+     *  seeded board's spread). The whole phase costs zero ticks while `on` is false. */
+    SimMode: defineResource<{ on: boolean; bound: number }>("SimMode", {
+      on: "bool",
+      bound: field("f32", { default: 4000 }),
+    }),
   };
 }
 

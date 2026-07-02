@@ -16,6 +16,10 @@ import { ConnectedTo, Label, Position } from "../ecs/schema";
 import type { DrawBuffer } from "./drawBuffer";
 
 const GREEK_ZOOM = 0.35;
+
+/** HUD toggle: LOD off forces full detail (real text + strokes) at every zoom — the honest
+ *  way to show what greeking/stroke-dropping buys on a 2D canvas. */
+export const lodFlags = { enabled: true };
 const KIND_RECT = 1;
 const KIND_ELLIPSE = 2;
 const KIND_NOTE = 3;
@@ -77,7 +81,7 @@ export class ContentLayer {
 
     this.paintArrows(ctx);
 
-    const detailed = cam.zoom >= GREEK_ZOOM;
+    const detailed = !lodFlags.enabled || cam.zoom >= GREEK_ZOOM;
     // Label budget goes to the TOP of the z-order (the notes the user actually sees), and
     // over-budget notes still get greek bars — never blank faces.
     if (this.labelFlags.length < db.count) this.labelFlags = new Uint8Array(db.x.length);
