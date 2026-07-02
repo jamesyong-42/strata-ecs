@@ -48,9 +48,12 @@ tick counting, and system naming are the three genuine core additions.**
 ```ts
 // src/core/observe.ts (new)
 export interface WorldObserver {
-  // lifecycle — fired at placement / BEFORE teardown (entity still fully readable),
-  // on both the immediate world.* path and the command-buffer flush path
-  // (flush already funnels through RuntimeStore.spawn/destroy).
+  // lifecycle. onSpawn fires exactly once per entity: after placement for immediate
+  // world.spawn (and per-entity during snapshot import, where eid fields/relations only
+  // land in the load's second phase); at the eager identity mint for a deferred ctx.spawn
+  // (placement follows at that phase's flush, with no second event). onDestroy fires
+  // BEFORE teardown (entity fully readable) and covers both surfaces — immediate
+  // world.destroy and the flush's despawn command both funnel through RuntimeStore.destroy.
   onSpawn?(e: Entity): void;
   onDestroy?(e: Entity): void;
   // tick instrumentation — fired from World.tick

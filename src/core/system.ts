@@ -167,6 +167,8 @@ export type Condition = (ctx: SystemCtx) => boolean;
 export type SystemBody = (batch: Batch, ctx: SystemCtx) => void;
 
 export interface System {
+  /** Display name for tools/instrumentation (observe.ts) — `opts.name`, else the body fn's name. */
+  readonly name: string;
   readonly query: Query;
   readonly body: SystemBody;
   readonly runIf?: Condition;
@@ -181,9 +183,13 @@ export interface Phase {
 /** A pipeline is a positional array of phases; array order is run order (§7). */
 export type Pipeline = readonly Phase[];
 
-/** Pair a query with a body (§7). */
-export function defineSystem(query: Query, body: SystemBody, opts?: { runIf?: Condition }): System {
-  return { query, body, runIf: opts?.runIf };
+/** Pair a query with a body (§7). `opts.name` labels the system for tools/instrumentation. */
+export function defineSystem(
+  query: Query,
+  body: SystemBody,
+  opts?: { runIf?: Condition; name?: string },
+): System {
+  return { name: opts?.name ?? (body.name || "system"), query, body, runIf: opts?.runIf };
 }
 
 /** Group systems into a named, ordered phase, optionally gated (§7). */

@@ -43,6 +43,7 @@ import type { Batch, MemberCheck, Query, RowFilter } from "./query";
 import type { CommandBuffer, StructuralCommand } from "./command";
 import type { ECSStore } from "./ecs-store";
 import { DEV, devError, devWarn } from "./dev";
+import type { WorldObserver } from "./observe";
 
 /** A component handle paired with a value of its field type — the typed spawn/init form. */
 export type ComponentEntry<S = unknown> = readonly [Component<S>, S];
@@ -86,6 +87,11 @@ export class RuntimeStore implements ECSStore {
   private identityRows = new Int32Array(0);
   /** Transient scratch for materializing a row-filtered chunk's matches, before the exact-size copy. */
   private rowScratch = new Int32Array(0);
+  /**
+   * Attached dev-tool observers (observe.ts) — `null` whenever none are attached, so the
+   * spawn/destroy hot paths pay exactly one branch-on-null (docs/plan-tools-observer.md).
+   */
+  private observerList: WorldObserver[] | null = null;
 
   private ensureIdentity(n: number): Int32Array {
     if (this.identityRows.length < n) {
@@ -137,6 +143,72 @@ export class RuntimeStore implements ECSStore {
   /** Subscribe to archetype creation (queries cache matching-archetype lists this way, §3.1/§6). */
   observeArchetypes(fn: (a: Archetype) => void): void {
     this.archetypeObservers.push(fn);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Dev-tool observers (observe.ts; docs/plan-tools-observer.md)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * @internal Attach a dev-tool observer (use `world.observe`). Returns a detach function.
+   * The roster is COPY-ON-WRITE: attach/detach publish a new array, never mutate one an emit
+   * loop may be iterating — so detaching from inside a callback can never skip a sibling, and
+   * roster changes take effect from the next event (next tick, for tick telemetry) on.
+   */
+  addObserver(obs: WorldObserver): () => void {
+    this.observerList = this.observerList === null ? [obs] : [...this.observerList, obs];
+    return () => {
+      const list = this.observerList;
+      if (list === null) return;
+      const i = list.indexOf(obs);
+      if (i === -1) return;
+      const next = list.slice(0, i).concat(list.slice(i + 1));
+      this.observerList = next.length > 0 ? next : null;
+    };
+  }
+
+  /** @internal `null` when no observers are attached — `World.tick` branches on this. */
+  get observers(): readonly WorldObserver[] | null {
+    return this.observerList;
+  }
+
+  /** True while observer callbacks run — DEV mutation guards in spawn/destroy read it. */
+  private inObserverEmit = false;
+
+  /** Fan an entity birth out to observers. Callers guard `observerList !== null` (hot path). */
+  private emitSpawn(e: Entity): void {
+    const obs = this.observerList as WorldObserver[];
+    const prev = this.inObserverEmit;
+    this.inObserverEmit = true;
+    try {
+      for (let i = 0; i < obs.length; i++) {
+        try {
+          obs[i].onSpawn?.(e);
+        } catch (err) {
+          devError(`observer onSpawn threw — swallowed; callbacks must not throw (observe.ts): ${String(err)}`);
+        }
+      }
+    } finally {
+      this.inObserverEmit = prev;
+    }
+  }
+
+  /** Fan an imminent entity teardown out to observers. Callers guard `observerList !== null`. */
+  private emitDestroy(e: Entity): void {
+    const obs = this.observerList as WorldObserver[];
+    const prev = this.inObserverEmit;
+    this.inObserverEmit = true;
+    try {
+      for (let i = 0; i < obs.length; i++) {
+        try {
+          obs[i].onDestroy?.(e);
+        } catch (err) {
+          devError(`observer onDestroy threw — swallowed; callbacks must not throw (observe.ts): ${String(err)}`);
+        }
+      }
+    } finally {
+      this.inObserverEmit = prev;
+    }
   }
 
   /** All archetypes that currently exist (for queries to seed their caches). */
@@ -223,7 +295,11 @@ export class RuntimeStore implements ECSStore {
 
   /** Mint an identity with no placement (§5.2). */
   allocateIdentity(): Entity {
-    return this.table.allocate();
+    const e = this.table.allocate();
+    // The entity exists from here (ctx.spawn's eager identity, §5.2) — this is its one onSpawn;
+    // the flush-time placement of the same entity deliberately does not fire again.
+    if (this.observerList !== null) this.emitSpawn(e);
+    return e;
   }
 
   /** Idempotently place an identity-only entity into the empty archetype (§5.5). */
@@ -253,7 +329,12 @@ export class RuntimeStore implements ECSStore {
 
   /** Create and immediately place a runtime entity (§5.2 — outside iteration, so immediate). */
   spawn(init?: SpawnInit): Entity {
-    const e = this.table.allocate();
+    if (DEV && this.inObserverEmit) {
+      devError("observer callbacks must not mutate the world — spawn() from inside an observer (observe.ts).");
+    }
+    // Validate + encode BEFORE minting the identity: a bad value must throw with no identity
+    // allocated, or the failed spawn would leak a live unreachable entity (and one for which
+    // onSpawn never fired, breaking the exactly-once contract).
     const seen = new Set<ComponentId>();
     const fieldValues = new Map<FieldId, Stored>();
     for (const [component, value] of init?.components ?? []) {
@@ -265,18 +346,27 @@ export class RuntimeStore implements ECSStore {
         fieldValues.set(fid, v);
       }
     }
+    const e = this.table.allocate();
     this.placeComposed(
       e,
       [...seen].sort((a, b) => a - b),
       fieldValues,
       init?.tags?.map((t) => t.id),
     );
+    if (this.observerList !== null) this.emitSpawn(e); // after placement — readable in the hook
     return e;
   }
 
   /** Destroy an entity: clear its tags/relations inline, unplace, then free identity (§5.5). */
   destroy(e: Entity): void {
+    if (DEV && this.inObserverEmit) {
+      devError("observer callbacks must not mutate the world — destroy() from inside an observer is ignored (observe.ts).");
+      return;
+    }
     if (!this.table.isAlive(e)) return;
+    // BEFORE teardown, so the dying entity is still fully readable inside the hook (observe.ts).
+    // Covers both surfaces: immediate world.destroy and the flush's despawn command (§5.4).
+    if (this.observerList !== null) this.emitDestroy(e);
     const slot = slotOf(e);
     // Per-entity state living outside the archetype must be torn down for placed AND
     // identity-only entities so a reused slot starts clean (§5.5):

@@ -10,6 +10,8 @@
 import type { Entity } from "./entity";
 import type { Component, FieldId, Relation, Resource, Tag } from "./schema";
 import type { Batch, Query } from "./query";
+import { devError } from "./dev";
+import type { WorldObserver } from "./observe";
 import { RuntimeStore, type SpawnInit } from "./runtime-store";
 import { type EntityEditor, type Pipeline, SystemCtx, makeEditor } from "./system";
 import { exportSnapshot, importSnapshot } from "./snapshot";
@@ -22,10 +24,24 @@ export interface InboundSource {
 export class World {
   private readonly store = new RuntimeStore();
   private readonly inbound: InboundSource[] = [];
+  private tickCounter = 0;
   readonly name: string;
 
   constructor(opts?: { name?: string }) {
     this.name = opts?.name ?? "world";
+  }
+
+  /** Ticks run so far — the tools' time axis (increments as each `tick()` enters, observe.ts). */
+  get tickCount(): number {
+    return this.tickCounter;
+  }
+
+  /**
+   * Attach a dev-tool observer (observe.ts; docs/plan-tools-observer.md). Returns a detach
+   * function. Zero cost when nothing is attached; observer callbacks must not mutate the world.
+   */
+  observe(obs: WorldObserver): () => void {
+    return this.store.addObserver(obs);
   }
 
   // --- entities / lifecycle (immediate) ---
@@ -121,22 +137,77 @@ export class World {
 
   // --- the frame ---
 
-  /** Run a pipeline once: per phase, run gated systems then flush that phase's buffer (§7). */
+  /**
+   * Run a pipeline once: per phase, run gated systems then flush that phase's buffer (§7).
+   * When observers are attached (observe.ts) the same loop also emits tick/system/flush
+   * telemetry; with none attached the only added cost is a branch-on-null per step.
+   */
   tick(pipeline: Pipeline): void {
+    const tick = ++this.tickCounter;
+    const obs = this.store.observers; // captured once — the tick-telemetry roster (observe.ts)
+    let tickStart = 0;
+    if (obs !== null) {
+      tickStart = performance.now();
+      for (let i = 0; i < obs.length; i++) {
+        try {
+          obs[i].onTickStart?.(tick);
+        } catch (err) {
+          reportObserverThrow(err);
+        }
+      }
+    }
     for (const phase of pipeline) {
       const buf = this.store.allocateCommandBuffer();
       try {
         const ctx = new SystemCtx(this.store, buf);
-        if (phase.runIf !== undefined && !phase.runIf(ctx)) continue;
-        for (const system of phase.systems) {
-          if (system.runIf !== undefined && !system.runIf(ctx)) continue;
-          this.store.query(system.query).each((batch) => system.body(batch, ctx));
+        if (phase.runIf !== undefined && !phase.runIf(ctx)) {
+          if (obs !== null) {
+            // a gated-off phase never flushes; report its systems as skipped so idle% stays live
+            for (const system of phase.systems) emitSystemRun(obs, phase.name, system.name, false, 0);
+          }
+          continue;
         }
-        this.store.flushCommandBuffer(buf); // phase boundary: shape changes become visible (§7)
+        for (const system of phase.systems) {
+          if (system.runIf !== undefined && !system.runIf(ctx)) {
+            if (obs !== null) emitSystemRun(obs, phase.name, system.name, false, 0);
+            continue;
+          }
+          if (obs !== null) {
+            const t0 = performance.now();
+            this.store.query(system.query).each((batch) => system.body(batch, ctx));
+            emitSystemRun(obs, phase.name, system.name, true, (performance.now() - t0) * 1000);
+          } else {
+            this.store.query(system.query).each((batch) => system.body(batch, ctx));
+          }
+        }
+        if (obs !== null) {
+          const f0 = performance.now();
+          this.store.flushCommandBuffer(buf); // phase boundary: shape changes become visible (§7)
+          const micros = (performance.now() - f0) * 1000;
+          for (let i = 0; i < obs.length; i++) {
+            try {
+              obs[i].onPhaseFlush?.(phase.name, micros);
+            } catch (err) {
+              reportObserverThrow(err);
+            }
+          }
+        } else {
+          this.store.flushCommandBuffer(buf); // phase boundary: shape changes become visible (§7)
+        }
       } finally {
         // Always return the buffer to the pool — even if a system body throws (the pool must not
         // leak, and a thrown phase is simply abandoned without flushing).
         this.store.releaseCommandBuffer(buf);
+      }
+    }
+    if (obs !== null) {
+      const micros = (performance.now() - tickStart) * 1000;
+      for (let i = 0; i < obs.length; i++) {
+        try {
+          obs[i].onTickEnd?.(tick, micros);
+        } catch (err) {
+          reportObserverThrow(err);
+        }
       }
     }
   }
@@ -166,6 +237,28 @@ export class World {
   /** @internal The underlying store — the seam Parts II–IV drive projection through. */
   get runtime(): RuntimeStore {
     return this.store;
+  }
+}
+
+/** Report a throwing observer callback — swallowed, never propagated into tick control flow. */
+function reportObserverThrow(err: unknown): void {
+  devError(`observer callback threw — swallowed; callbacks must not throw (observe.ts): ${String(err)}`);
+}
+
+/** Fan one system-slot visit out to observers (kept out of the tick loop for readability). */
+function emitSystemRun(
+  obs: readonly WorldObserver[],
+  phase: string,
+  system: string,
+  ran: boolean,
+  micros: number,
+): void {
+  for (let i = 0; i < obs.length; i++) {
+    try {
+      obs[i].onSystemRun?.(phase, system, ran, micros);
+    } catch (err) {
+      reportObserverThrow(err);
+    }
   }
 }
 

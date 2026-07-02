@@ -49,6 +49,9 @@ export type { System, Phase, Pipeline, Condition, SystemBody, EntityEditor } fro
 export { World, createWorld } from "./world";
 export type { InboundSource } from "./world";
 
+// --- dev-tool observability (the `strata/tools` data feed) ---
+export type { WorldObserver } from "./observe";
+
 // --- the store contract + implementation + command types (the seam Parts II–IV build on) ---
 export type { ECSStore } from "./ecs-store";
 export { RuntimeStore } from "./runtime-store";
