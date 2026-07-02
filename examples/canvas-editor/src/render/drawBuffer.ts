@@ -79,13 +79,21 @@ export class DrawBuffer {
     this.count = i + 1;
   }
 
+  private sortKeys = new Float64Array(0);
+
   /** Sort the visible set back-to-front by explicit z (never by iteration order — row order
-   *  is unstable under swap-and-pop). */
+   *  is unstable under swap-and-pop). Packs `(z + 2³¹)·2²⁰ + index` into one float and uses
+   *  the comparator-LESS typed-array sort — a JS comparator costs ~25ms at 100k visible,
+   *  paid on every painted frame; the packed numeric sort is several times cheaper. */
   sortByZ(): void {
     const n = this.count;
-    for (let i = 0; i < n; i++) this.order[i] = i;
+    if (this.sortKeys.length < this.capacity) this.sortKeys = new Float64Array(this.capacity);
+    const keys = this.sortKeys;
     const z = this.z;
-    this.order.subarray(0, n).sort((a, b) => z[a] - z[b]);
+    for (let i = 0; i < n; i++) keys[i] = (z[i] + 2147483648) * 1048576 + i; // exact ≤ 2⁵², i < 2²⁰
+    keys.subarray(0, n).sort();
+    const order = this.order;
+    for (let i = 0; i < n; i++) order[i] = keys[i] % 1048576;
   }
 }
 

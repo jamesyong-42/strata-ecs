@@ -28,6 +28,9 @@ export class ContentLayer {
   /** Packed 0xRRGGBBAA → css string (the seeded palette is small, so this stays tiny). */
   private readonly cssCache = new Map<number, string>();
 
+  /** Per-paint flags: which visible notes won the label budget (sized to the draw buffer). */
+  private labelFlags = new Uint8Array(0);
+
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
   }
@@ -75,7 +78,20 @@ export class ContentLayer {
     this.paintArrows(ctx);
 
     const detailed = cam.zoom >= GREEK_ZOOM;
-    let labelBudget = 400; // cap per-paint readField label lookups — visible notes only
+    // Label budget goes to the TOP of the z-order (the notes the user actually sees), and
+    // over-budget notes still get greek bars — never blank faces.
+    if (this.labelFlags.length < db.count) this.labelFlags = new Uint8Array(db.x.length);
+    this.labelFlags.fill(0, 0, db.count);
+    if (detailed) {
+      let budget = 400; // cap per-paint readField label lookups
+      for (let k = db.count - 1; k >= 0 && budget > 0; k--) {
+        const i = db.order[k];
+        if (db.kind[i] === KIND_NOTE) {
+          this.labelFlags[i] = 1;
+          budget--;
+        }
+      }
+    }
     for (let k = 0; k < db.count; k++) {
       const i = db.order[k];
       const x = db.x[i] - db.w[i] / 2;
@@ -96,8 +112,7 @@ export class ContentLayer {
           ctx.beginPath();
           ctx.roundRect(x, y, w, h, 10);
           ctx.fill();
-          if (detailed && labelBudget > 0) {
-            labelBudget--;
+          if (this.labelFlags[i] === 1) {
             const text = world.readField<string>(db.entity[i] as Entity, Label, "text");
             if (text !== undefined) {
               ctx.fillStyle = "rgba(13,17,23,.85)";
@@ -105,8 +120,8 @@ export class ContentLayer {
               ctx.textBaseline = "top";
               ctx.fillText(text, x + 14, y + 12, w - 28);
             }
-          } else if (!detailed) {
-            // greeked text — the standard zoomed-out trick (bars, not glyphs)
+          } else {
+            // greeked text — zoomed out, or over the label budget (never a blank face)
             ctx.fillStyle = "rgba(13,17,23,.35)";
             ctx.fillRect(x + w * 0.12, y + h * 0.18, w * 0.76, h * 0.14);
             ctx.fillRect(x + w * 0.12, y + h * 0.44, w * 0.55, h * 0.14);
@@ -146,6 +161,13 @@ export class ContentLayer {
     const world = worldRef.current;
     ctx.strokeStyle = "rgba(139,148,158,.55)";
     ctx.lineWidth = 2 / cam.zoom;
+    // segment-AABB cull against the view rect (padded for arrowheads) — same brute-force
+    // thesis as CullSystem; without it every off-screen arrow is path-built per paint
+    const pad = 12 / Math.max(cam.zoom, 0.15);
+    const minX = cam.x - cam.w / 2 / cam.zoom - pad;
+    const maxX = cam.x + cam.w / 2 / cam.zoom + pad;
+    const minY = cam.y - cam.h / 2 / cam.zoom - pad;
+    const maxY = cam.y + cam.h / 2 / cam.zoom + pad;
     world.query(connected).each((b) => {
       const px = b.col(Position).x as Float32Array;
       const py = b.col(Position).y as Float32Array;
@@ -156,6 +178,14 @@ export class ContentLayer {
           const x1 = world.readField<number>(target, Position, "x");
           const y1 = world.readField<number>(target, Position, "y");
           if (x1 === undefined || y1 === undefined) continue;
+          if (
+            Math.max(x0, x1) < minX ||
+            Math.min(x0, x1) > maxX ||
+            Math.max(y0, y1) < minY ||
+            Math.min(y0, y1) > maxY
+          ) {
+            continue;
+          }
           ctx.beginPath();
           ctx.moveTo(x0, y0);
           ctx.lineTo(x1, y1);

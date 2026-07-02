@@ -17,7 +17,9 @@ export const dirty = {
  *  stays explicit app data (row order is never stacking order in an archetype ECS). */
 export const stats = { entities: 0, zTop: 0 };
 
-export function mutate(_label: string, fn: () => void): void {
+/** `repaint: false` is for overlay-only mutations (selection tags): the overlay repaints
+ *  every frame anyway, and forcing a full content repaint + z-sort for them is waste. */
+export function mutate(_label: string, fn: () => void, opts?: { repaint?: boolean }): void {
   fn();
-  dirty.doc = true;
+  if (opts?.repaint !== false) dirty.doc = true;
 }

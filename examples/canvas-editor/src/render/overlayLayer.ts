@@ -44,11 +44,16 @@ export class OverlayLayer {
     );
     const px1 = 1 / cam.zoom; // one screen px in world units
 
-    // selection outlines — read-only walk over [Position, Size, Selected]
+    // selection outlines — read-only walk over [Position, Size, Selected]. One batched path
+    // + one stroke() (a strokeRect per shape is an order of magnitude more draw calls), and
+    // sub-2-screen-px boxes are skipped: at far zoom a 5k selection would otherwise tank
+    // idle fps for outlines nobody can see.
     const world = worldRef.current;
     ctx.strokeStyle = SELECT_BLUE;
     ctx.lineWidth = 1.5 * px1;
+    const minWorld = 2 * px1;
     let selected = 0;
+    ctx.beginPath();
     world.query(selectedBoxes).each((b) => {
       const px = b.col(Position).x as Float32Array;
       const py = b.col(Position).y as Float32Array;
@@ -56,10 +61,12 @@ export class OverlayLayer {
       const sh = b.col(Size).h as Float32Array;
       for (let i = 0; i < b.count; i++) {
         const r = b.rows[i];
-        ctx.strokeRect(px[r] - sw[r] / 2 - 2 * px1, py[r] - sh[r] / 2 - 2 * px1, sw[r] + 4 * px1, sh[r] + 4 * px1);
+        if (sw[r] < minWorld && sh[r] < minWorld) continue;
+        ctx.rect(px[r] - sw[r] / 2 - 2 * px1, py[r] - sh[r] / 2 - 2 * px1, sw[r] + 4 * px1, sh[r] + 4 * px1);
       }
       selected += b.count;
     });
+    ctx.stroke();
     this.selectedCount = selected;
 
     // hover ring (select tool, idle)

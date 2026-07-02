@@ -19,7 +19,10 @@ import { worldRef } from "./worldRef";
 export interface FrameStats {
   frameMs: number;
   ecsMs: number;
-  paintMs: number;
+  /** Content-layer paint (0 on frames the dirty gate skipped). */
+  contentMs: number;
+  /** Overlay paint — every frame, reported separately so an overlay bottleneck is visible. */
+  overlayMs: number;
   painted: boolean;
 }
 
@@ -54,10 +57,11 @@ export function startFrameLoop(
       dirty.doc = false;
       dirty.camera = false;
     }
+    const p1 = performance.now();
     paintOverlay();
-    const paintMs = performance.now() - p0;
+    const p2 = performance.now();
 
-    onFrame({ frameMs: now - last, ecsMs, paintMs, painted });
+    onFrame({ frameMs: now - last, ecsMs, contentMs: p1 - p0, overlayMs: p2 - p1, painted });
     last = now;
   };
   requestAnimationFrame(frame);

@@ -41,6 +41,9 @@ const TOOL_CURSOR: Record<ToolId, string> = {
 export function attachInput(target: HTMLElement, notify: (msg: string) => void): void {
   let spaceHeld = false;
   let panDrag: { id: number } | null = null;
+  // Deltas are computed from clientX/Y, not e.movementX/Y — movement* is device-pixel
+  // scaled on some platforms (Windows Chromium), which makes drags drift under the cursor.
+  let lastPt: { id: number; x: number; y: number } | null = null;
 
   onToolChange((t) => {
     target.style.cursor = TOOL_CURSOR[t];
@@ -62,6 +65,7 @@ export function attachInput(target: HTMLElement, notify: (msg: string) => void):
   );
 
   target.addEventListener("pointerdown", (e) => {
+    lastPt = { id: e.pointerId, x: e.clientX, y: e.clientY };
     if (e.button === 1 || spaceHeld) {
       panDrag = { id: e.pointerId };
       target.setPointerCapture(e.pointerId);
@@ -75,23 +79,38 @@ export function attachInput(target: HTMLElement, notify: (msg: string) => void):
   });
 
   target.addEventListener("pointermove", (e) => {
+    let dx = 0;
+    let dy = 0;
+    if (lastPt?.id === e.pointerId) {
+      dx = e.clientX - lastPt.x;
+      dy = e.clientY - lastPt.y;
+      lastPt.x = e.clientX;
+      lastPt.y = e.clientY;
+    }
     if (panDrag?.id === e.pointerId) {
-      panBy(e.movementX, e.movementY);
+      panBy(dx, dy);
       return;
     }
-    pointerMove(info(e), e.movementX, e.movementY);
+    pointerMove(info(e), dx, dy);
   });
 
-  const up = (e: PointerEvent): void => {
+  target.addEventListener("pointerup", (e) => {
     if (panDrag?.id === e.pointerId) {
       panDrag = null;
       target.style.cursor = TOOL_CURSOR[interaction.tool];
       return;
     }
     if (gestureActive()) pointerUp(info(e));
-  };
-  target.addEventListener("pointerup", up);
-  target.addEventListener("pointercancel", up);
+  });
+  // a cancelled pointer (tab switch, OS gesture) ABORTS the gesture — it must not commit
+  target.addEventListener("pointercancel", (e) => {
+    if (panDrag?.id === e.pointerId) {
+      panDrag = null;
+      target.style.cursor = TOOL_CURSOR[interaction.tool];
+      return;
+    }
+    if (gestureActive()) cancelGesture();
+  });
 
   window.addEventListener("keydown", (e) => {
     const tool = TOOL_KEYS[e.code];
@@ -109,6 +128,7 @@ export function attachInput(target: HTMLElement, notify: (msg: string) => void):
         break;
       case "Backspace":
       case "Delete": {
+        if (gestureActive()) break; // deleting mid-gesture would strand retained handles
         const n = deleteSelection();
         if (n > 0) notify(`deleted ${n.toLocaleString()} shape${n === 1 ? "" : "s"} (arrows cascaded for free)`);
         break;

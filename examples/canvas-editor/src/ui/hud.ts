@@ -14,7 +14,8 @@ const fmtMs = (ms: number): string => (ms >= 1 ? `${ms.toFixed(2)}ms` : `${(ms *
 export class Hud {
   private fpsEma = 60;
   private ecsEma = 0;
-  private paintEma = 0;
+  private contentEma = 0;
+  private overlayEma = 0;
   private lastText = 0;
   private readonly note: HTMLDivElement;
   private readonly body: HTMLDivElement;
@@ -33,13 +34,14 @@ export class Hud {
     const a = 0.08;
     this.fpsEma += (1000 / Math.max(s.frameMs, 0.01) - this.fpsEma) * a;
     this.ecsEma += (s.ecsMs - this.ecsEma) * a;
-    if (s.painted) this.paintEma += (s.paintMs - this.paintEma) * 0.3;
+    if (s.painted) this.contentEma += (s.contentMs - this.contentEma) * 0.3;
+    this.overlayEma += (s.overlayMs - this.overlayEma) * a; // every frame — the overlay IS an every-frame cost
 
     const now = performance.now();
     if (now - this.lastText < 100) return; // 10 Hz DOM writes — the HUD must not become the cost
     this.lastText = now;
     this.body.textContent =
-      `${this.fpsEma.toFixed(0)} fps · ecs ${fmtMs(this.ecsEma)} · paint ${fmtMs(this.paintEma)}\n` +
+      `${this.fpsEma.toFixed(0)} fps · ecs ${fmtMs(this.ecsEma)} · paint ${fmtMs(this.contentEma)} +${fmtMs(this.overlayEma)} overlay\n` +
       `${stats.entities.toLocaleString()} entities · ${drawBuffer.count.toLocaleString()} visible · ` +
       `${selected.toLocaleString()} selected · zoom ${(cam.zoom * 100).toFixed(0)}%`;
   }
