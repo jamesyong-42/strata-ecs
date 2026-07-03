@@ -11,7 +11,6 @@
 
 import type { Pipeline } from "strata";
 import { drawBuffer } from "../render/drawBuffer";
-import { syncCameraResource } from "./camera";
 import { dirty } from "./commands";
 import { repaint } from "./reactivity";
 import { syncGestureResource } from "./tools";
@@ -39,7 +38,7 @@ export function startFrameLoop(
     const world = worldRef.current;
 
     world.sync(); // Part I no-op — kept from day one so the durable layer attaches with zero rewrite
-    if (dirty.camera) syncCameraResource();
+    // (No camera sync step: camera mutations write the Camera resource immediately, 003 §1.4.)
     syncGestureResource(); // pointer deltas accumulated between frames → the Gesture resource
 
     drawBuffer.reset();
@@ -53,18 +52,18 @@ export function startFrameLoop(
     // one we notify. Must run BEFORE the paint gate below.
     worldRef.current.reactive.notify();
 
-    // Content paint gate. The reactive observer (repaint.doc) IS the change detector now — a
-    // drag/draw/duplicate/delete/running-sim all reach it through column stamps + rows-version;
-    // dirty.doc/camera stay only for app-state the world can't see (toggles, restore, camera).
+    // Content paint gate. The reactive observers (repaint.doc) ARE the change detection now —
+    // drag/draw/duplicate/delete/running-sim reach it through column stamps + rows-version,
+    // and pan/zoom through the Camera resource stamp (003 §1.4); dirty.doc survives only for
+    // app-state the world can't see (toggles, boot/restore first paint).
     // The overlay repaints every frame; it never forces a content repaint.
-    const painted = repaint.doc || dirty.doc || dirty.camera;
+    const painted = repaint.doc || dirty.doc;
     const p0 = performance.now();
     if (painted) {
       drawBuffer.sortByZ(); // app-side prep, honestly billed to paint, not to the ECS
       paintContent();
       repaint.doc = false;
       dirty.doc = false;
-      dirty.camera = false;
     }
     const p1 = performance.now();
     paintOverlay();

@@ -1,13 +1,13 @@
 /**
- * The infinite-canvas camera. App-side object is the source of truth (DOM events mutate it
- * at event rate); the frame loop syncs it into the Camera RESOURCE once per frame before
- * the tick, which is all CullSystem reads. cam.x/y = world coords at the view center,
- * cam.zoom = screen px per world unit.
+ * The infinite-canvas camera. The app-side object is the working state (DOM events mutate
+ * it at event rate); every mutation immediately writes the Camera RESOURCE — the write
+ * stamps it (003 §1.2), and the `observeResource(Camera)` watch in reactivity.ts turns the
+ * stamp into a repaint. There is no `dirty.camera` flag anymore: the resource IS the change
+ * signal. cam.x/y = world coords at the view center, cam.zoom = screen px per world unit.
  */
 
 import { renderable } from "../ecs/queries";
 import { Position, Size, Camera as CameraRes } from "../ecs/schema";
-import { dirty } from "./commands";
 import { worldRef } from "./worldRef";
 
 export const MIN_ZOOM = 0.02;
@@ -15,7 +15,7 @@ export const MAX_ZOOM = 16;
 
 export const cam = { x: 0, y: 0, zoom: 1, w: 0, h: 0 };
 
-/** Write the app camera into the ECS resource (frame loop calls this when dirty.camera). */
+/** Write the app camera into the ECS resource — the stamp-bearing write chokepoint. */
 export function syncCameraResource(): void {
   worldRef.current.setResource(CameraRes, { x: cam.x, y: cam.y, zoom: cam.zoom, w: cam.w, h: cam.h });
 }
@@ -31,7 +31,7 @@ export function screenToWorld(sx: number, sy: number): { x: number; y: number } 
 export function panBy(dxPx: number, dyPx: number): void {
   cam.x -= dxPx / cam.zoom;
   cam.y -= dyPx / cam.zoom;
-  dirty.camera = true;
+  syncCameraResource();
 }
 
 /** Zoom by `factor`, keeping the world point under the cursor fixed (zoom-around-cursor). */
@@ -43,13 +43,13 @@ export function zoomAt(sx: number, sy: number, factor: number): void {
   cam.zoom = next;
   cam.x = wx - (sx - cam.w / 2) / cam.zoom;
   cam.y = wy - (sy - cam.h / 2) / cam.zoom;
-  dirty.camera = true;
+  syncCameraResource();
 }
 
 export function setViewportSize(w: number, h: number): void {
   cam.w = w;
   cam.h = h;
-  dirty.camera = true;
+  syncCameraResource();
 }
 
 /** Frame the whole document (Shift+1). Read-only out-of-tick query walk (§16). */
@@ -79,5 +79,5 @@ export function zoomToFit(): void {
     MAX_ZOOM,
     Math.max(MIN_ZOOM, Math.min(cam.w / ((maxX - minX) * pad), cam.h / ((maxY - minY) * pad))),
   );
-  dirty.camera = true;
+  syncCameraResource();
 }

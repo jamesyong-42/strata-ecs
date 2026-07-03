@@ -9,7 +9,7 @@
  */
 
 import { attachObserver, type ObserverOptions } from "strata/tools";
-import { cam, setViewportSize, zoomToFit } from "./app/camera";
+import { cam, panBy, setViewportSize, zoomToFit } from "./app/camera";
 import { dirty, setOnMutate, stats } from "./app/commands";
 import { duplicateSelection, setSelection } from "./app/editorOps";
 import { describeShape } from "./app/describe";
@@ -89,6 +89,10 @@ function fitCanvases(): void {
   contentLayer.resize(w, h, dpr);
   overlayLayer.resize(w, h, dpr);
   setViewportSize(w, h);
+  // Resizing the backing stores CLEARED them — and a cam-equal resize (a DPR-only change, or
+  // any event where w/h end up identical) suppresses the Camera observer, so the cleared
+  // canvas is exactly the app-state the world can't see: force the repaint (review catch).
+  dirty.doc = true;
 }
 window.addEventListener("resize", fitCanvases);
 fitCanvases();
@@ -152,6 +156,16 @@ hud.setSimState(isSimOn()); // boot may have restored (or forced) a running stor
 // ?script=persist exercises the full save→clear→restore cycle in-process: export bytes,
 // wipe the world, import into a FRESH world (ref swap + observer re-attach) — the same
 // code path the autosave boot-restore takes.
+// ?script=pan proves the camera→resource→observeResource→repaint chain (003 §1.4) headlessly:
+// a programmatic pan long after boot must repaint (the screenshot shows an off-center board);
+// a broken chain would leave the zoom-to-fit framing frozen on screen.
+if (params.get("script") === "pan") {
+  setTimeout(() => {
+    panBy(360, 220);
+    notify("pan test: panned 360,220 — this frame repainted via observeResource(Camera)");
+  }, 600);
+}
+
 if (params.get("script") === "persist") {
   setTimeout(() => {
     const before = stats.entities;

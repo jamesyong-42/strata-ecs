@@ -12,13 +12,10 @@
 
 export const dirty = {
   /** MANUAL force-repaint channel for app-state the world cannot see — cull-test / LOD /
-   *  pipeline toggles (main.ts) and the first frame after a restore. NOT set by mutate()
-   *  anymore: document content changes are detected by the reactive observer instead. */
+   *  pipeline toggles (main.ts) and the first frame after boot/restore. NOT set by mutate():
+   *  document content is detected by the reactive observer, and the camera by
+   *  observeResource(Camera) (003 §1) — this flag is the honest residue, nothing more. */
   doc: true,
-  /** Camera moved/zoomed/resized — repaint + re-sync the Camera resource before the tick.
-   *  (Still manual: Camera is a resource, and resource reactivity is a deferred fast-follow,
-   *  002 §6.) */
-  camera: true,
 };
 
 /** App-side counters: HUD reads `entities`; new shapes take `++zTop` so creation order

@@ -21,7 +21,7 @@
 import { createWorld } from "strata";
 import { renderable } from "../ecs/queries";
 import { Camera as CameraRes, Gesture, ZIndex } from "../ecs/schema";
-import { cam } from "./camera";
+import { cam, syncCameraResource } from "./camera";
 import { dirty, stats } from "./commands";
 import { cancelGesture, gestureActive } from "./tools";
 import { worldRef } from "./worldRef";
@@ -179,7 +179,7 @@ export function restore(bytes: Uint8Array): void {
     cam.zoom = saved.zoom;
   }
 
-  dirty.doc = true;
-  dirty.camera = true;
+  dirty.doc = true; // first post-restore paint (observer registration never back-fires)
+  syncCameraResource(); // write this window's w/h over the snapshot camera in the NEW world
   for (const fn of restoreListeners) fn();
 }

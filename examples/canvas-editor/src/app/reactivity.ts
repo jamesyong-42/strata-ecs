@@ -18,31 +18,42 @@
 
 import type { Unsubscribe } from "strata";
 import { renderable } from "../ecs/queries";
-import { Fill, Kind, Label, Position, Size, ZIndex } from "../ecs/schema";
+import { Camera, Fill, Kind, Label, Position, Size, ZIndex } from "../ecs/schema";
 import { scheduleAutosave } from "./persistence";
 import { worldRef } from "./worldRef";
 
-/** Observer-driven repaint channel: raised by the Tier-1 callback, consumed after each paint
- *  (the frame loop resets it alongside `dirty.doc`). Initial `true` so the very first frame
- *  paints even before anything stamps. */
+/** Observer-driven repaint channel: raised by the reactive callbacks, consumed after each
+ *  paint (the frame loop resets it alongside `dirty.doc`). Initial `true` so the very first
+ *  frame paints even before anything stamps. */
 export const repaint = { doc: true };
 
-let unsub: Unsubscribe | null = null;
+const unsubs: Unsubscribe[] = [];
 
 /**
- * (Re)subscribe the single Tier-1 renderable observer to the current world. Drops any prior
- * subscription first — a restore swaps `worldRef.current`, and a watch on the dead world's
- * registry would silently observe nothing.
+ * (Re)subscribe the editor's observers to the current world. Drops any prior subscriptions
+ * first — a restore swaps `worldRef.current`, and a watch on the dead world's registry
+ * would silently observe nothing.
  */
 export function wireReactivity(): void {
-  unsub?.();
-  unsub = worldRef.current.reactive.observeQuery(
-    renderable,
-    // Watch every drawable column (Label included — a note's text edit must repaint too).
-    [Position, Size, Fill, Kind, ZIndex, Label],
-    () => {
+  for (const u of unsubs) u();
+  unsubs.length = 0;
+  const reactive = worldRef.current.reactive;
+  unsubs.push(
+    reactive.observeQuery(
+      renderable,
+      // Watch every drawable column (Label included — a note's text edit must repaint too).
+      [Position, Size, Fill, Kind, ZIndex, Label],
+      () => {
+        repaint.doc = true;
+        scheduleAutosave();
+      },
+    ),
+    // Pan/zoom/resize: camera mutations write the Camera resource immediately (camera.ts),
+    // and this Tier-3 watch turns the stamp into a repaint (003 §1.4). View-only —
+    // deliberately NOT wired to autosave (per-pan churn is noise; any doc edit persists the
+    // viewport, which rides the snapshot as a resource).
+    reactive.observeResource(Camera, () => {
       repaint.doc = true;
-      scheduleAutosave();
-    },
+    }),
   );
 }
