@@ -18,6 +18,7 @@ import {
   defineComponent,
   defineQuery,
   defineRelation,
+  defineResource,
   defineSystem,
   defineTag,
   phase,
@@ -30,6 +31,7 @@ const Other = defineComponent<{ n: number }>("RCTOther", { n: "u32" });
 const Driver = defineComponent<{ n: number }>("RCTDriver", { n: "u32" });
 const Selected = defineTag("RCTSelected");
 const Rel = defineRelation("RCTRel", { arity: "one" });
+const Camera = defineResource<{ x: number; y: number; zoom: number }>("RCTCamera", { x: "f32", y: "f32", zoom: "f32" });
 
 const posQ = defineQuery([Pos]);
 const driverQ = defineQuery([Driver]);
@@ -245,24 +247,38 @@ describe("Tier 2 — entity-level (002 §3.2)", () => {
 });
 
 describe("Tier 3 — value-level (002 §3.3)", () => {
-  it("suppresses equal values, fires on real change, and peek returns a stable then fresh reference", () => {
+  it("suppresses equal values, fires on real change; peek always reads the CURRENT store value", () => {
     const w = createWorld();
     const e = w.spawn({ components: [[Pos, { x: 5, y: 0 }]] });
     const seen: unknown[] = [];
     w.reactive.observeValue(e, Pos, (v) => seen.push(v));
-    const ref0 = w.reactive.peek(e, Pos);
 
     w.edit(e).set(Pos, { x: 5, y: 0 }); // equal — suppressed
     w.reactive.notify();
     expect(seen).toHaveLength(0);
-    expect(w.reactive.peek(e, Pos)).toBe(ref0); // same reference across a quiet pass
+    expect(w.reactive.peek(e, Pos)).toStrictEqual({ x: 5, y: 0 });
 
     w.edit(e).set(Pos, { x: 9, y: 0 }); // real change — fires
     w.reactive.notify();
     expect(seen).toEqual([{ x: 9, y: 0 }]);
-    const ref1 = w.reactive.peek(e, Pos);
-    expect(ref1).not.toBe(ref0); // a new boxed reference after a real change
-    expect(ref1).toEqual({ x: 9, y: 0 });
+    // peek reads the STORE, never a watch's box (a first watch with a coarse eq must not be
+    // able to starve other consumers — the adversarially-confirmed heisenbug). Reference
+    // stability for useSyncExternalStore is the binding's ref-cache's job, not peek's.
+    expect(w.reactive.peek(e, Pos)).toStrictEqual({ x: 9, y: 0 });
+  });
+
+  it("peek/peekResource are immune to a coexisting coarse-eq watch (registration order)", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 1 }]] });
+    // A coarse watch registered FIRST — only cares about y. Its box will go stale on x-only
+    // changes; peek must not serve it.
+    w.reactive.observeValue(e, Pos, () => {}, (a, b) => (a as { y: number }).y === (b as { y: number }).y);
+    const fired: unknown[] = [];
+    w.reactive.observeValue(e, Pos, (v) => fired.push(v)); // default eq, registered second
+    w.edit(e).set(Pos, { x: 99, y: 1 }); // x-only change
+    w.reactive.notify();
+    expect(fired).toEqual([{ x: 99, y: 1 }]); // fine watch fires…
+    expect(w.reactive.peek(e, Pos)).toStrictEqual({ x: 99, y: 1 }); // …and peek agrees with the store
   });
 
   it("honors a custom equality predicate", () => {
@@ -540,6 +556,7 @@ describe("master gate + advisory diagnostics wiring", () => {
     );
     w.tick([phase("move", [Mover])]); // a declared writer — would blanket-stamp if reactive were on
     w.addComponent(e, Other, { n: 1 }); // migrate
+    w.setResource(Camera, { x: 1, y: 2, zoom: 1 }); // resource write
 
     const rt = w.runtime;
     for (const arch of rt.archetypes()) {
@@ -548,6 +565,7 @@ describe("master gate + advisory diagnostics wiring", () => {
       for (let i = 0; i < arch.lastWrittenFrame.length; i++) expect(arch.lastWrittenFrame[i]).toBe(0);
     }
     expect(rt.lastTagRelFrame).toBe(0);
+    expect(rt.resourceFrame(Camera.id)).toBe(0); // setResource did not stamp — reactive never armed (003 §1.2)
   });
 
   it("validatePipelineAccess warns once in a reactive world on a read-before-write phase; a never-reactive world never warns", () => {
@@ -579,5 +597,154 @@ describe("master gate + advisory diagnostics wiring", () => {
     w2.tick(pipe2);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+describe("resource reactivity (003 §1)", () => {
+  it("fires on setResource + notify", () => {
+    const w = createWorld();
+    w.setResource(Camera, { x: 0, y: 0, zoom: 1 });
+    const seen: unknown[] = [];
+    w.reactive.observeResource(Camera, (v) => seen.push(v));
+
+    w.setResource(Camera, { x: 5, y: 0, zoom: 1 });
+    w.reactive.notify();
+    expect(seen).toEqual([{ x: 5, y: 0, zoom: 1 }]);
+  });
+
+  it("suppresses an equal-value setResource (a new object with the same fields)", () => {
+    const w = createWorld();
+    w.setResource(Camera, { x: 5, y: 0, zoom: 1 });
+    let fired = 0;
+    w.reactive.observeResource(Camera, () => fired++);
+
+    w.setResource(Camera, { x: 5, y: 0, zoom: 1 }); // fresh object, identical fields
+    w.reactive.notify();
+    expect(fired).toBe(0); // default shallow-eq over fields suppresses it
+  });
+
+  it("honors a custom equality predicate", () => {
+    const w = createWorld();
+    w.setResource(Camera, { x: 0, y: 0, zoom: 1 });
+    let fired = 0;
+    // Consider the resource equal iff zoom matches — pan-only changes are suppressed.
+    w.reactive.observeResource(Camera, () => fired++, (a, b) => a.zoom === b.zoom);
+
+    w.setResource(Camera, { x: 99, y: 99, zoom: 1 });
+    w.reactive.notify();
+    expect(fired).toBe(0); // zoom unchanged
+
+    w.setResource(Camera, { x: 99, y: 99, zoom: 2 });
+    w.reactive.notify();
+    expect(fired).toBe(1); // zoom changed
+  });
+
+  it("observes a setResource made in the same frame as registration — no priming", () => {
+    const w = createWorld();
+    const seen: unknown[] = [];
+    w.reactive.observeResource(Camera, (v) => seen.push(v)); // Camera is unset here
+
+    w.setResource(Camera, { x: 1, y: 2, zoom: 3 }); // same frame as registration
+    w.reactive.notify();
+    expect(seen).toEqual([{ x: 1, y: 2, zoom: 3 }]);
+  });
+
+  it("observes an out-of-tick setResource made between two notifies", () => {
+    const w = createWorld();
+    w.setResource(Camera, { x: 0, y: 0, zoom: 1 });
+    let fired = 0;
+    w.reactive.observeResource(Camera, () => fired++);
+    w.reactive.notify(); // a pass runs and advances the frame
+
+    w.setResource(Camera, { x: 4, y: 0, zoom: 1 }); // between passes
+    w.reactive.notify();
+    expect(fired).toBe(1);
+
+    w.reactive.notify();
+    expect(fired).toBe(1); // not re-observed on a quiet pass
+  });
+
+  it("peekResource returns a stable reference across quiet notifies and a fresh one after a change", () => {
+    const w = createWorld();
+    w.setResource(Camera, { x: 5, y: 0, zoom: 1 });
+    w.reactive.observeResource(Camera, () => {});
+    const ref0 = w.reactive.peekResource(Camera);
+
+    w.reactive.notify(); // quiet
+    expect(w.reactive.peekResource(Camera)).toBe(ref0);
+
+    w.setResource(Camera, { x: 9, y: 0, zoom: 1 });
+    w.reactive.notify();
+    const ref1 = w.reactive.peekResource(Camera);
+    expect(ref1).not.toBe(ref0);
+    expect(ref1).toEqual({ x: 9, y: 0, zoom: 1 });
+  });
+
+  it("supports many watches on one resource — none evicts another; unsubscribe removes just one", () => {
+    const w = createWorld();
+    const a: unknown[] = [];
+    const b: unknown[] = [];
+    const offA = w.reactive.observeResource(Camera, (v) => a.push(v));
+    w.reactive.observeResource(Camera, (v) => b.push(v));
+
+    w.setResource(Camera, { x: 9, y: 0, zoom: 1 });
+    w.reactive.notify();
+    expect(a).toEqual([{ x: 9, y: 0, zoom: 1 }]);
+    expect(b).toEqual([{ x: 9, y: 0, zoom: 1 }]);
+
+    offA();
+    w.setResource(Camera, { x: 12, y: 0, zoom: 1 });
+    w.reactive.notify();
+    expect(a).toEqual([{ x: 9, y: 0, zoom: 1 }]); // A is gone
+    expect(b).toEqual([{ x: 9, y: 0, zoom: 1 }, { x: 12, y: 0, zoom: 1 }]); // B still live
+  });
+
+  it("baselines an unset resource to an undefined box; the first set fires with the value", () => {
+    const w = createWorld();
+    const seen: unknown[] = [];
+    w.reactive.observeResource(Camera, (v) => seen.push(v)); // Camera never set
+    expect(w.reactive.peekResource(Camera)).toBeUndefined();
+
+    w.setResource(Camera, { x: 1, y: 2, zoom: 3 });
+    w.reactive.notify();
+    expect(seen).toEqual([{ x: 1, y: 2, zoom: 3 }]);
+    expect(w.reactive.peekResource(Camera)).toEqual({ x: 1, y: 2, zoom: 3 });
+  });
+
+  it("unsubscribing a resource watch from inside its own callback is safe", () => {
+    const w = createWorld();
+    let fired = 0;
+    let off: Unsubscribe = () => {};
+    off = w.reactive.observeResource(Camera, () => {
+      fired++;
+      off();
+    });
+
+    w.setResource(Camera, { x: 1, y: 0, zoom: 1 });
+    w.reactive.notify();
+    expect(fired).toBe(1);
+
+    w.setResource(Camera, { x: 2, y: 0, zoom: 1 });
+    w.reactive.notify();
+    expect(fired).toBe(1); // detached — no further fire
+  });
+
+  it("a resource watch does not survive into a fresh world (each World has its own Reactive)", () => {
+    const w1 = createWorld();
+    w1.setResource(Camera, { x: 1, y: 0, zoom: 1 });
+    let fired1 = 0;
+    w1.reactive.observeResource(Camera, () => fired1++);
+    const r1 = w1.reactive;
+
+    // A world swap re-mints the World + its Reactive (002 §6 — registries die with their world).
+    const w2 = createWorld();
+    expect(w2.reactive).not.toBe(r1);
+    w2.setResource(Camera, { x: 99, y: 0, zoom: 1 });
+    w2.reactive.notify();
+    expect(fired1).toBe(0); // w1's watch is untouched by w2's activity
+
+    w1.setResource(Camera, { x: 5, y: 0, zoom: 1 });
+    w1.reactive.notify();
+    expect(fired1).toBe(1); // …and still live on its own world
   });
 });

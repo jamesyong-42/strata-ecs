@@ -1,0 +1,17 @@
+{
+  // strata/react is a React binding — same strictness as the root config plus DOM libs and the
+  // automatic JSX runtime (for the .tsx tests). The ROOT tsconfig excludes src/react precisely so
+  // the core keeps typechecking without DOM/React (that absence is the "core never touches React"
+  // guarantee); this project is the react half of `pnpm typecheck`.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["./**/*.ts", "./**/*.tsx", "../core/**/*.ts"],
+  // CRITICAL: the inherited root exclude contains "src/react" — without resetting it here, this
+  // project would typecheck ZERO react files (the exact bug the src/tools tsconfig documents).
+  "exclude": []
+}

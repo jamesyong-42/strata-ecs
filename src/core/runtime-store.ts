@@ -30,6 +30,7 @@ import {
   type FieldMeta,
   type Relation,
   type Resource,
+  type ResourceId,
   type Tag,
   componentById,
   encodeComponentValue,
@@ -108,6 +109,13 @@ export class RuntimeStore implements ECSStore {
    * row-filtered Tier-1 observers consult it; a coarse single counter is sufficient (§4.2).
    */
   private tagRelFrame = 0;
+  /**
+   * Per-resource `lastWrittenFrame` (Patch Note 003 §1.2), a dense array indexed by `ResourceId`
+   * (ids are dense). Bumped in `setResource` only — resources have no column/structural path — behind
+   * the `reactiveOn` gate. Grown lazily on first stamp past the current length; a never-stamped id
+   * (0) reads as older than any observer. NOT on the stored value object (replaced wholesale per set).
+   */
+  private resourceFrames = new Float64Array(0);
   /**
    * Master gate for ALL reactive bookkeeping (value stamps, structural bumps, tag/relation bumps) —
    * false until the world's reactive layer is first touched, so a world that never uses reactivity
@@ -327,6 +335,26 @@ export class RuntimeStore implements ECSStore {
   /** @internal The frame of the most recent tag/relation mutation (002 §4.2 membership). */
   get lastTagRelFrame(): number {
     return this.tagRelFrame;
+  }
+
+  /**
+   * Stamp resource `id` at the current frame (003 §1.2). Gated on `reactiveOn` like every other stamp
+   * site, and grows the dense array to fit `id` on first use (copy-forward, zero-fill). Called from
+   * `setResource` only — the resource's single write chokepoint.
+   */
+  private bumpResource(id: ResourceId): void {
+    if (!this.reactiveOn) return;
+    if (id >= this.resourceFrames.length) {
+      const next = new Float64Array(id + 1);
+      next.set(this.resourceFrames);
+      this.resourceFrames = next;
+    }
+    this.resourceFrames[id] = this.frameCounter;
+  }
+
+  /** @internal The frame of the most recent `setResource(id)` — 0 when never stamped/out of range (003 §1.2). */
+  resourceFrame(id: ResourceId): number {
+    return id < this.resourceFrames.length ? this.resourceFrames[id] : 0;
   }
 
   /**
@@ -873,6 +901,14 @@ export class RuntimeStore implements ECSStore {
   // ---------------------------------------------------------------------------
 
   setResource<S>(res: Resource<S>, value: S): void {
+    if (DEV && this.inObserverEmit) {
+      // Value writes are exempt from the structural rejection, but a setResource from inside a
+      // reactive callback stamps the CURRENT frame — already seen by every watch processed this
+      // pass — so it would be silently unobservable forever. Diagnose loudly; schedule instead.
+      devWarn(
+        `setResource("${res.name}") from inside a reactive callback is stamped at the current frame and will not be observed — schedule it for the next frame instead (002 §6).`,
+      );
+    }
     const obj: Record<string, unknown> = {};
     const v = value as Record<string, unknown>;
     for (const f of res.fields) {
@@ -885,6 +921,7 @@ export class RuntimeStore implements ECSStore {
       }
     }
     this.resources.set(res.id, obj);
+    this.bumpResource(res.id); // resource-version stamp (003 §1.2) — gated on reactiveOn
   }
 
   getResource<S>(res: Resource<S>): S | undefined {

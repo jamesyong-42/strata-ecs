@@ -6,6 +6,7 @@ export default defineConfig({
     "durable/index": "src/durable/index.ts",
     "ephemeral/index": "src/ephemeral/index.ts",
     "tools/index": "src/tools/index.ts",
+    "react/index": "src/react/index.ts",
   },
   format: ["esm"],
   // The tools entry is a browser panel — its d.ts generation needs DOM lib types, which the

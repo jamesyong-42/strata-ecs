@@ -109,6 +109,8 @@ src/
   storage/     Part II — the storage substrate  (internal plumbing)
   durable/     Part III — the durable layer      → export: strata/durable
   ephemeral/   Part IV — the ephemeral layer      → export: strata/ephemeral
+  tools/       dev-tools observer panel          → export: strata/tools
+  react/       React binding (useComponent/…)    → export: strata/react
   index.ts     public entry (re-exports core)
 docs/
   design.md         the full design specification

@@ -9,6 +9,9 @@
  *   - Tier 2 {@link Reactive.observeEntity} — entity-level: this entity's column stamped (fires even if equal).
  *   - Tier 3 {@link Reactive.observeValue}  — value-level: this entity's value actually differs (equality-checked).
  *
+ * {@link Reactive.observeResource} adds a Tier-3-equivalent channel for world-singleton resources
+ * (Patch Note 003 §1) — `setResource` replaces the object wholesale, so it is equality-suppressed too.
+ *
  * Registration is a frame boundary (002 §4.1a): each `observe*` advances the store frame and baselines
  * the observer at `frame − 1`, so a change made in the SAME frame as registration is observed at the
  * very next `notify()` while nothing stamped before the subscription ever fires — no priming needed.
@@ -19,7 +22,7 @@
 
 import type { Entity } from "./entity";
 import type { Archetype } from "./archetype";
-import type { Component, ComponentId } from "./schema";
+import type { Component, ComponentId, Resource, ResourceId } from "./schema";
 import type { Query } from "./query";
 import type { RuntimeStore } from "./runtime-store";
 import { devError } from "./dev";
@@ -56,6 +59,22 @@ interface Watch {
   lastSeen: number;
 }
 
+/**
+ * A resource watch (Patch Note 003 §1.3) — Tier-3 semantics over a world singleton. `setResource`
+ * replaces the stored object wholesale, so identity alone cannot mean "changed"; the box + `eq`
+ * suppress no-op writes exactly as the value tier does. No death path — resources are never removed.
+ */
+interface ResourceWatch {
+  readonly resource: Resource;
+  readonly cb: (v: unknown) => void;
+  readonly eq: (a: unknown, b: unknown) => boolean;
+  /** Last-delivered value — this watch's OWN eq baseline only (peek never serves boxes). */
+  box: unknown;
+  /** Set by unsubscribe; a snapshot-iterated pass skips it. */
+  dead: boolean;
+  lastSeen: number;
+}
+
 /** Shallow structural equality over a component's decoded field values (Tier 3 default, 002 §3.3). */
 function shallowEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
@@ -76,6 +95,8 @@ export class Reactive {
   private readonly queryWatches: QueryWatch[] = [];
   /** (component, entity) → the watches on that cell. An array so a second watch never evicts the first. */
   private readonly watched = new Map<ComponentId, Map<Entity, Watch[]>>();
+  /** resource → its watches (003 §1.3). A collection, like the entity cells; no death path. */
+  private readonly resourceWatched = new Map<ResourceId, ResourceWatch[]>();
   /** Entities the eager death hook saw destroyed, awaiting an undefined-fire at the next notify (§3.4). */
   private readonly pendingDeaths = new Set<Entity>();
   /** Live Tier-2/3 watch count — the eager death hook is installed while this is > 0 (§3.4). */
@@ -129,6 +150,35 @@ export class Reactive {
       cb as (v: unknown) => void,
       (eq as ((a: unknown, b: unknown) => boolean) | undefined) ?? shallowEqual,
     );
+  }
+
+  /**
+   * Resource-level (003 §1.3) — Tier-3 semantics over a world singleton: fire only when a
+   * `setResource` actually changed the value (equality-checked; default shallow eq over its fields).
+   * A never-set resource baselines its box to `undefined`, so the first set fires with the value.
+   */
+  observeResource<S>(
+    r: Resource<S>,
+    cb: (v: S | undefined) => void,
+    eq?: (a: S, b: S) => boolean,
+  ): Unsubscribe {
+    this.store.armAccessEnforcement(); // a reactive observer arms 001 dev-enforcement (001 §2.4)
+    this.store.advanceFrame(); // registration frame boundary (§4.1a)
+    let arr = this.resourceWatched.get(r.id);
+    if (arr === undefined) {
+      arr = [];
+      this.resourceWatched.set(r.id, arr);
+    }
+    const watch: ResourceWatch = {
+      resource: r,
+      cb: cb as (v: unknown) => void,
+      eq: (eq as ((a: unknown, b: unknown) => boolean) | undefined) ?? shallowEqual,
+      box: this.store.getResource(r), // prime the box (undefined if unset) — no back-fire at registration
+      dead: false,
+      lastSeen: this.store.frame - 1,
+    };
+    arr.push(watch);
+    return () => this.removeResourceWatch(r.id, watch);
   }
 
   private registerWatch(
@@ -185,6 +235,7 @@ export class Reactive {
     try {
       if (this.pendingDeaths.size > 0) this.drainDeaths();
       if (this.queryWatches.length > 0) this.notifyQueries();
+      if (this.resourceWatched.size > 0) this.notifyResources();
       if (this.watched.size > 0) this.notifyWatches();
     } finally {
       store.setObserverEmit(prev);
@@ -202,6 +253,11 @@ export class Reactive {
         if (arr === undefined) continue;
         for (const w of [...arr]) {
           if (w.dead) continue;
+          // Null the box BEFORE firing (mirrors the component-removal path): a React binding's
+          // getSnapshot reads peek() synchronously inside the notification, and a stale box
+          // would make useSyncExternalStore skip the re-render (003 §2 — found by the binding).
+          w.hadValue = false;
+          w.box = undefined;
           fire(w.cb, undefined);
           this.removeWatch(cid, e, w);
         }
@@ -222,6 +278,31 @@ export class Reactive {
     }
   }
 
+  /** (2.5) Resources (003 §1.3). A Tier-3 pass between Tier 1 and the entity tiers. */
+  private notifyResources(): void {
+    const frame = this.store.frame;
+    for (const [id, arr] of [...this.resourceWatched]) {
+      const stamp = this.store.resourceFrame(id);
+      // Read the current value at most once per resource, shared across its watches.
+      let vRead = false;
+      let v: unknown;
+      for (const w of [...arr]) {
+        if (w.dead) continue;
+        if (stamp <= w.lastSeen) continue;
+        if (!vRead) {
+          v = this.store.getResource(w.resource);
+          vRead = true;
+        }
+        const changed = w.box === undefined || v === undefined ? w.box !== v : !w.eq(v, w.box);
+        if (changed) {
+          w.box = v;
+          fire(w.cb, v);
+        }
+        w.lastSeen = frame;
+      }
+    }
+  }
+
   /** (3) Tier 2/3 (§3.2/§3.3). Snapshot each cell so death-removal / self-unsub during dispatch is safe. */
   private notifyWatches(): void {
     const frame = this.store.frame;
@@ -233,6 +314,8 @@ export class Reactive {
           // Fallback death path (§3.4) — eager cleanup usually removed it at drainDeaths already.
           for (const w of [...arr]) {
             if (w.dead) continue;
+            w.hadValue = false;
+            w.box = undefined; // before firing — peek() must not serve the dead value (003 §2)
             fire(w.cb, undefined);
             this.removeWatch(cid, e, w);
           }
@@ -281,13 +364,24 @@ export class Reactive {
   // Reads / escape hatch / frame view
   // ---------------------------------------------------------------------------
 
-  /** The first Tier-3 watch's boxed value if `(e, c)` is value-watched (stable ref), else a `get` read (002 §5). */
+  /**
+   * The CURRENT value, read from the store — never a watch's box. Per-watch boxes exist only
+   * for each watch's own eq decision; serving one from peek made the snapshot depend on which
+   * watch registered first (a coexisting coarse-eq watch starved React re-renders — an
+   * adversarially-confirmed heisenbug). `get` decodes a fresh object per call, so a
+   * `useSyncExternalStore` consumer must ref-cache its snapshot (strata/react does).
+   */
   peek<S>(e: Entity, c: Component<S>): S | undefined {
-    const arr = this.watched.get(c.id)?.get(e);
-    if (arr !== undefined) {
-      for (const w of arr) if (w.tier === 3) return w.box as S | undefined;
-    }
     return this.store.get(e, c);
+  }
+
+  /**
+   * The CURRENT resource value — the stored object itself, which is reference-stable between
+   * `setResource` calls (that stability, not a watch box, is what makes it a valid
+   * `useSyncExternalStore` snapshot). Same first-watch-box hazard rationale as {@link peek}.
+   */
+  peekResource<S>(r: Resource<S>): S | undefined {
+    return this.store.getResource(r);
   }
 
   /** Manual whole-component stamp for writes no chokepoint can see (002 §2.2 escape hatch). */
@@ -344,6 +438,18 @@ export class Reactive {
       if (m!.size === 0) this.watched.delete(cid);
     }
     this.releaseLifecycle();
+  }
+
+  /** Remove exactly `watch` from its resource (003 §1.3) — idempotent; no lifecycle hook (no death path). */
+  private removeResourceWatch(id: ResourceId, watch: ResourceWatch): void {
+    if (watch.dead) return;
+    watch.dead = true;
+    const arr = this.resourceWatched.get(id);
+    if (arr !== undefined) {
+      const i = arr.indexOf(watch);
+      if (i >= 0) arr.splice(i, 1);
+      if (arr.length === 0) this.resourceWatched.delete(id);
+    }
   }
 }
 
