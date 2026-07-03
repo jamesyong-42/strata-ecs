@@ -16,8 +16,8 @@ import { useComponent, useResource } from "./index";
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // Process-global schema handles (RXT-prefixed to stay clear of any other suite's names).
-const RXTPos = defineComponent<{ x: number; y: number }>("RXTPos", { x: "f32", y: "f32" });
-const RXTCamera = defineResource<{ zoom: number }>("RXTCamera", { zoom: "f32" });
+const RXTPos = defineComponent("RXTPos", { x: "f32", y: "f32" });
+const RXTCamera = defineResource("RXTCamera", { zoom: "f32" });
 
 interface Counter {
   n: number;

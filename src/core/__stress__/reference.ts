@@ -22,9 +22,9 @@ import {
 } from "../index";
 
 // Fixed schema (uniquely named; process-global, evaluated once per isolated test file).
-const CA = defineComponent<{ x: number }>("RefCA", { x: "i32" });
-const CB = defineComponent<{ y: number }>("RefCB", { y: "f64" });
-const CC = defineComponent<{ s: string }>("RefCC", { s: "string" });
+const CA = defineComponent("RefCA", { x: "i32" });
+const CB = defineComponent("RefCB", { y: "f64" });
+const CC = defineComponent("RefCC", { s: "string" });
 const COMPS: ReadonlyArray<{ key: string; h: Component; field: string }> = [
   { key: "CA", h: CA as Component, field: "x" },
   { key: "CB", h: CB as Component, field: "y" },

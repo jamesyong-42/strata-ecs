@@ -31,7 +31,7 @@ const packed_5: Scenario = {
   id: "packed_5",
   setup() {
     const comps = ["A", "B", "C", "D", "E"].map((k) =>
-      defineComponent<{ value: number }>(`P5_${k}`, VALUE),
+      defineComponent(`P5_${k}`, VALUE),
     );
     const w = createWorld();
     for (let i = 0; i < N.packed; i++) {
@@ -66,11 +66,11 @@ const packed_5: Scenario = {
 const simple_iter: Scenario = {
   id: "simple_iter",
   setup() {
-    const A = defineComponent<{ x: number; y: number }>("SI_A", XY);
-    const B = defineComponent<{ x: number; y: number }>("SI_B", XY);
-    const C = defineComponent<{ x: number; y: number }>("SI_C", XY);
-    const D = defineComponent<{ x: number; y: number }>("SI_D", XY);
-    const E = defineComponent<{ x: number; y: number }>("SI_E", XY);
+    const A = defineComponent("SI_A", XY);
+    const B = defineComponent("SI_B", XY);
+    const C = defineComponent("SI_C", XY);
+    const D = defineComponent("SI_D", XY);
+    const E = defineComponent("SI_E", XY);
     const w = createWorld();
     // Init is library-agnostic: x = (i % 97) + fixed per-component offset (A=0…E=4), so the
     // post-swap checksum is reproducible across every library (never tied to internal ids).
@@ -123,8 +123,8 @@ const simple_iter: Scenario = {
 const frag_iter: Scenario = {
   id: "frag_iter",
   setup() {
-    const Data = defineComponent<{ value: number }>("FR_Data", VALUE);
-    const types = LETTERS.map((l) => defineComponent<{ value: number }>(`FR_${l}`, VALUE));
+    const Data = defineComponent("FR_Data", VALUE);
+    const types = LETTERS.map((l) => defineComponent(`FR_${l}`, VALUE));
     const w = createWorld();
     for (const t of types) {
       for (let i = 0; i < N.fragPerType; i++) {
@@ -164,8 +164,8 @@ const frag_iter: Scenario = {
 const entity_cycle: Scenario = {
   id: "entity_cycle",
   setup() {
-    const A = defineComponent<{ value: number }>("EC_A", VALUE);
-    const B = defineComponent<{ value: number }>("EC_B", VALUE);
+    const A = defineComponent("EC_A", VALUE);
+    const B = defineComponent("EC_B", VALUE);
     const w = createWorld();
     for (let i = 0; i < N.cycle; i++) w.spawn({ components: [[A, { value: 1 }]] });
     return { w, B, qB: defineQuery([B]) };
@@ -190,8 +190,8 @@ const entity_cycle: Scenario = {
 const add_remove: Scenario = {
   id: "add_remove",
   setup() {
-    const A = defineComponent<{ value: number }>("AR_A", VALUE);
-    const B = defineComponent<{ value: number }>("AR_B", VALUE);
+    const A = defineComponent("AR_A", VALUE);
+    const B = defineComponent("AR_B", VALUE);
     const w = createWorld();
     const ents: Entity[] = [];
     for (let i = 0; i < N.addRemove; i++) ents.push(w.spawn({ components: [[A, { value: 1 }]] }));
@@ -216,9 +216,9 @@ const add_remove: Scenario = {
 const serialize: Scenario = {
   id: "serialize",
   setup() {
-    const Uid = defineComponent<{ id: number }>("XS_Uid", { id: "u32" });
-    const Pos = defineComponent<{ x: number; y: number }>("XS_Pos", XY);
-    const Name = defineComponent<{ label: string }>("XS_Name", { label: "string" });
+    const Uid = defineComponent("XS_Uid", { id: "u32" });
+    const Pos = defineComponent("XS_Pos", XY);
+    const Name = defineComponent("XS_Name", { label: "string" });
     const Tag = defineTag("XS_Tag");
     const Rel = defineRelation("XS_Rel", { arity: "many" });
     const w = createWorld();
@@ -247,7 +247,7 @@ const serialize: Scenario = {
 const random_access: Scenario = {
   id: "random_access",
   setup() {
-    const Pos = defineComponent<{ x: number }>("XR_Pos", { x: "f64" });
+    const Pos = defineComponent("XR_Pos", { x: "f64" });
     const w = createWorld();
     const handles: Entity[] = [];
     for (let i = 0; i < RANDOM_ACCESS.entities; i++) handles.push(w.spawn({ components: [[Pos, { x: i }]] }));
@@ -268,11 +268,11 @@ const random_access: Scenario = {
 const sim_frame: Scenario = {
   id: "sim_frame",
   setup() {
-    const Position = defineComponent<{ x: number; y: number }>("SF_Pos", XY);
-    const Velocity = defineComponent<{ x: number; y: number }>("SF_Vel", XY);
-    const Health = defineComponent<{ hp: number }>("SF_Health", { hp: "f64" });
-    const Damage = defineComponent<{ amount: number }>("SF_Damage", { amount: "f64" });
-    const Renderable = defineComponent<{ acc: number }>("SF_Render", { acc: "f64" });
+    const Position = defineComponent("SF_Pos", XY);
+    const Velocity = defineComponent("SF_Vel", XY);
+    const Health = defineComponent("SF_Health", { hp: "f64" });
+    const Damage = defineComponent("SF_Damage", { amount: "f64" });
+    const Renderable = defineComponent("SF_Render", { acc: "f64" });
     const Frozen = defineTag("SF_Frozen");
     const w = createWorld();
     const NUM = 10_000;
@@ -338,9 +338,9 @@ const sim_frame: Scenario = {
 const spawn_reap_frame: Scenario = {
   id: "spawn_reap_frame",
   setup() {
-    const Position = defineComponent<{ x: number; y: number }>("SR_Pos", XY);
-    const Velocity = defineComponent<{ x: number; y: number }>("SR_Vel", XY);
-    const Particle = defineComponent<{ life: number }>("SR_Particle", { life: "f64" });
+    const Position = defineComponent("SR_Pos", XY);
+    const Velocity = defineComponent("SR_Vel", XY);
+    const Particle = defineComponent("SR_Particle", { life: "f64" });
     const w = createWorld();
     const NUM = 5000;
     for (let i = 0; i < NUM; i++) w.spawn({ components: [[Position, { x: 0, y: 0 }], [Velocity, { x: 1, y: 1 }]] });
@@ -378,10 +378,10 @@ const spawn_reap_frame: Scenario = {
 const toggle_frame: Scenario = {
   id: "toggle_frame",
   setup() {
-    const Position = defineComponent<{ x: number; y: number }>("TG_Pos", XY);
-    const Velocity = defineComponent<{ x: number; y: number }>("TG_Vel", XY);
-    const Health = defineComponent<{ hp: number }>("TG_Health", { hp: "f64" });
-    const Stunned = defineComponent<{ since: number }>("TG_Stunned", { since: "f64" });
+    const Position = defineComponent("TG_Pos", XY);
+    const Velocity = defineComponent("TG_Vel", XY);
+    const Health = defineComponent("TG_Health", { hp: "f64" });
+    const Stunned = defineComponent("TG_Stunned", { since: "f64" });
     const w = createWorld();
     const NUM = 10_000;
     for (let i = 0; i < NUM; i++) {

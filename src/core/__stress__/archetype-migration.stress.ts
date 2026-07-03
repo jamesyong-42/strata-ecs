@@ -27,7 +27,7 @@ describe("stress: archetype explosion (dedup + cached-query correctness, §3.1/�
     const world = createWorld();
     const comps: Component<{ v: number }>[] = [];
     for (let i = 0; i < K; i++) {
-      comps.push(defineComponent<{ v: number }>(`AX${i}`, { v: field("u32", { default: 0 }) }));
+      comps.push(defineComponent(`AX${i}`, { v: field("u32", { default: 0 }) }));
     }
 
     // Register the cached queries BEFORE any archetype exists, so each archetype creation runs the
@@ -42,7 +42,9 @@ describe("stress: archetype explosion (dedup + cached-query correctness, §3.1/�
     for (let mask = 1; mask < 1 << K; mask++) {
       const parts: ComponentEntry[] = [];
       for (let i = 0; i < K; i++) if (mask & (1 << i)) parts.push([comps[i], { v: mask }]);
-      maskOf.set(world.spawn({ components: parts }), mask);
+      // A dynamically-built ComponentEntry[] can't satisfy the typed spawn tuple — go through the
+      // loose store surface (World.spawn only delegates to it), the same seam this harness already uses.
+      maskOf.set(world.runtime.spawn({ components: parts }), mask);
     }
 
     const bit = (mask: number, i: number): boolean => (mask & (1 << i)) !== 0;
@@ -77,8 +79,8 @@ describe("stress: archetype explosion (dedup + cached-query correctness, §3.1/�
 describe("stress: string-column leak hunt (null-capacity invariant, §3.4/§5.5)", () => {
   it("holds every string cell above count === null across add/write/remove/destroy churn", () => {
     const N = scaled(400);
-    const S = defineComponent<{ text: string }>("LeakText", { text: "string" });
-    const T = defineComponent<{ n: number }>("LeakToggle", { n: "u32" });
+    const S = defineComponent("LeakText", { text: "string" });
+    const T = defineComponent("LeakToggle", { n: "u32" });
     const world = createWorld();
     const big = (i: number): string => `blob-${"x".repeat(48)}-${i}`;
 
@@ -112,8 +114,8 @@ describe("stress: archetype ping-pong (back-pointer symmetry + value preservatio
   it("preserves every entity's carried values across many A→B→A migrations", () => {
     const N = scaled(500);
     const rounds = scaled(20);
-    const P = defineComponent<{ x: number; y: number }>("PingPos", { x: "f64", y: "f64" });
-    const H = defineComponent<{ hp: number }>("PingHp", { hp: "u32" });
+    const P = defineComponent("PingPos", { x: "f64", y: "f64" });
+    const H = defineComponent("PingHp", { hp: "u32" });
     const world = createWorld();
 
     const ents: Entity[] = [];

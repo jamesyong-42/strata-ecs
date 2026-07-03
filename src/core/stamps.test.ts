@@ -16,9 +16,9 @@ import { type Component, defineComponent, defineRelation, defineTag } from "./sc
 import { defineQuery } from "./query";
 import { defineSystem, phase } from "./system";
 
-const Pos = defineComponent<{ x: number; y: number }>("STMPosition", { x: "f32", y: "f32" });
-const Vel = defineComponent<{ x: number; y: number }>("STMVelocity", { x: "f32", y: "f32" });
-const Driver = defineComponent<{ v: number }>("STMDriver", { v: "u8" });
+const Pos = defineComponent("STMPosition", { x: "f32", y: "f32" });
+const Vel = defineComponent("STMVelocity", { x: "f32", y: "f32" });
+const Driver = defineComponent("STMDriver", { v: "u8" });
 const Selected = defineTag("STMSelected");
 const Owns = defineRelation("STMOwns", { arity: "one" });
 const Links = defineRelation("STMLinks", { arity: "many" });

@@ -5,18 +5,18 @@ import { enumOf, field } from "./field";
 import { slotOf } from "./entity";
 
 // Schema is process-global; this file's module context is isolated by Vitest, so define once.
-const Position = defineComponent<{ x: number; y: number }>("Position", { x: "f32", y: "f32" });
-const Velocity = defineComponent<{ x: number; y: number }>("Velocity", { x: "f32", y: "f32" });
-const Health = defineComponent<{ current: number; max: number }>("Health", { current: "u16", max: "u16" });
-const Name = defineComponent<{ value: string | null }>("Name", { value: "string" });
-const Label = defineComponent<{ text: string | null }>("Label", { text: field("string", { default: "" }) });
-const Team = defineComponent<{ side: "Red" | "Blue" | "Neutral" }>("Team", {
+const Position = defineComponent("Position", { x: "f32", y: "f32" });
+const Velocity = defineComponent("Velocity", { x: "f32", y: "f32" });
+const Health = defineComponent("Health", { current: "u16", max: "u16" });
+const Name = defineComponent("Name", { value: "string" });
+const Label = defineComponent("Label", { text: field("string", { default: "" }) });
+const Team = defineComponent("Team", {
   side: enumOf({ Red: 1, Blue: 2, Neutral: 3 }),
 });
-const Ref = defineComponent<{ target: number }>("Ref", { target: "eid" });
-const Flag = defineComponent<{ on: boolean }>("Flag", { on: "bool" });
-const Score = defineResource<{ value: number }>("Score", { value: "u32" });
-const Cfg = defineResource<{ a: number; b: number }>("Cfg", {
+const Ref = defineComponent("Ref", { target: "eid" });
+const Flag = defineComponent("Flag", { on: "bool" });
+const Score = defineResource("Score", { value: "u32" });
+const Cfg = defineResource("Cfg", {
   a: field("u32", { default: 7 }),
   b: "u32",
 });

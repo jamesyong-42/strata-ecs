@@ -15,10 +15,10 @@ const DT = 1 / 60; // fixed step — velocities are units/second
 export const IntegrateSystem = defineSystem(
   simulated,
   (b: Batch) => {
-    const px = b.col(Position).x as Float32Array;
-    const py = b.col(Position).y as Float32Array;
-    const vx = b.col(Velocity).vx as Float32Array;
-    const vy = b.col(Velocity).vy as Float32Array;
+    const px = b.col(Position).x;
+    const py = b.col(Position).y;
+    const vx = b.col(Velocity).vx;
+    const vy = b.col(Velocity).vy;
     for (let i = 0; i < b.count; i++) {
       const r = b.rows[i];
       px[r] += vx[r] * DT;
@@ -34,10 +34,10 @@ export const BounceSystem = defineSystem(
   simulated,
   (b: Batch, ctx) => {
     const bound = ctx.getResource(SimMode)?.bound ?? 4000;
-    const px = b.col(Position).x as Float32Array;
-    const py = b.col(Position).y as Float32Array;
-    const vx = b.col(Velocity).vx as Float32Array;
-    const vy = b.col(Velocity).vy as Float32Array;
+    const px = b.col(Position).x;
+    const py = b.col(Position).y;
+    const vx = b.col(Velocity).vx;
+    const vy = b.col(Velocity).vy;
     for (let i = 0; i < b.count; i++) {
       const r = b.rows[i];
       if (px[r] < -bound) {

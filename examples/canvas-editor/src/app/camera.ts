@@ -59,10 +59,10 @@ export function zoomToFit(): void {
   let maxX = -Infinity;
   let maxY = -Infinity;
   worldRef.current.query(renderable).each((b) => {
-    const px = b.col(Position).x as Float32Array;
-    const py = b.col(Position).y as Float32Array;
-    const sw = b.col(Size).w as Float32Array;
-    const sh = b.col(Size).h as Float32Array;
+    const px = b.col(Position).x;
+    const py = b.col(Position).y;
+    const sw = b.col(Size).w;
+    const sh = b.col(Size).h;
     for (let i = 0; i < b.count; i++) {
       const r = b.rows[i];
       minX = Math.min(minX, px[r] - sw[r] / 2);

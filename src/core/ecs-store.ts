@@ -12,7 +12,7 @@
  */
 
 import type { Entity } from "./entity";
-import type { Component, FieldId, Relation, Resource, Tag } from "./schema";
+import type { Component, Relation, Resource, Tag } from "./schema";
 import type { Batch, Query } from "./query";
 import type { SpawnInit } from "./runtime-store";
 
@@ -32,12 +32,12 @@ export interface ECSStore {
   // --- components: read ---
   read<S>(e: Entity, c: Component<S>): S;
   get<S>(e: Entity, c: Component<S>): S | undefined;
-  /** Read ONE field's decoded value with no object allocation — the fast path for random access
-   *  by handle (whole-component `read`/`get` build an object per call). `undefined` if the entity
-   *  lacks the component or the field name is unknown. Generalizes {@link ECSStore.readEid}. */
-  readField<T = number>(e: Entity, c: Component, field: string): T | undefined;
+  /** Read ONE field's decoded value with no object allocation — the fast path for random access by
+   *  handle (whole-component `read`/`get` build an object per call). Keyed by field NAME and typed
+   *  from the component's schema: `readField(e, Position, "x")` is `number | undefined`. `undefined`
+   *  if the entity lacks the component or (for a bare component) the field name is unknown. */
+  readField<S, K extends keyof S & string>(e: Entity, c: Component<S>, field: K): S[K] | undefined;
   has(e: Entity, c: Component): boolean;
-  readEid(e: Entity, c: Component, field: FieldId): Entity | undefined;
 
   // --- tags ---
   addTag(e: Entity, t: Tag): void;

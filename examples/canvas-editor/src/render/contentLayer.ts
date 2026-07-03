@@ -117,8 +117,8 @@ export class ContentLayer {
           ctx.roundRect(x, y, w, h, 10);
           ctx.fill();
           if (this.labelFlags[i] === 1) {
-            const text = world.readField<string>(db.entity[i] as Entity, Label, "text");
-            if (text !== undefined) {
+            const text = world.readField(db.entity[i] as Entity, Label, "text");
+            if (text != null) {
               ctx.fillStyle = "rgba(13,17,23,.85)";
               ctx.font = "600 22px ui-sans-serif, system-ui, sans-serif";
               ctx.textBaseline = "top";
@@ -173,14 +173,14 @@ export class ContentLayer {
     const minY = cam.y - cam.h / 2 / cam.zoom - pad;
     const maxY = cam.y + cam.h / 2 / cam.zoom + pad;
     world.query(connected).each((b) => {
-      const px = b.col(Position).x as Float32Array;
-      const py = b.col(Position).y as Float32Array;
+      const px = b.col(Position).x;
+      const py = b.col(Position).y;
       for (const r of b) {
         const x0 = px[r];
         const y0 = py[r];
         for (const target of b.getAllRelated(r, ConnectedTo)) {
-          const x1 = world.readField<number>(target, Position, "x");
-          const y1 = world.readField<number>(target, Position, "y");
+          const x1 = world.readField(target, Position, "x");
+          const y1 = world.readField(target, Position, "y");
           if (x1 === undefined || y1 === undefined) continue;
           if (
             Math.max(x0, x1) < minX ||

@@ -17,8 +17,8 @@ import {
 } from "../index";
 import { scaled } from "./harness";
 
-const Base = defineComponent<{ v: number }>("CBBase", { v: "u32" });
-const Spawned = defineComponent<{ v: number }>("CBSpawned", { v: "u32" });
+const Base = defineComponent("CBBase", { v: "u32" });
+const Spawned = defineComponent("CBSpawned", { v: "u32" });
 const Marked = defineTag("CBMarked");
 const Parent = defineRelation("CBParent", { arity: "one" });
 

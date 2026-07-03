@@ -8,11 +8,12 @@
  */
 
 import type { Entity } from "./entity";
-import type { Component, FieldId, Relation, Resource, Tag } from "./schema";
+import type { Component, Relation, Resource, SpawnInitOf, Tag } from "./schema";
+import type { FieldInput } from "./field";
 import type { Batch, Query } from "./query";
 import { DEV, devError } from "./dev";
 import type { WorldObserver } from "./observe";
-import { RuntimeStore, type SpawnInit } from "./runtime-store";
+import { RuntimeStore } from "./runtime-store";
 import { type EntityEditor, type Pipeline, SystemCtx, makeEditor } from "./system";
 import { Reactive } from "./reactive";
 import { validatePipelineAccess } from "./access-diagnostics";
@@ -66,7 +67,7 @@ export class World {
   }
 
   // --- entities / lifecycle (immediate) ---
-  spawn(init?: SpawnInit): Entity {
+  spawn<const T extends readonly Record<string, FieldInput>[]>(init?: SpawnInitOf<T>): Entity {
     return this.store.spawn(init);
   }
   destroy(e: Entity): void {
@@ -115,9 +116,11 @@ export class World {
   get<S>(e: Entity, c: Component<S>): S | undefined {
     return this.store.get(e, c);
   }
-  /** Read one field with no allocation — the fast path for random access by handle (§Part I ref). */
-  readField<T = number>(e: Entity, c: Component, field: string): T | undefined {
-    return this.store.readField<T>(e, c, field);
+  /** Read one field with no allocation — the fast path for random access by handle. Keyed by field
+   *  NAME and typed from the component's schema (`world.readField(e, Position, "x")` is `number |
+   *  undefined`), §Part I ref. */
+  readField<S, K extends keyof S & string>(e: Entity, c: Component<S>, field: K): S[K] | undefined {
+    return this.store.readField(e, c, field);
   }
   has(e: Entity, c: Component): boolean {
     return this.store.has(e, c);
@@ -133,9 +136,6 @@ export class World {
   }
   getReverse(e: Entity, r: Relation): Entity[] {
     return this.store.getReverse(e, r);
-  }
-  readEid(e: Entity, c: Component, field: FieldId): Entity | undefined {
-    return this.store.readEid(e, c, field);
   }
   firstOf(q: Query): Entity | undefined {
     return this.store.firstOf(q);

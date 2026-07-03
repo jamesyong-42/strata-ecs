@@ -31,11 +31,23 @@ export type {
   ResourceId,
   FieldId,
   FieldMeta,
+  SpawnInitOf,
 } from "./schema";
 
-// --- field types ---
+// --- field types + schema-literal inference helpers (§4) ---
 export { field, enumOf, entityKey } from "./field";
-export type { ScalarType, EnumType, FieldType, FieldSpec, FieldInput, Column, EntityKey } from "./field";
+export type {
+  ScalarType,
+  EnumType,
+  FieldType,
+  FieldSpec,
+  FieldInput,
+  Column,
+  EntityKey,
+  ValueOf,
+  WriteOf,
+  ColumnsOf,
+} from "./field";
 
 // --- queries ---
 export { defineQuery, Not, Any, All, Related } from "./query";

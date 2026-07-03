@@ -25,13 +25,13 @@ import {
 } from "./index";
 
 // Unique process-global schema names for this file (schema has no reset in normal runs).
-const Pos = defineComponent<{ x: number; y: number }>("RCTPos", { x: "f32", y: "f32" });
-const Vel = defineComponent<{ x: number; y: number }>("RCTVel", { x: "f32", y: "f32" });
-const Other = defineComponent<{ n: number }>("RCTOther", { n: "u32" });
-const Driver = defineComponent<{ n: number }>("RCTDriver", { n: "u32" });
+const Pos = defineComponent("RCTPos", { x: "f32", y: "f32" });
+const Vel = defineComponent("RCTVel", { x: "f32", y: "f32" });
+const Other = defineComponent("RCTOther", { n: "u32" });
+const Driver = defineComponent("RCTDriver", { n: "u32" });
 const Selected = defineTag("RCTSelected");
 const Rel = defineRelation("RCTRel", { arity: "one" });
-const Camera = defineResource<{ x: number; y: number; zoom: number }>("RCTCamera", { x: "f32", y: "f32", zoom: "f32" });
+const Camera = defineResource("RCTCamera", { x: "f32", y: "f32", zoom: "f32" });
 
 const posQ = defineQuery([Pos]);
 const driverQ = defineQuery([Driver]);

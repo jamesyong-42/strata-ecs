@@ -18,7 +18,7 @@ describe("DEV guard: pack() range assertion (§2)", () => {
 
 describe("DEV guard: command-buffer back-pressure warning (§5.4)", () => {
   it("warns once when a single phase defers more ops than the soft cap", () => {
-    const Base = defineComponent<{ v: number }>("DGBase", { v: "u32" });
+    const Base = defineComponent("DGBase", { v: "u32" });
     const world = createWorld();
     for (let i = 0; i < 10; i++) world.spawn({ components: [[Base, { v: i }]] });
     world.runtime.setCommandBufferWarnThresholdForTesting(5);

@@ -160,7 +160,7 @@ export function restore(bytes: Uint8Array): void {
   let n = 0;
   let maxZ = 0;
   w.query(renderable).each((b) => {
-    const zz = b.col(ZIndex).z as Int32Array;
+    const zz = b.col(ZIndex).z;
     for (let i = 0; i < b.count; i++) {
       const r = b.rows[i];
       if (zz[r] > maxZ) maxZ = zz[r];

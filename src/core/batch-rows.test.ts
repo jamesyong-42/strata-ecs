@@ -3,7 +3,7 @@ import { Not, createWorld, defineComponent, defineQuery, defineTag } from "./ind
 
 describe("Batch.rows / count (generator-free iteration, §6.2)", () => {
   it("dense chunk: rows is the identity range, count === denseCount, isDense true", () => {
-    const C = defineComponent<{ v: number }>("BR_C", { v: "u32" });
+    const C = defineComponent("BR_C", { v: "u32" });
     const w = createWorld();
     for (let i = 0; i < 5; i++) w.spawn({ components: [[C, { v: i }]] });
 
@@ -25,7 +25,7 @@ describe("Batch.rows / count (generator-free iteration, §6.2)", () => {
   });
 
   it("filtered chunk: count/rows are the matched rows only, and agree with for..of", () => {
-    const C = defineComponent<{ v: number }>("BR_C2", { v: "u32" });
+    const C = defineComponent("BR_C2", { v: "u32" });
     const T = defineTag("BR_T2");
     const w = createWorld();
     for (let i = 0; i < 6; i++) {
@@ -47,8 +47,8 @@ describe("Batch.rows / count (generator-free iteration, §6.2)", () => {
   });
 
   it("a filtered query nested inside a filtered body does not corrupt the outer rows", () => {
-    const C = defineComponent<{ v: number }>("BR_C3", { v: "u32" });
-    const D = defineComponent<{ w: number }>("BR_D3", { w: "u32" });
+    const C = defineComponent("BR_C3", { v: "u32" });
+    const D = defineComponent("BR_D3", { w: "u32" });
     const T = defineTag("BR_T3");
     const w = createWorld();
     for (let i = 0; i < 8; i++) {

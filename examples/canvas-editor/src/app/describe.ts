@@ -13,9 +13,9 @@ const KIND_COLORS: Record<string, string> = {
 };
 
 export const describeShape: DescribeFn = (world, e) => {
-  const kind = world.readField<string>(e, Kind, "shape");
+  const kind = world.readField(e, Kind, "shape");
   if (kind === undefined) return { label: "entity", color: "#768390", phase: null };
-  const label = kind === "note" ? (world.readField<string>(e, Label, "text") ?? "note") : kind;
+  const label = kind === "note" ? (world.readField(e, Label, "text") ?? "note") : kind;
   return {
     label,
     color: KIND_COLORS[kind] ?? "#768390",

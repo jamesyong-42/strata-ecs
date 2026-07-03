@@ -33,8 +33,8 @@ export function setSimulate(on: boolean): void {
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
     w.query(simulated).each((b) => {
-      const vx = b.col(Velocity).vx as Float32Array;
-      const vy = b.col(Velocity).vy as Float32Array;
+      const vx = b.col(Velocity).vx;
+      const vy = b.col(Velocity).vy;
       for (let i = 0; i < b.count; i++) {
         const r = b.rows[i];
         const angle = rand() * Math.PI * 2;

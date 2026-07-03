@@ -5,15 +5,15 @@ import { All, Not, type Query, defineQuery } from "./query";
 import { defineSystem, phase } from "./system";
 import type { Entity } from "./entity";
 
-const Position = defineComponent<{ x: number; y: number }>("Position", { x: "f32", y: "f32" });
-const Velocity = defineComponent<{ x: number; y: number }>("Velocity", { x: "f32", y: "f32" });
-const Health = defineComponent<{ hp: number }>("Health", { hp: "u16" });
-const Link = defineComponent<{ target: number }>("Link", { target: "eid" });
+const Position = defineComponent("Position", { x: "f32", y: "f32" });
+const Velocity = defineComponent("Velocity", { x: "f32", y: "f32" });
+const Health = defineComponent("Health", { hp: "u16" });
+const Link = defineComponent("Link", { target: "eid" });
 const Marker = defineTag("Marker");
 const Trigger = defineTag("Trigger");
 const Targets = defineRelation("Targets", { arity: "many" });
 const ChildOf = defineRelation("ChildOf", { arity: "one" });
-const Config = defineResource<{ enabled: boolean }>("Config", { enabled: "bool" });
+const Config = defineResource("Config", { enabled: "bool" });
 
 function count(w: World, q: Query): number {
   let n = 0;
@@ -284,23 +284,22 @@ describe("conformance-audit fixes", () => {
     expect(() => w.tick([phase("y", [])])).not.toThrow();
   });
 
-  it("exposes ctx.readEid and batch.columns", () => {
+  it("exposes readField for an eid field and batch.columns", () => {
     const w = createWorld();
     const target = w.spawn({ components: [[Position, { x: 1, y: 1 }]] });
     w.spawn({ components: [[Link, { target }]] });
-    const fid = Link.fields[0].fieldId;
-    let viaReadEid: number | undefined;
+    let viaReadField: Entity | undefined;
     let viaColumns = -1;
     const S = defineSystem(defineQuery([Link]), (batch, ctx) => {
       const linkTarget = batch.columns.Link.target as Uint32Array; // name-keyed convenience
       for (const r of batch) {
         viaColumns = linkTarget[r];
-        viaReadEid = ctx.readEid(batch.entity(r), Link, fid);
+        viaReadField = ctx.readField(batch.entity(r), Link, "target"); // eid decoded by name
       }
     });
     w.tick([phase("read", [S])]);
-    expect(viaReadEid).toBe(target); // ctx.readEid validated the eid field
+    expect(viaReadField).toBe(target); // ctx.readField decoded the eid field
     expect(viaColumns).toBe(target); // batch.columns exposed the raw column
-    expect(w.readEid(w.firstOf(defineQuery([Link])) as Entity, Link, fid)).toBe(target); // World.readEid too
+    expect(w.readField(w.firstOf(defineQuery([Link])) as Entity, Link, "target")).toBe(target); // World.readField too
   });
 });

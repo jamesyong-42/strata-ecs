@@ -24,11 +24,10 @@ export type ScalarType =
   | "key";
 
 /**
- * A branded string that identifies an entity across stores / persistence (§14.3). A `key` field
- * reads and writes `EntityKey | null`; the Part I runtime stores it as a plain string column and
- * is key-ignorant — the brand is a purely type-level guard so an arbitrary `string` cannot be
- * passed where a key is expected. Annotate the field's value type with it, e.g.
- * `defineComponent<{ ref: EntityKey | null }>("Ref", { ref: "key" })`.
+ * A branded string that identifies an entity across stores / persistence (§14.3). A `"key"` field
+ * infers `EntityKey | null` as its value type; the Part I runtime stores it as a plain string column
+ * and is key-ignorant — the brand is a purely type-level guard so an arbitrary `string` cannot be
+ * passed where a key is expected. Brand a plain string for a write with {@link entityKey}.
  */
 export type EntityKey = string & { readonly __entityKey: unique symbol };
 
@@ -40,27 +39,130 @@ export function entityKey(s: string): EntityKey {
 /**
  * An enum field type — a closed set of string labels interned to small integer discriminants
  * (§4). The label is the value at the API boundary; the discriminant is what gets stored.
+ * `L` is the label union, captured from `enumOf` so a field's value type is its exact labels.
  */
-export interface EnumType {
+export interface EnumType<L extends string = string> {
   readonly kind: "enum";
   readonly labelToDisc: ReadonlyMap<string, number>;
   readonly discToLabel: ReadonlyMap<number, string>;
   /** Largest discriminant — decides the backing integer width. */
   readonly maxDisc: number;
+  /** Phantom marker for the label union `L`; never present at runtime. */
+  readonly __label?: L;
 }
 
 /** A field's type: a scalar tag or an {@link EnumType}. */
 export type FieldType = ScalarType | EnumType;
 
-/** A normalized field descriptor: its type plus an optional declared default (§4). */
-export interface FieldSpec {
-  readonly type: FieldType;
-  readonly hasDefault: boolean;
+/**
+ * A normalized field descriptor: its type plus an optional declared default (§4). `T` carries the
+ * exact field type and `HasDefault` whether a default was declared — the pair lets a schema literal
+ * infer both a field's value type and whether it is optional at write time (see {@link WriteOf}).
+ */
+export interface FieldSpec<T extends FieldType = FieldType, HasDefault extends boolean = boolean> {
+  readonly type: T;
+  readonly hasDefault: HasDefault;
   readonly default?: unknown;
 }
 
 /** What a user may pass for a field in a component schema: a bare type or a {@link FieldSpec}. */
 export type FieldInput = FieldType | FieldSpec;
+
+// --- schema-literal type inference (§4, §Part I ref) -------------------------
+// A component's field types are recovered from the schema LITERAL, not hand-declared. These mapped
+// types turn a `Record<string, FieldInput>` schema into: its read-value shape (ValueOf), its
+// write-value shape with defaulted fields optional (WriteOf), and its backing column shape
+// (ColumnsOf). Kept in lockstep with encodeField/decodeField (values) and columnKindOf/allocColumn
+// (columns) below — the runtime routing they mirror.
+
+/** Value of a scalar field type. `string`/`key` are nullable: a cell reads `null` when unset or
+ *  written `null` (encodeField/decodeField round-trip `null`, and fresh string cells are null-filled). */
+type ScalarValue<T extends ScalarType> = T extends "bool"
+  ? boolean
+  : T extends "eid"
+    ? Entity
+    : T extends "key"
+      ? EntityKey | null
+      : T extends "string"
+        ? string | null
+        : number;
+
+/** Value of a concrete field type (scalar or enum). */
+type FieldTypeValue<T extends FieldType> = T extends EnumType<infer L>
+  ? L
+  : T extends ScalarType
+    ? ScalarValue<T>
+    : never;
+
+/** Value of one schema field input (bare scalar, bare enum, or a `field(...)` spec). */
+type FieldValue<F> = F extends string
+  ? ScalarValue<F & ScalarType>
+  : F extends EnumType<infer L>
+    ? L
+    : F extends FieldSpec<infer T, boolean>
+      ? FieldTypeValue<T>
+      : never;
+
+/** The read-value object of a schema: every field present, decoded to its value type. */
+export type ValueOf<Sch> = { [K in keyof Sch]: FieldValue<Sch[K]> };
+
+/** Keys whose field declared a default (`field(type, { default })`) — optional at write time. */
+type DefaultKeys<Sch> = {
+  [K in keyof Sch]: Sch[K] extends FieldSpec<FieldType, true> ? K : never;
+}[keyof Sch];
+
+/**
+ * The write-value object of a schema (spawn/init): fields WITHOUT a declared default are required;
+ * fields WITH one are optional (the runtime fills them, §4). Mirrors {@link encodeComponentValue}.
+ */
+export type WriteOf<Sch> = { [K in Exclude<keyof Sch, DefaultKeys<Sch>>]: FieldValue<Sch[K]> } & {
+  [K in DefaultKeys<Sch>]?: FieldValue<Sch[K]>;
+};
+
+/** Backing typed-array for a scalar field type (mirrors columnKindOf → allocColumn). */
+type ScalarColumn<T extends ScalarType> = T extends "f64"
+  ? Float64Array
+  : T extends "f32"
+    ? Float32Array
+    : T extends "i32"
+      ? Int32Array
+      : T extends "i16"
+        ? Int16Array
+        : T extends "i8"
+          ? Int8Array
+          : T extends "u32" | "eid"
+            ? Uint32Array
+            : T extends "u16"
+              ? Uint16Array
+              : T extends "u8" | "bool"
+                ? Uint8Array
+                : T extends "string" | "key"
+                  ? (string | null)[]
+                  : never;
+
+/** Backing column for a concrete field type. An enum's integer width is a runtime property of its
+ *  largest discriminant (columnKindOf), unknowable to the type system — hence the unsigned union. */
+type FieldTypeColumn<T extends FieldType> = T extends EnumType
+  ? Uint8Array | Uint16Array | Uint32Array
+  : T extends ScalarType
+    ? ScalarColumn<T>
+    : never;
+
+/** Backing column for one schema field input. */
+type FieldColumn<F> = F extends string
+  ? ScalarColumn<F & ScalarType>
+  : F extends EnumType
+    ? Uint8Array | Uint16Array | Uint32Array
+    : F extends FieldSpec<infer T, boolean>
+      ? FieldTypeColumn<T>
+      : never;
+
+/**
+ * The backing columns of a schema, keyed by field name — what {@link Component}'s `col()` returns
+ * with zero casts. A bare {@link Component} (schema `Record<string, FieldInput>`) degrades to the
+ * loose `{ [name: string]: Column }`, exactly the pre-inference shape.
+ */
+export type ColumnsOf<Sch> = { [K in keyof Sch]: FieldColumn<Sch[K]> };
 
 /** A backing-column element kind. `string` covers both `string` and `key` fields. */
 export type ColumnKind = "f64" | "f32" | "i32" | "i16" | "i8" | "u32" | "u16" | "u8" | "string";
@@ -96,9 +198,9 @@ function isFieldSpec(x: unknown): x is FieldSpec {
  * - Array form → **positional** discriminants (`0..n-1`); local-only, reorder-hostile (§4).
  * - Object form → **explicit stable** discriminants; safe to persist/sync.
  */
-export function enumOf(variants: string[]): EnumType;
-export function enumOf(variants: Record<string, number>): EnumType;
-export function enumOf(variants: string[] | Record<string, number>): EnumType {
+export function enumOf<const L extends string>(variants: readonly L[]): EnumType<L>;
+export function enumOf<const L extends string>(variants: Record<L, number>): EnumType<L>;
+export function enumOf(variants: readonly string[] | Record<string, number>): EnumType {
   const labelToDisc = new Map<string, number>();
   const discToLabel = new Map<number, string>();
   let maxDisc = 0;
@@ -134,8 +236,15 @@ export function enumOf(variants: string[] | Record<string, number>): EnumType {
 
 /**
  * Wrap a field type with options (currently a per-field default, §4). A bare type is shorthand
- * for `field(type)` — a required field with no default.
+ * for `field(type)` — a required field with no default. The `default` is checked against the
+ * field's value type, and the returned {@link FieldSpec} carries whether a default was declared so
+ * the schema literal can make the field optional at write time ({@link WriteOf}).
  */
+export function field<const T extends FieldType>(type: T): FieldSpec<T, false>;
+export function field<const T extends FieldType>(
+  type: T,
+  opts: { default: FieldTypeValue<T> },
+): FieldSpec<T, true>;
 export function field(type: FieldType, opts?: { default?: unknown }): FieldSpec {
   if (opts && "default" in opts) {
     return { type, hasDefault: true, default: opts.default };

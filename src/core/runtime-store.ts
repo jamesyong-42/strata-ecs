@@ -17,6 +17,7 @@ import { TagStore } from "./tags";
 import { RelationStore } from "./relations";
 import {
   type Column,
+  type ColumnsOf,
   clearCell,
   decodeField,
   moveCell,
@@ -446,7 +447,7 @@ export class RuntimeStore implements ECSStore {
    * (default-or-declared) read set throws, naming the system + component. DEV + armed + in-a-system
    * only; out-of-tick `world.query().each` has `currentSystem === null` and is exempt.
    */
-  enforceColAccess(c: Component): void {
+  enforceColAccess(c: Component<unknown, unknown>): void {
     if (!this.accessArmed) return;
     const system = this.currentSystem;
     if (system === null) return;
@@ -795,16 +796,20 @@ export class RuntimeStore implements ECSStore {
    * handle (whole-component {@link RuntimeStore.read} builds a value object per call). `undefined`
    * if the entity lacks `c` or `field` is not one of its fields. Generalizes {@link RuntimeStore.readEid}.
    */
-  readField<T = number>(e: Entity, c: Component, field: string): T | undefined {
+  readField<S, K extends keyof S & string>(e: Entity, c: Component<S>, field: K): S[K] | undefined {
     if (!this.has(e, c)) return undefined;
     const meta = c.fieldByName.get(field);
     if (meta === undefined) return undefined;
     const A = this.archetypeOfEntity(e);
     const row = this.table.rowOf(slotOf(e));
-    return decodeField(meta.spec.type, readCell(A.columns.get(meta.fieldId) as Column, meta.kind, row)) as T;
+    return decodeField(meta.spec.type, readCell(A.columns.get(meta.fieldId) as Column, meta.kind, row)) as S[K];
   }
 
-  /** Read a validated `eid` field: the referenced entity, or `undefined` if the ref dangles (§2). */
+  /**
+   * Read a validated `eid` field: the referenced entity, or `undefined` if the ref dangles (§2).
+   * @internal Keyed by {@link FieldId} and liveness-validated — the store's own eid machinery. The
+   * public read path is {@link RuntimeStore.readField} (keyed by name, decodes the raw handle).
+   */
   readEid(e: Entity, c: Component, field: FieldId): Entity | undefined {
     if (!this.has(e, c)) return undefined;
     const A = this.archetypeOfEntity(e);
@@ -1344,11 +1349,13 @@ class ArchetypeChunk implements Batch {
     return this.dense;
   }
 
-  col(c: Component): Record<string, Column> {
+  col<S, Sch>(c: Component<S, Sch>): ColumnsOf<Sch> {
     if (DEV) this.store.enforceColAccess(c); // 001 Rule 3 — undeclared access throws before any element (no-op unless armed + in a system)
     const out: Record<string, Column> = {};
     for (const f of c.fields) out[f.name] = this.arch.columns.get(f.fieldId) as Column;
-    return out;
+    // The dynamic build is typed as a loose column bag; ColumnsOf<Sch> is the field-precise view of
+    // the same object (each key routes to its declared column, verified by columnKindOf/allocColumn).
+    return out as ColumnsOf<Sch>;
   }
 
   get columns(): Record<string, Record<string, Column>> {

@@ -3,10 +3,10 @@ import type { Batch, Entity, SystemCtx } from "./index";
 import { createWorld, defineComponent, defineQuery, defineRelation, defineSystem, defineTag, phase } from "./index";
 
 // Unique process-global schema names for this file (schema has no reset in normal runs).
-const Pos = defineComponent<{ x: number; y: number }>("OBSPos", { x: "f32", y: "f32" });
+const Pos = defineComponent("OBSPos", { x: "f32", y: "f32" });
 const Marked = defineTag("OBSMarked");
 const Owns = defineRelation("OBSOwns", { arity: "one" });
-const Driver = defineComponent<{ n: number }>("OBSDriver", { n: "u32" });
+const Driver = defineComponent("OBSDriver", { n: "u32" });
 
 const driverQ = defineQuery([Driver]);
 const posQ = defineQuery([Pos]);
@@ -16,7 +16,7 @@ describe("world.observe — lifecycle hooks (observe.ts)", () => {
     const w = createWorld();
     const seen: { e: Entity; placed: boolean; x: number | undefined }[] = [];
     w.observe({
-      onSpawn: (e) => seen.push({ e, placed: w.isPlaced(e), x: w.readField<number>(e, Pos, "x") }),
+      onSpawn: (e) => seen.push({ e, placed: w.isPlaced(e), x: w.readField(e, Pos, "x") }),
     });
     const e = w.spawn({ components: [[Pos, { x: 7, y: 8 }]], tags: [Marked] });
     expect(seen).toHaveLength(1);
@@ -35,7 +35,7 @@ describe("world.observe — lifecycle hooks (observe.ts)", () => {
       onDestroy: (dying) => {
         if (dying !== e) return;
         seen.push({
-          x: w.readField<number>(e, Pos, "x"),
+          x: w.readField(e, Pos, "x"),
           tagged: w.hasTag(e, Marked),
           rel: w.getRelation(e, Owns),
         });
@@ -66,14 +66,14 @@ describe("world.observe — lifecycle hooks (observe.ts)", () => {
     expect(births).toHaveLength(1); // mint only — flush placement must NOT fire a second event
     expect(births[0].identityOnly).toBe(true);
     expect(w.isPlaced(births[0].e)).toBe(true); // placed by the phase flush
-    expect(w.readField<number>(births[0].e, Pos, "x")).toBe(1);
+    expect(w.readField(births[0].e, Pos, "x")).toBe(1);
   });
 
   it("a deferred ctx.destroy fires onDestroy at flush, pre-teardown", () => {
     const w = createWorld();
     const e = w.spawn({ components: [[Pos, { x: 9, y: 9 }]] });
     const seen: (number | undefined)[] = [];
-    w.observe({ onDestroy: (dying) => seen.push(w.readField<number>(dying, Pos, "x")) });
+    w.observe({ onDestroy: (dying) => seen.push(w.readField(dying, Pos, "x")) });
     const reaper = defineSystem(
       posQ,
       (b: Batch, ctx: SystemCtx) => {
@@ -108,7 +108,7 @@ describe("world.observe — lifecycle hooks (observe.ts)", () => {
     const bytes = w1.export();
     const w2 = createWorld();
     const xs: (number | undefined)[] = [];
-    w2.observe({ onSpawn: (e) => xs.push(w2.readField<number>(e, Pos, "x")) });
+    w2.observe({ onSpawn: (e) => xs.push(w2.readField(e, Pos, "x")) });
     w2.import(bytes);
     expect(xs.length).toBe(5);
     expect([...xs].sort((a, b) => (a as number) - (b as number))).toEqual([0, 1, 2, 3, 4]);

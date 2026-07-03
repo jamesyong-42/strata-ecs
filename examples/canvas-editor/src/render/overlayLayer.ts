@@ -55,10 +55,10 @@ export class OverlayLayer {
     let selected = 0;
     ctx.beginPath();
     world.query(selectedBoxes).each((b) => {
-      const px = b.col(Position).x as Float32Array;
-      const py = b.col(Position).y as Float32Array;
-      const sw = b.col(Size).w as Float32Array;
-      const sh = b.col(Size).h as Float32Array;
+      const px = b.col(Position).x;
+      const py = b.col(Position).y;
+      const sw = b.col(Size).w;
+      const sh = b.col(Size).h;
       for (let i = 0; i < b.count; i++) {
         const r = b.rows[i];
         if (sw[r] < minWorld && sh[r] < minWorld) continue;
@@ -72,10 +72,10 @@ export class OverlayLayer {
     // hover ring (select tool, idle)
     const hover = interaction.hover;
     if (hover !== undefined && interaction.mode === "idle" && world.isAlive(hover)) {
-      const hx = world.readField<number>(hover, Position, "x");
-      const hy = world.readField<number>(hover, Position, "y");
-      const hw = world.readField<number>(hover, Size, "w");
-      const hh = world.readField<number>(hover, Size, "h");
+      const hx = world.readField(hover, Position, "x");
+      const hy = world.readField(hover, Position, "y");
+      const hw = world.readField(hover, Size, "w");
+      const hh = world.readField(hover, Size, "h");
       if (hx !== undefined && hy !== undefined && hw !== undefined && hh !== undefined) {
         ctx.strokeStyle = "rgba(88,166,255,.5)";
         ctx.lineWidth = 1 * px1;

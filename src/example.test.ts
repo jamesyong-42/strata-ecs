@@ -21,18 +21,18 @@ import {
 } from "./index";
 
 // --- schema (component boundaries chosen for independent editing, §4) ---
-const Position = defineComponent<{ x: number; y: number }>("Position", {
+const Position = defineComponent("Position", {
   x: field("f32", { default: 0 }),
   y: field("f32", { default: 0 }),
 });
-const Size = defineComponent<{ w: number; h: number }>("Size", { w: "f32", h: "f32" });
-const Fill = defineComponent<{ color: "Red" | "Green" | "Blue" }>("Fill", {
+const Size = defineComponent("Size", { w: "f32", h: "f32" });
+const Fill = defineComponent("Fill", {
   color: enumOf({ Red: 1, Green: 2, Blue: 3 }),
 });
-const Velocity = defineComponent<{ x: number; y: number }>("Velocity", { x: "f32", y: "f32" });
+const Velocity = defineComponent("Velocity", { x: "f32", y: "f32" });
 const Selected = defineTag("Selected");
 const ChildOf = defineRelation("ChildOf", { arity: "one" });
-const Grid = defineResource<{ snap: boolean }>("Grid", { snap: "bool" });
+const Grid = defineResource("Grid", { snap: "bool" });
 
 // --- systems ---
 const Drag = defineSystem(defineQuery([Position, Velocity]), (batch) => {

@@ -27,9 +27,9 @@ import {
 import { SEED, fuzzRuns } from "./harness";
 
 const C = [
-  defineComponent<{ v: number }>("QA", { v: field("u32", { default: 0 }) }),
-  defineComponent<{ v: number }>("QB", { v: field("u32", { default: 0 }) }),
-  defineComponent<{ v: number }>("QC", { v: field("u32", { default: 0 }) }),
+  defineComponent("QA", { v: field("u32", { default: 0 }) }),
+  defineComponent("QB", { v: field("u32", { default: 0 }) }),
+  defineComponent("QC", { v: field("u32", { default: 0 }) }),
 ];
 const TG = [defineTag("QT0"), defineTag("QT1")];
 const ROne = defineRelation("QROne", { arity: "one" });

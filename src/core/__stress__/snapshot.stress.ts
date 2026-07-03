@@ -24,11 +24,11 @@ import {
 } from "../index";
 import { scaled } from "./harness";
 
-const Uid = defineComponent<{ id: number }>("SnapUid", { id: "u32" });
-const Pos = defineComponent<{ x: number; y: number }>("SnapPos", { x: "f32", y: "f32" });
-const Name = defineComponent<{ label: string }>("SnapName", { label: "string" });
-const Ref = defineComponent<{ to: Entity }>("SnapRef", { to: "eid" });
-const Edge = defineComponent<{ a: number; b: number; c: number }>("SnapEdge", {
+const Uid = defineComponent("SnapUid", { id: "u32" });
+const Pos = defineComponent("SnapPos", { x: "f32", y: "f32" });
+const Name = defineComponent("SnapName", { label: "string" });
+const Ref = defineComponent("SnapRef", { to: "eid" });
+const Edge = defineComponent("SnapEdge", {
   a: "f64",
   b: "f64",
   c: "f64",
@@ -37,7 +37,7 @@ const TagA = defineTag("SnapTagA");
 const TagB = defineTag("SnapTagB");
 const Parent = defineRelation("SnapParent", { arity: "one" });
 const Links = defineRelation("SnapLinks", { arity: "many" });
-const Cfg = defineResource<{ seed: number }>("SnapCfg", { seed: "u32" });
+const Cfg = defineResource("SnapCfg", { seed: "u32" });
 
 const REF_FIELD = Ref.fieldByName.get("to")!.fieldId;
 
@@ -53,7 +53,9 @@ function model(w: World): Map<number, unknown> {
     const components: Record<string, unknown> = {};
     for (const c of store.componentsOf(e)) {
       if (c.name === "SnapRef") {
-        const ref = w.readEid(e, c, REF_FIELD);
+        // Liveness-validated eid read via the internal store seam — the public API is readField
+        // (keyed by name, decodes the raw handle); this harness needs the validated form.
+        const ref = store.readEid(e, c, REF_FIELD);
         components[c.name] = { to: ref !== undefined ? uidOf.get(ref) ?? null : null };
       } else {
         components[c.name] = w.read(e, c);
@@ -90,7 +92,8 @@ describe("stress: large-world snapshot round-trip (§8)", () => {
       const tags = [];
       if (i % 5 === 0) tags.push(TagA);
       if (i % 7 === 0) tags.push(TagB);
-      ents.push(w1.spawn({ components: comps, tags }));
+      // Dynamically-built entries go through the loose store surface (see archetype-migration.stress).
+      ents.push(w1.runtime.spawn({ components: comps, tags }));
     }
 
     // Second pass: eid refs + relations, now that every target entity exists (all placed).

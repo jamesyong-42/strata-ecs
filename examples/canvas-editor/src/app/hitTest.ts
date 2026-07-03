@@ -16,11 +16,11 @@ export function hitTestPoint(wx: number, wy: number): Entity | undefined {
   let best: Entity | undefined;
   let bestZ = -Infinity;
   worldRef.current.query(renderable).each((b) => {
-    const px = b.col(Position).x as Float32Array;
-    const py = b.col(Position).y as Float32Array;
-    const sw = b.col(Size).w as Float32Array;
-    const sh = b.col(Size).h as Float32Array;
-    const zz = b.col(ZIndex).z as Int32Array;
+    const px = b.col(Position).x;
+    const py = b.col(Position).y;
+    const sw = b.col(Size).w;
+    const sh = b.col(Size).h;
+    const zz = b.col(ZIndex).z;
     for (let i = 0; i < b.count; i++) {
       const r = b.rows[i];
       if (zz[r] <= bestZ) continue;
@@ -49,10 +49,10 @@ export function hitTestRegion(x0: number, y0: number, x1: number, y1: number): R
   const entities: Entity[] = [];
   const rects: number[] = [];
   worldRef.current.query(renderable).each((b) => {
-    const px = b.col(Position).x as Float32Array;
-    const py = b.col(Position).y as Float32Array;
-    const sw = b.col(Size).w as Float32Array;
-    const sh = b.col(Size).h as Float32Array;
+    const px = b.col(Position).x;
+    const py = b.col(Position).y;
+    const sw = b.col(Size).w;
+    const sh = b.col(Size).h;
     for (let i = 0; i < b.count; i++) {
       const r = b.rows[i];
       const hw = sw[r] / 2;

@@ -11,16 +11,16 @@ import type { Entity } from "./entity";
 import {
   type Component,
   type ComponentId,
-  type FieldId,
   type Relation,
   type Resource,
+  type SpawnInitOf,
   type Tag,
   encodeComponentValue,
 } from "./schema";
+import type { FieldInput } from "./field";
 import type { Batch, Query } from "./query";
 import type { CommandBuffer } from "./command";
 import type { RuntimeStore } from "./runtime-store";
-import type { SpawnInit } from "./runtime-store";
 
 /** The immediate whole-component value-write surface (§Part I ref). */
 export interface EntityEditor {
@@ -55,8 +55,8 @@ export class SystemCtx {
   get<S>(e: Entity, c: Component<S>): S | undefined {
     return this.store.get(e, c);
   }
-  readField<T = number>(e: Entity, c: Component, field: string): T | undefined {
-    return this.store.readField<T>(e, c, field);
+  readField<S, K extends keyof S & string>(e: Entity, c: Component<S>, field: K): S[K] | undefined {
+    return this.store.readField(e, c, field);
   }
   has(e: Entity, c: Component): boolean {
     return this.store.has(e, c);
@@ -72,9 +72,6 @@ export class SystemCtx {
   }
   getReverse(e: Entity, r: Relation): Entity[] {
     return this.store.getReverse(e, r);
-  }
-  readEid(e: Entity, c: Component, field: FieldId): Entity | undefined {
-    return this.store.readEid(e, c, field);
   }
   firstOf(q: Query): Entity | undefined {
     return this.store.firstOf(q);
@@ -92,7 +89,7 @@ export class SystemCtx {
   }
 
   // --- shape changes (deferred to the phase boundary) ---
-  spawn(init?: SpawnInit): Entity {
+  spawn<const T extends readonly Record<string, FieldInput>[]>(init?: SpawnInitOf<T>): Entity {
     // Validate BEFORE minting identity or enqueueing: a schema error (missing field, bad enum
     // label) must throw at THIS call site (§4), never at flush where it would strand the rest of
     // the buffer (§5.5). Validating first also avoids leaking an allocated identity on error.

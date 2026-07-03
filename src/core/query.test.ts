@@ -5,9 +5,9 @@ import { defineComponent, defineRelation, defineTag } from "./schema";
 import { type Entity, pack } from "./entity";
 
 // Isolated module context → fresh schema for this file.
-const Position = defineComponent<{ x: number; y: number }>("Position", { x: "f32", y: "f32" });
-const Velocity = defineComponent<{ x: number; y: number }>("Velocity", { x: "f32", y: "f32" });
-const Health = defineComponent<{ hp: number }>("Health", { hp: "u16" });
+const Position = defineComponent("Position", { x: "f32", y: "f32" });
+const Velocity = defineComponent("Velocity", { x: "f32", y: "f32" });
+const Health = defineComponent("Health", { hp: "u16" });
 const Frozen = defineTag("Frozen");
 const Enemy = defineTag("Enemy");
 const Selected = defineTag("Selected");

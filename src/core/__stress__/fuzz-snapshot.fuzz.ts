@@ -21,9 +21,9 @@ import {
 } from "../index";
 import { SEED, fuzzRuns } from "./harness";
 
-const SUid = defineComponent<{ id: number }>("SsUid", { id: "u32" });
-const SPos = defineComponent<{ x: number; y: number }>("SsPos", { x: "f32", y: "f32" });
-const SName = defineComponent<{ label: string }>("SsName", { label: "string" });
+const SUid = defineComponent("SsUid", { id: "u32" });
+const SPos = defineComponent("SsPos", { x: "f32", y: "f32" });
+const SName = defineComponent("SsName", { label: "string" });
 const TG = [defineTag("SsT0"), defineTag("SsT1")];
 const Parent = defineRelation("SsParent", { arity: "one" });
 const Links = defineRelation("SsLinks", { arity: "many" });
@@ -81,7 +81,8 @@ describe("fuzz: snapshot round-trip fidelity (§8)", () => {
             if (s.name !== undefined) comps.push([SName, { label: s.name }]);
             const tags = [];
             for (let t = 0; t < 2; t++) if (s.tags & (1 << t)) tags.push(TG[t]);
-            handles.push(w1.spawn({ components: comps, tags }));
+            // Dynamically-built entries go through the loose store surface (see archetype-migration.stress).
+            handles.push(w1.runtime.spawn({ components: comps, tags }));
           }
           for (const r of rels) {
             const src = handles[r.src % n];

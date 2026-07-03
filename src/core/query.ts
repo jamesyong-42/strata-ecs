@@ -9,8 +9,8 @@
  * archetypes against it.
  */
 
+import type { Column, ColumnsOf } from "./field";
 import type { Entity } from "./entity";
-import type { Column } from "./field";
 import type { Component, ComponentId, Relation, Tag, TagId } from "./schema";
 
 // --- term inputs -------------------------------------------------------------
@@ -127,8 +127,10 @@ export interface Batch extends Iterable<number> {
   readonly denseCount: number;
   /** True only for a dense, unseeded, no-row-filter chunk (the raw `denseCount` loop is valid). */
   readonly isDense: boolean;
-  /** Raw columns for a component in this chunk, keyed by field name. */
-  col(c: Component): Record<string, Column>;
+  /** Raw columns for a component in this chunk, keyed by field name — typed from the component's
+   *  schema literal (`col(Position).x` is a `Float32Array`, no cast). A bare {@link Component}
+   *  degrades to the loose `{ [name: string]: Column }`. */
+  col<S, Sch>(c: Component<S, Sch>): ColumnsOf<Sch>;
   /**
    * Name-keyed columns for every component in this chunk's archetype (`const { Position } =
    * batch.columns`). Dev/demo sugar, loosely typed — prefer {@link Batch.col} in real code (§6.2).

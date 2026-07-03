@@ -5,18 +5,18 @@ import { enumOf } from "./field";
 import { Not, defineQuery } from "./query";
 import type { Entity } from "./entity";
 
-const Position = defineComponent<{ x: number; y: number }>("Position", { x: "f32", y: "f32" });
-const Health = defineComponent<{ current: number; max: number }>("Health", { current: "u16", max: "u16" });
-const Name = defineComponent<{ value: string | null }>("Name", { value: "string" });
-const Team = defineComponent<{ side: "Red" | "Blue" }>("Team", { side: enumOf({ Red: 1, Blue: 2 }) });
-const Flag = defineComponent<{ on: boolean }>("Flag", { on: "bool" });
-const Link = defineComponent<{ target: number }>("Link", { target: "eid" });
-const Bond = defineComponent<{ a: number; b: number }>("Bond", { a: "eid", b: "eid" });
+const Position = defineComponent("Position", { x: "f32", y: "f32" });
+const Health = defineComponent("Health", { current: "u16", max: "u16" });
+const Name = defineComponent("Name", { value: "string" });
+const Team = defineComponent("Team", { side: enumOf({ Red: 1, Blue: 2 }) });
+const Flag = defineComponent("Flag", { on: "bool" });
+const Link = defineComponent("Link", { target: "eid" });
+const Bond = defineComponent("Bond", { a: "eid", b: "eid" });
 const Enemy = defineTag("Enemy");
 const Frozen = defineTag("Frozen");
 const ChildOf = defineRelation("ChildOf", { arity: "one" });
 const Targets = defineRelation("Targets", { arity: "many" });
-const Score = defineResource<{ value: number }>("Score", { value: "u32" });
+const Score = defineResource("Score", { value: "u32" });
 
 const encodeJson = (obj: unknown) => new TextEncoder().encode(JSON.stringify(obj));
 

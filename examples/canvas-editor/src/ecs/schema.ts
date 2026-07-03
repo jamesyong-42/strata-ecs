@@ -27,11 +27,11 @@ function defineSchema() {
     // separate components, not a fat Transform — the component is the future conflict unit.
 
     /** World-space center of a shape. */
-    Position: defineComponent<{ x: number; y: number }>("Position", { x: "f32", y: "f32" }),
+    Position: defineComponent("Position", { x: "f32", y: "f32" }),
     /** Width/height in world units. */
-    Size: defineComponent<{ w: number; h: number }>("Size", { w: "f32", h: "f32" }),
+    Size: defineComponent("Size", { w: "f32", h: "f32" }),
     /** RGBA fill, 0–255 per channel. */
-    Fill: defineComponent<{ r: number; g: number; b: number; a: number }>("Fill", {
+    Fill: defineComponent("Fill", {
       r: "u8",
       g: "u8",
       b: "u8",
@@ -39,20 +39,20 @@ function defineSchema() {
     }),
     /** Explicit z-order — row order is unstable in an archetype ECS (swap-and-pop), so
      *  stacking is app data, never iteration order. */
-    ZIndex: defineComponent<{ z: number }>("ZIndex", { z: "i32" }),
+    ZIndex: defineComponent("ZIndex", { z: "i32" }),
     /** What to draw. Explicit discriminants: this enum outlives the process via snapshots
      *  (design.md §8.1) — positional enums are for local-only state (see Gesture below). */
-    Kind: defineComponent<{ shape: "rect" | "ellipse" | "note" }>("Kind", {
+    Kind: defineComponent("Kind", {
       shape: enumOf({ rect: 1, ellipse: 2, note: 3 }),
     }),
     /** Sticky-note text. */
-    Label: defineComponent<{ text: string }>("Label", { text: "string" }),
+    Label: defineComponent("Label", { text: "string" }),
     /**
      * Velocity lives on EVERY shape from birth (defaults 0) so simulate mode is a `runIf`
      * phase gate costing zero archetype migrations — bulk add/remove churn is strata's
      * measured weak path, dense iteration over two extra columns is its measured strength.
      */
-    Velocity: defineComponent<{ vx: number; vy: number }>("Velocity", {
+    Velocity: defineComponent("Velocity", {
       vx: field("f32", { default: 0 }),
       vy: field("f32", { default: 0 }),
     }),
@@ -67,13 +67,13 @@ function defineSchema() {
     /** The active pointer gesture, written by the input layer between frames. Positional
      *  enum on purpose: local-only state, deliberately contrasted with Kind's explicit
      *  discriminants. */
-    Gesture: defineResource<{ mode: "idle" | "drag" | "marquee" | "draw"; dx: number; dy: number }>(
+    Gesture: defineResource(
       "Gesture",
       { mode: enumOf(["idle", "drag", "marquee", "draw"]), dx: "f32", dy: "f32" },
     ),
     /** The viewport: world coords of the view center, zoom (px per world unit), and the
      *  canvas size in CSS px — everything CullSystem needs to build the view rect. */
-    Camera: defineResource<{ x: number; y: number; zoom: number; w: number; h: number }>("Camera", {
+    Camera: defineResource("Camera", {
       x: "f32",
       y: "f32",
       zoom: "f32",
@@ -82,7 +82,7 @@ function defineSchema() {
     }),
     /** Gates the simulate phase; `bound` is the half-extent of the bounce box (set from the
      *  seeded board's spread). The whole phase costs zero ticks while `on` is false. */
-    SimMode: defineResource<{ on: boolean; bound: number }>("SimMode", {
+    SimMode: defineResource("SimMode", {
       on: "bool",
       bound: field("f32", { default: 4000 }),
     }),

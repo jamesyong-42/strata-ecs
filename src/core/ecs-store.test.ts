@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   type ECSStore,
   type Entity,
-  type EntityKey,
   RuntimeStore,
   createWorld,
   defineComponent,
@@ -12,7 +11,7 @@ import {
 
 describe("ECSStore contract", () => {
   it("a RuntimeStore is fully usable through the representation-agnostic ECSStore interface", () => {
-    const C = defineComponent<{ v: number }>("CE", { v: "u32" });
+    const C = defineComponent("CE", { v: "u32" });
     // Hold the concrete store ONLY as the abstract contract (what World/ctx and Parts II–IV do).
     const store: ECSStore = new RuntimeStore();
     const e = store.spawn({ components: [[C, { v: 7 }]] });
@@ -33,7 +32,7 @@ describe("ECSStore contract", () => {
   });
 });
 
-const Ref = defineComponent<{ key: EntityKey | null; label: string }>("RefE", {
+const Ref = defineComponent("RefE", {
   key: "key",
   label: "string",
 });

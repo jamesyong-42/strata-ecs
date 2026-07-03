@@ -8,9 +8,9 @@ import {
   phase,
 } from "../src/index";
 
-const Position = defineComponent<{ x: number; y: number }>("Position", { x: "f32", y: "f32" });
-const Velocity = defineComponent<{ x: number; y: number }>("Velocity", { x: "f32", y: "f32" });
-const Health = defineComponent<{ hp: number }>("Health", { hp: "u16" });
+const Position = defineComponent("Position", { x: "f32", y: "f32" });
+const Velocity = defineComponent("Velocity", { x: "f32", y: "f32" });
+const Health = defineComponent("Health", { hp: "u16" });
 
 const N = 10_000;
 

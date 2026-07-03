@@ -19,8 +19,8 @@ export const DragMoveSystem = defineSystem(
   (b: Batch, ctx) => {
     const g = ctx.getResource(Gesture);
     if (g === undefined || (g.dx === 0 && g.dy === 0)) return;
-    const px = b.col(Position).x as Float32Array;
-    const py = b.col(Position).y as Float32Array;
+    const px = b.col(Position).x;
+    const py = b.col(Position).y;
     const dx = g.dx;
     const dy = g.dy;
     for (let i = 0; i < b.count; i++) {

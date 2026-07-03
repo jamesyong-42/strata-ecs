@@ -4,10 +4,10 @@ import { createLifecycleRecorder } from "./recorder";
 import type { DescribeFn } from "./describe";
 
 // Node-safe slice of strata/tools (no DOM): the recorder is pure hook plumbing.
-const RPos = defineComponent<{ x: number }>("TOOLSRecPos", { x: "f32" });
+const RPos = defineComponent("TOOLSRecPos", { x: "f32" });
 
 const describeFn: DescribeFn = (world, e) => ({
-  label: world.has(e, RPos) ? `pos:${world.readField<number>(e, RPos, "x")}` : "bare",
+  label: world.has(e, RPos) ? `pos:${world.readField(e, RPos, "x")}` : "bare",
   color: "#123456",
   phase: null,
 });

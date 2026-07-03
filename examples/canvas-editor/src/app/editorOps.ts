@@ -84,9 +84,11 @@ export function duplicateSelection(): DuplicateResult {
       const fill = w.read(e, Fill);
       const kind = w.read(e, Kind);
       const label = w.get(e, Label);
-      const clone = w.spawn({
-        components: label
-          ? [
+      // Ternary at the CALL, not inside `components`: a value that unions two differently-shaped
+      // entry tuples can't be inferred through the typed spawn (it fixes the shape from one arm).
+      const clone = label
+        ? w.spawn({
+            components: [
               [Position, { x: pos.x + 16, y: pos.y + 16 }],
               [Size, size],
               [Fill, fill],
@@ -94,8 +96,11 @@ export function duplicateSelection(): DuplicateResult {
               [Kind, kind],
               [Velocity, {}],
               [Label, label],
-            ]
-          : [
+            ],
+            tags: [Selected],
+          })
+        : w.spawn({
+            components: [
               [Position, { x: pos.x + 16, y: pos.y + 16 }],
               [Size, size],
               [Fill, fill],
@@ -103,8 +108,8 @@ export function duplicateSelection(): DuplicateResult {
               [Kind, kind],
               [Velocity, {}],
             ],
-        tags: [Selected],
-      });
+            tags: [Selected],
+          });
       clones.push(clone);
     }
     for (const e of originals) w.removeTag(e, Selected);
@@ -126,10 +131,12 @@ export function createShape(kind: ShapeKind, x: number, y: number): Entity {
   const w = worldRef.current;
   let e!: Entity;
   mutate("create", () => {
-    e = w.spawn({
-      components:
-        kind === "note"
-          ? [
+    // Ternary at the CALL (see duplicateSelected): the note arm carries a Label, so the two arms
+    // are differently-shaped tuples the typed spawn can't unify.
+    e =
+      kind === "note"
+        ? w.spawn({
+            components: [
               [Position, { x, y }],
               [Size, { w: 1, h: 1 }],
               [Fill, CREATE_FILL.note],
@@ -137,8 +144,10 @@ export function createShape(kind: ShapeKind, x: number, y: number): Entity {
               [Kind, { shape: "note" }],
               [Velocity, {}],
               [Label, { text: "new note" }],
-            ]
-          : [
+            ],
+          })
+        : w.spawn({
+            components: [
               [Position, { x, y }],
               [Size, { w: 1, h: 1 }],
               [Fill, CREATE_FILL[kind]],
@@ -146,7 +155,7 @@ export function createShape(kind: ShapeKind, x: number, y: number): Entity {
               [Kind, { shape: kind }],
               [Velocity, {}],
             ],
-    });
+          });
   });
   stats.entities += 1;
   return e;

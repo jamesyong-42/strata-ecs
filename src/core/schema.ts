@@ -16,6 +16,8 @@ import {
   type ColumnKind,
   type FieldInput,
   type FieldSpec,
+  type ValueOf,
+  type WriteOf,
   columnKindOf,
   encodeField,
   normalizeField,
@@ -36,20 +38,42 @@ export interface FieldMeta {
   readonly component: ComponentId;
 }
 
-/** The public component handle — opaque; carries identity + field layout (§3.4 identity stack). */
-export interface Component<S = unknown> {
+/**
+ * The public component handle — opaque; carries identity + field layout (§3.4 identity stack).
+ * `S` is the decoded read-value type; `Sch` is the schema LITERAL, retained so `col()` can recover
+ * exact column types and `spawn` can check per-field values (the value type alone cannot tell an
+ * f32 column from an f64, or a defaulted field from a required one). A bare `Component` keeps the
+ * pre-inference behavior (unknown value, loose columns).
+ */
+export interface Component<S = unknown, Sch = Record<string, FieldInput>> {
   readonly id: ComponentId;
   readonly name: string;
   readonly fields: readonly FieldMeta[];
   readonly fieldByName: ReadonlyMap<string, FieldMeta>;
   /** Phantom marker for the field-value type `S`; never present at runtime. */
   readonly __value?: S;
+  /** Phantom marker for the schema literal `Sch`; never present at runtime. */
+  readonly __schema?: Sch;
 }
 
 /** The public tag handle. */
 export interface Tag {
   readonly id: TagId;
   readonly name: string;
+}
+
+/**
+ * The typed `spawn` init for `World`/`SystemCtx` (§5.2). `T` is the tuple of per-entry SCHEMA
+ * literals, inferred from the component handles; each value is then checked against its component's
+ * schema via {@link WriteOf} (defaulted fields optional, wrong/missing fields rejected). A
+ * heterogeneous inline `components` array checks per element with no annotations. Two shapes the
+ * mapped tuple cannot infer through — a value that is a UNION of differently-shaped tuples, and a
+ * pre-built `readonly ComponentEntry[]` (the store's loose form) — are spawned by lifting the union
+ * to the call site or by going through the loose store surface (`world.runtime.spawn`), respectively.
+ */
+export interface SpawnInitOf<T extends readonly Record<string, FieldInput>[]> {
+  components?: readonly [...{ [K in keyof T]: readonly [Component<unknown, T[K]>, WriteOf<T[K]>] }];
+  tags?: readonly Tag[];
 }
 
 export type Arity = "one" | "many";
@@ -62,13 +86,14 @@ export interface Relation {
   readonly ordered: boolean;
 }
 
-/** The public resource (world-singleton) handle. */
-export interface Resource<S = unknown> {
+/** The public resource (world-singleton) handle. `S`/`Sch` mirror {@link Component} (§3.4). */
+export interface Resource<S = unknown, Sch = Record<string, FieldInput>> {
   readonly id: ResourceId;
   readonly name: string;
   readonly fields: readonly FieldMeta[];
   readonly fieldByName: ReadonlyMap<string, FieldMeta>;
   readonly __value?: S;
+  readonly __schema?: Sch;
 }
 
 /** Framework-owned identifiers reserved so user schema can't collide with them (§3.4). */
@@ -112,11 +137,15 @@ function initSchemaState(): void {
 }
 initSchemaState();
 
-/** Declare a component and route each field to a column (§4). Field names must be unique in the schema. */
-export function defineComponent<S = Record<string, unknown>>(
+/**
+ * Declare a component and route each field to a column (§4). Field names must be unique in the
+ * schema. The schema literal is captured as `Sch` (via the `const` type parameter), so the returned
+ * handle's value type is INFERRED from it — no hand-declared `<S>` that can silently drift.
+ */
+export function defineComponent<const Sch extends Record<string, FieldInput>>(
   name: string,
-  schema: Record<string, FieldInput>,
-): Component<S> {
+  schema: Sch,
+): Component<ValueOf<Sch>, Sch> {
   names.define(name);
   const id = nextComponentId++;
   const fields: FieldMeta[] = [];
@@ -134,7 +163,7 @@ export function defineComponent<S = Record<string, unknown>>(
     fieldByName.set(fieldName, meta);
     fieldsById[meta.fieldId] = meta;
   }
-  const handle: Component<S> = { id, name, fields, fieldByName };
+  const handle: Component<ValueOf<Sch>, Sch> = { id, name, fields, fieldByName };
   componentsById[id] = handle;
   componentsByName.set(name, handle);
   return handle;
@@ -166,11 +195,12 @@ export function defineRelation(
   return handle;
 }
 
-/** Declare a world-scoped singleton (§4). */
-export function defineResource<S = Record<string, unknown>>(
+/** Declare a world-scoped singleton (§4). Value type inferred from the schema literal, as with
+ *  {@link defineComponent}. */
+export function defineResource<const Sch extends Record<string, FieldInput>>(
   name: string,
-  schema: Record<string, FieldInput>,
-): Resource<S> {
+  schema: Sch,
+): Resource<ValueOf<Sch>, Sch> {
   names.define(name);
   const id = nextResourceId++;
   const fields: FieldMeta[] = [];
@@ -187,7 +217,7 @@ export function defineResource<S = Record<string, unknown>>(
     fields.push(meta);
     fieldByName.set(fieldName, meta);
   }
-  const handle: Resource<S> = { id, name, fields, fieldByName };
+  const handle: Resource<ValueOf<Sch>, Sch> = { id, name, fields, fieldByName };
   resourcesById[id] = handle;
   resourcesByName.set(name, handle);
   return handle;
