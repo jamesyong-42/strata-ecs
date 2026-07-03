@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createWorld, type World } from "./world";
+import { createWorld, type InboundSource, type World } from "./world";
 import { defineComponent, defineRelation, defineResource, defineTag } from "./schema";
 import { All, Not, type Query, defineQuery } from "./query";
 import { defineSystem, phase } from "./system";
@@ -301,5 +301,179 @@ describe("conformance-audit fixes", () => {
     expect(viaReadField).toBe(target); // ctx.readField decoded the eid field
     expect(viaColumns).toBe(target); // batch.columns exposed the raw column
     expect(w.readField(w.firstOf(defineQuery([Link])) as Entity, Link, "target")).toBe(target); // World.readField too
+  });
+});
+
+describe("the iterationDepth guard (006 §A4)", () => {
+  const posQ = defineQuery([Position]);
+
+  it("every structural world.* throws inside a world.query().each body; the board is untouched", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Position, { x: 0, y: 0 }], [Health, { hp: 3 }]] });
+    const other = w.spawn({ components: [[Position, { x: 1, y: 1 }]] });
+
+    // Each thunk opens a fresh iteration and issues one structural op from inside it. eachGuarded's
+    // finally restores the depth after every throw, so the thunks are independent.
+    const inBody = (fn: () => void) => () => w.query(posQ).each(() => fn());
+
+    expect(inBody(() => w.spawn({ components: [[Position, { x: 2, y: 2 }]] }))).toThrow(
+      /world\.spawn\(\) cannot run during query iteration/,
+    );
+    expect(inBody(() => w.destroy(other))).toThrow(/world\.destroy\(\)/);
+    expect(inBody(() => w.addComponent(e, Velocity, { x: 0, y: 0 }))).toThrow(/world\.addComponent\(\)/);
+    expect(inBody(() => w.removeComponent(e, Health))).toThrow(/world\.removeComponent\(\)/);
+    expect(inBody(() => w.addTag(e, Marker))).toThrow(/world\.addTag\(\)/);
+    expect(inBody(() => w.removeTag(e, Marker))).toThrow(/world\.removeTag\(\)/);
+    expect(inBody(() => w.setRelation(e, ChildOf, other))).toThrow(/world\.setRelation\(\)/);
+    expect(inBody(() => w.addRelation(e, Targets, other))).toThrow(/world\.addRelation\(\)/);
+    expect(inBody(() => w.removeRelation(e, Targets, other))).toThrow(/world\.removeRelation\(\)/);
+    expect(inBody(() => w.import(new Uint8Array()))).toThrow(/world\.import\(\)/);
+    expect(inBody(() => w.reset())).toThrow(/world\.reset\(\) cannot run during query iteration/);
+
+    // Nothing landed: every attempt threw at the facade before delegating to the store.
+    expect(w.isAlive(other)).toBe(true);
+    expect(w.has(e, Health)).toBe(true);
+    expect(w.has(e, Velocity)).toBe(false);
+    expect(w.hasTag(e, Marker)).toBe(false);
+  });
+
+  it("value writes (edit().set, setResource, removeResource) succeed mid-iteration — they reorder no columns", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+    w.setResource(Config, { enabled: true });
+
+    w.query(posQ).each(() => {
+      w.edit(e).set(Position, { x: 9, y: 9 }); // value write — exempt
+      w.setResource(Config, { enabled: false }); // resource value — exempt
+      w.removeResource(Config); // resource remove — value-shaped, exempt
+    });
+
+    expect(w.read(e, Position)).toEqual({ x: 9, y: 9 });
+    expect(w.getResource(Config)).toBeUndefined();
+  });
+
+  it("a nested query keeps the guard armed at every depth, and depth unwinds to 0 after", () => {
+    const w = createWorld();
+    w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+    w.spawn({ components: [[Velocity, { x: 0, y: 0 }]] });
+    const velQ = defineQuery([Velocity]);
+    let innerRan = false;
+    let outerResumed = false;
+
+    w.query(posQ).each(() => {
+      expect(() => w.spawn()).toThrow(/query iteration/); // depth 1
+      w.query(velQ).each(() => {
+        innerRan = true;
+        expect(() => w.addTag(w.firstOf(posQ) as Entity, Marker)).toThrow(/query iteration/); // depth 2
+      });
+      outerResumed = true;
+      expect(() => w.destroy(w.firstOf(posQ) as Entity)).toThrow(/query iteration/); // back to depth 1, still armed
+    });
+
+    expect(innerRan).toBe(true);
+    expect(outerResumed).toBe(true);
+    expect(() => w.spawn()).not.toThrow(); // depth back to 0 — structural ops work again
+  });
+
+  it("a structural world.* inside a system body throws during tick(), and the depth unwinds", () => {
+    const w = createWorld();
+    w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+    const Bad = defineSystem(posQ, () => {
+      w.spawn({ components: [[Position, { x: 1, y: 1 }]] }); // world.spawn (not ctx.spawn) mid-tick
+    });
+    expect(() => w.tick([phase("x", [Bad])])).toThrow(/query iteration/);
+    expect(() => w.spawn()).not.toThrow(); // the finally unwound the depth
+  });
+
+  it("the guard is unconditional — it fires even in a world that never armed reactivity", () => {
+    // 001 Rule-3 enforcement only arms once an observer exists; this guard does not ride that gate
+    // (a mid-iteration migration is memory corruption in every build), so it throws with reactive off.
+    const w = createWorld(); // w.reactive never touched → reactiveOn stays false
+    w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+    expect(() => {
+      w.query(posQ).each(() => w.addComponent(w.firstOf(posQ) as Entity, Velocity, { x: 0, y: 0 }));
+    }).toThrow(/query iteration/);
+  });
+});
+
+describe("sync() boundary guards (005 §5.5 / 006 §C2)", () => {
+  const posQ = defineQuery([Position]);
+
+  it("throws when called mid query-iteration (all builds)", () => {
+    const w = createWorld();
+    w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+    expect(() => w.query(posQ).each(() => w.sync())).toThrow(
+      /world\.sync\(\) cannot run during query iteration/,
+    );
+  });
+
+  it("the in-emit guard throws directly when the store is inside an observer/reactive emit", () => {
+    const w = createWorld();
+    const prev = w.runtime.setObserverEmit(true);
+    try {
+      expect(() => w.sync()).toThrow(/from inside an observer or reactive callback/);
+    } finally {
+      w.runtime.setObserverEmit(prev);
+    }
+  });
+
+  it("DEV-throws from inside a WorldObserver callback (swallowed by the emit wrapper, then reported)", () => {
+    const w = createWorld();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    w.observe({ onSpawn: () => w.sync() }); // onSpawn runs with inObserverEmit set
+    w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("world.sync() cannot run from inside an observer or reactive callback"),
+    );
+    spy.mockRestore();
+  });
+
+  it("DEV-throws from inside a reactive callback (swallowed, then reported)", () => {
+    const w = createWorld();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    w.setResource(Config, { enabled: true });
+    w.reactive.observeResource(Config, () => w.sync());
+    w.setResource(Config, { enabled: false }); // a real change → fires the callback at notify
+    w.reactive.notify();
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("world.sync() cannot run from inside an observer or reactive callback"),
+    );
+    spy.mockRestore();
+  });
+
+  it("drains normally outside iteration and emit", () => {
+    const w = createWorld();
+    let drained = 0;
+    w.registerInboundSource({ drain: () => void drained++ });
+    w.sync();
+    w.sync();
+    expect(drained).toBe(2);
+  });
+});
+
+describe("unregisterInboundSource (005 §6.2)", () => {
+  it("a registered source drains on sync; after unregister it never drains again", () => {
+    const w = createWorld();
+    let drained = 0;
+    const src: InboundSource = { drain: () => void drained++ };
+    w.registerInboundSource(src);
+    w.sync();
+    expect(drained).toBe(1);
+
+    w.unregisterInboundSource(src);
+    w.sync();
+    w.sync();
+    expect(drained).toBe(1); // never drained after removal (teardown step 0, §5.6)
+  });
+
+  it("unregistering an unknown source is a no-op and leaves registered sources draining", () => {
+    const w = createWorld();
+    let drained = 0;
+    const known: InboundSource = { drain: () => void drained++ };
+    w.registerInboundSource(known);
+
+    expect(() => w.unregisterInboundSource({ drain: () => {} })).not.toThrow(); // never registered
+    w.sync();
+    expect(drained).toBe(1); // the known source still drains
   });
 });

@@ -748,3 +748,81 @@ describe("resource reactivity (003 §1)", () => {
     expect(fired1).toBe(1); // …and still live on its own world
   });
 });
+
+describe("resource removal (005 §6.1)", () => {
+  it("removes a present resource: the watch observes the transition to undefined; peek is undefined after", () => {
+    const w = createWorld();
+    w.setResource(Camera, { x: 1, y: 2, zoom: 3 });
+    const seen: unknown[] = [];
+    w.reactive.observeResource(Camera, (v) => seen.push(v));
+
+    w.removeResource(Camera);
+    w.reactive.notify();
+    expect(seen).toEqual([undefined]); // a removal is observed as a change to undefined
+    expect(w.reactive.peekResource(Camera)).toBeUndefined();
+    expect(w.getResource(Camera)).toBeUndefined();
+  });
+
+  it("removing an ABSENT resource is a stampless no-op: no stamp, no notify", () => {
+    const w = createWorld();
+    let fired = 0;
+    w.reactive.observeResource(Camera, () => fired++); // Camera never set
+    const rt = w.runtime;
+
+    w.removeResource(Camera); // absent → Map.delete false → no bumpResource
+    expect(rt.resourceFrame(Camera.id)).toBe(0); // never stamped
+    w.reactive.notify();
+    expect(fired).toBe(0); // a registered watch does NOT fire
+  });
+
+  it("re-removing an already-removed resource is idempotent (P7): no new stamp, no second fire", () => {
+    const w = createWorld();
+    w.setResource(Camera, { x: 1, y: 0, zoom: 1 });
+    let fired = 0;
+    w.reactive.observeResource(Camera, () => fired++);
+
+    w.removeResource(Camera); // present → stamps + fires
+    w.reactive.notify();
+    expect(fired).toBe(1);
+    const stampAfterFirst = w.runtime.resourceFrame(Camera.id);
+
+    w.removeResource(Camera); // already gone → stampless no-op
+    expect(w.runtime.resourceFrame(Camera.id)).toBe(stampAfterFirst); // no new stamp
+    w.reactive.notify();
+    expect(fired).toBe(1); // no second fire
+  });
+
+  it("removeResource from inside a reactive callback DEV-warns (stamps the current frame — unobservable)", () => {
+    const w = createWorld();
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    w.setResource(Camera, { x: 1, y: 0, zoom: 1 });
+    w.reactive.observeResource(Camera, () => {
+      w.removeResource(Camera); // from inside a callback — the removal is silently unobservable this pass
+    });
+    w.setResource(Camera, { x: 2, y: 0, zoom: 1 }); // a real change → fires the callback
+    w.reactive.notify();
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining('removeResource("RCTCamera") from inside a reactive callback'),
+    );
+    spy.mockRestore();
+  });
+});
+
+describe("writeComponent-in-emit devWarn (005 §5.5 / 006 §C2)", () => {
+  it("a value write (edit().set) from inside a reactive callback DEV-warns; the write still lands", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    w.reactive.observeResource(Camera, () => {
+      w.edit(e).set(Pos, { x: 5, y: 5 }); // value write inside a callback — stamps current frame, unobservable
+    });
+    w.setResource(Camera, { x: 1, y: 0, zoom: 1 }); // fires the callback
+    w.reactive.notify();
+
+    expect(w.read(e, Pos)).toEqual({ x: 5, y: 5 }); // diagnostic only — the write is applied
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining('writeComponent("RCTPos") from inside a reactive callback'),
+    );
+    spy.mockRestore();
+  });
+});

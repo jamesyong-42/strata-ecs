@@ -54,6 +54,7 @@ export interface ECSStore {
 
   // --- resources ---
   setResource<S>(res: Resource<S>, value: S): void;
+  removeResource<S>(res: Resource<S>): void;
   getResource<S>(res: Resource<S>): S | undefined;
 
   // --- query (the one place the representation leaks — into the per-chunk callback, §6.2) ---

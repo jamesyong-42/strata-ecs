@@ -39,6 +39,17 @@ export class World {
    * run mid-tick / mid-flush (it would corrupt an in-flight command-buffer drain or system pass).
    */
   private ticking = false;
+  /**
+   * Depth of nested query dispatches the facade is currently inside (006 §A4). Incremented/decremented
+   * (try/finally) around every `world.query(q).each` and both `store.query(...).each` walks in
+   * `tick()`. A depth COUNTER, not a boolean, because query walks legitimately nest (a system iterating
+   * a sub-query). Every World STRUCTURAL method throws while this is > 0, in ALL builds — a
+   * mid-iteration archetype migration reorders the rows the walk is stepping over (memory corruption,
+   * not a style violation), so the guard is unconditional. Value writes stay exempt (they reorder no
+   * columns). Owned by the facade — the `RuntimeStore` never consults it (storage-ownership ≠
+   * semantics-ownership, the §3 buffer-pool precedent).
+   */
+  private iterationDepth = 0;
   readonly name: string;
 
   constructor(opts?: { name?: string }) {
@@ -71,11 +82,40 @@ export class World {
     return this.store.addObserver(obs);
   }
 
+  /**
+   * Reject a structural mutation issued mid query-iteration (006 §A4). UNCONDITIONAL (all builds): a
+   * mid-iteration archetype migration corrupts the walk. Names the op and points at the deferred
+   * `ctx.*` form. Value writes never call this — they reorder no columns, so they stay legal.
+   */
+  private assertNotIterating(op: string): void {
+    if (this.iterationDepth > 0) {
+      throw new Error(
+        `strata: world.${op}() cannot run during query iteration — a mid-iteration structural change reorders archetype rows and corrupts the walk; use the deferred ctx.* form inside a system, or mutate outside the query body (§5.2, 006 §A4).`,
+      );
+    }
+  }
+
+  /**
+   * Bracket a query dispatch with `iterationDepth` so a structural `world.*` call from inside the body
+   * throws (006 §A4). The finally always restores the depth, so a throwing body never strands the
+   * guard armed; nesting increments it (nested walks are legal).
+   */
+  private eachGuarded(source: { each(fn: (batch: Batch) => void): void }, fn: (batch: Batch) => void): void {
+    this.iterationDepth++;
+    try {
+      source.each(fn);
+    } finally {
+      this.iterationDepth--;
+    }
+  }
+
   // --- entities / lifecycle (immediate) ---
   spawn<const T extends readonly Record<string, FieldInput>[]>(init?: SpawnInitOf<T>): Entity {
+    this.assertNotIterating("spawn");
     return this.store.spawn(init);
   }
   destroy(e: Entity): void {
+    this.assertNotIterating("destroy");
     this.store.destroy(e);
   }
   isAlive(e: Entity): boolean {
@@ -90,24 +130,31 @@ export class World {
 
   // --- shape changes (immediate — outside iteration, §5.2) ---
   addComponent<S>(e: Entity, c: Component<S>, v: S): void {
+    this.assertNotIterating("addComponent");
     this.store.addComponent(e, c, v);
   }
   removeComponent(e: Entity, c: Component): void {
+    this.assertNotIterating("removeComponent");
     this.store.removeComponent(e, c);
   }
   addTag(e: Entity, t: Tag): void {
+    this.assertNotIterating("addTag");
     this.store.addTag(e, t);
   }
   removeTag(e: Entity, t: Tag): void {
+    this.assertNotIterating("removeTag");
     this.store.removeTag(e, t);
   }
   setRelation(e: Entity, r: Relation, target: Entity): void {
+    this.assertNotIterating("setRelation");
     this.store.setRelation(e, r, target);
   }
   addRelation(e: Entity, r: Relation, target: Entity): void {
+    this.assertNotIterating("addRelation");
     this.store.addRelation(e, r, target);
   }
   removeRelation(e: Entity, r: Relation, target?: Entity): void {
+    this.assertNotIterating("removeRelation");
     this.store.removeRelation(e, r, target);
   }
 
@@ -152,10 +199,19 @@ export class World {
    * buffer here, so shape changes are not deferred — use a system for those).
    */
   query(q: Query): { each(fn: (batch: Batch) => void): void } {
-    return this.store.query(q);
+    // Bracket the user's body with the iteration guard (006 §A4) so a structural world.* call from
+    // inside it throws — an out-of-tick walk is exactly the memory-corruption case the tick loop's
+    // dispatches also guard. Reads stay free.
+    const source = this.store.query(q);
+    return { each: (fn) => this.eachGuarded(source, fn) };
   }
   setResource<S>(res: Resource<S>, value: S): void {
     this.store.setResource(res, value);
+  }
+  /** Remove a resource (005 §6.1). Value-shaped — EXEMPT from the iteration guard (it reorders no
+   *  columns), so it is legal mid-iteration exactly like `edit().set` and `setResource`. */
+  removeResource<S>(res: Resource<S>): void {
+    this.store.removeResource(res);
   }
   getResource<S>(res: Resource<S>): S | undefined {
     return this.store.getResource(res);
@@ -205,10 +261,10 @@ export class World {
             if (DEV && reactive !== null) this.store.beginSystemAccess(system); // 001 Rule 3 enforcement window
             if (obs !== null) {
               const t0 = performance.now();
-              this.store.query(system.query).each((batch) => system.body(batch, ctx));
+              this.eachGuarded(this.store.query(system.query), (batch) => system.body(batch, ctx));
               emitSystemRun(obs, phase.name, system.name, true, (performance.now() - t0) * 1000);
             } else {
-              this.store.query(system.query).each((batch) => system.body(batch, ctx));
+              this.eachGuarded(this.store.query(system.query), (batch) => system.body(batch, ctx));
             }
             // Reactive change detection: blanket-stamp the system's declared writes (001 §3.1 route 1,
             // 002 §2.3). A gated-off system never reaches here, so it never stamps (001 §3.4).
@@ -255,14 +311,42 @@ export class World {
     }
   }
 
-  /** Drain all attached inbound sources (§16). A no-op in a pure Part I world (no sources). */
+  /**
+   * Drain all attached inbound sources (§16). A no-op in a pure Part I world (no sources). The frame
+   * contract is `sync() → tick(s) → notify() → render` (006 §C2), so sync() runs at the frame
+   * boundary and never mid-iteration nor mid-emit:
+   * - throws when `iterationDepth > 0` (ALL builds) — draining mid-iteration would migrate archetypes
+   *   under a live query walk (rides the A4 guard);
+   * - DEV-asserts the store is not inside an observer / reactive callback — a drain there would
+   *   HALF-apply a `ChangeBatch` (unguarded projection primitives land, guarded structural mutators
+   *   are swallowed), the worst-case batch-atomicity violation (005 §5.5).
+   */
   sync(): void {
+    if (this.iterationDepth > 0) {
+      throw new Error(
+        "strata: world.sync() cannot run during query iteration — draining inbound facts mid-iteration would migrate archetypes under the walk; call sync() at the frame boundary, before tick() (006 §A4, §C2).",
+      );
+    }
+    if (DEV && this.store.inObserverEmitActive) {
+      throw new Error(
+        "strata: world.sync() cannot run from inside an observer or reactive callback — a drain there would half-apply a ChangeBatch (adds land, removes are swallowed); schedule it for the next frame boundary (005 §5.5, 006 §C2).",
+      );
+    }
     for (const source of this.inbound) source.drain();
   }
 
   /** Register an inbound source (a durable/ephemeral binding registers here on attach, §16). */
   registerInboundSource(source: InboundSource): void {
     this.inbound.push(source);
+  }
+
+  /**
+   * The symmetric removal of {@link registerInboundSource} (005 §6.2) — a binding's teardown step 0,
+   * so `world.sync()` never drains a torn-down binding again. An unknown source is a no-op.
+   */
+  unregisterInboundSource(source: InboundSource): void {
+    const i = this.inbound.indexOf(source);
+    if (i !== -1) this.inbound.splice(i, 1);
   }
 
   // --- local snapshot (non-collaborative save/load, §8) ---
@@ -279,6 +363,7 @@ export class World {
    * {@link reset} for the survival + no-alias contract the replace form inherits.
    */
   import(bytes: Uint8Array, opts?: { replace?: boolean }): void {
+    this.assertNotIterating("import"); // wholesale structural load — never mid-iteration (006 §A4)
     if (opts?.replace) {
       // Validate BEFORE resetting: an incompatible snapshot (schema drift) throws here with the
       // world untouched, so a failed document-open never wipes the live board (§8.2 boot-safety).
@@ -303,6 +388,7 @@ export class World {
     if (this.ticking) {
       throw new Error("strata: world.reset() cannot run during tick() — reset only outside iteration (§5.2).");
     }
+    this.assertNotIterating("reset"); // also refuse a reset issued from inside world.query().each() (006 §A4)
     this.store.reset(); // throws if called from inside an observer / reactive callback
   }
 

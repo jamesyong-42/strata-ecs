@@ -255,6 +255,16 @@ export class RuntimeStore implements ECSStore {
   }
 
   /**
+   * @internal True while an observer / reactive callback is on the stack. `world.sync()` DEV-asserts
+   * this is false at entry (005 §5.5): a drain from inside a notify would HALF-apply a `ChangeBatch`
+   * — the projection primitives are unguarded (they must run mid-drain) while the structural mutators
+   * reject in-emit — so adds/writes would land and removes/despawns vanish. Read-only accessor.
+   */
+  get inObserverEmitActive(): boolean {
+    return this.inObserverEmit;
+  }
+
+  /**
    * DEV guard (002 §6): a STRUCTURAL mutation issued from inside an observer / reactive callback is
    * rejected — mid-flush it would corrupt the command-buffer drain, mid-notify it would re-enter
    * iteration; callbacks must SCHEDULE work instead. Returns true when blocked so the caller
@@ -806,6 +816,15 @@ export class RuntimeStore implements ECSStore {
     if (!this.has(e, c)) {
       throw new Error(`strata: component "${c.name}" is not present — use addComponent to attach it first.`);
     }
+    if (DEV && this.inObserverEmit) {
+      // A value write is exempt from the structural rejection (immediate, non-structural), but a
+      // writeComponent from inside a reactive callback stamps the CURRENT frame — already seen by
+      // every watch processed this pass — so it is silently unobservable. Mirrors setResource's warn
+      // (005 §5.5, 006 §C2). This is a diagnostic only; the write still lands.
+      devWarn(
+        `writeComponent("${c.name}") from inside a reactive callback is stamped at the current frame and will not be observed — schedule it for the next frame instead (002 §6).`,
+      );
+    }
     if (DEV) this.enforceWriteAccess(c); // 001 Rule 3: undeclared edit-path write throws before mutating
     const encoded = encodeComponentValue(c, value as Record<string, unknown>);
     const A = this.archetypeOfEntity(e);
@@ -1008,6 +1027,25 @@ export class RuntimeStore implements ECSStore {
     }
     this.resources.set(res.id, obj);
     this.bumpResource(res.id); // resource-version stamp (003 §1.2) — gated on reactiveOn
+  }
+
+  /**
+   * Remove a resource — the reconcile path's `resource-remove` lands here (005 §6.1). Mirrors
+   * {@link setResource}: same in-emit devWarn, same `bumpResource` stamp — but stamps ONLY if the
+   * resource was present. Removing an ABSENT resource is a stampless no-op (`Map.delete` returns
+   * false), which makes projection idempotent — replaying a `resource-remove` for a resource already
+   * gone changes nothing and notifies no one (conformance P7).
+   */
+  removeResource<S>(res: Resource<S>): void {
+    if (DEV && this.inObserverEmit) {
+      // Mirrors setResource's in-emit devWarn: a remove from inside a reactive callback stamps the
+      // CURRENT frame — already seen by every watch processed this pass — so the transition to
+      // undefined would be silently unobservable forever. Diagnose loudly; schedule instead (002 §6).
+      devWarn(
+        `removeResource("${res.name}") from inside a reactive callback is stamped at the current frame and will not be observed — schedule it for the next frame instead (002 §6).`,
+      );
+    }
+    if (this.resources.delete(res.id)) this.bumpResource(res.id); // stamp ONLY if it was present
   }
 
   getResource<S>(res: Resource<S>): S | undefined {
