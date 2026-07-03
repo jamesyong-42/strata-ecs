@@ -166,12 +166,33 @@ export type Condition = (ctx: SystemCtx) => boolean;
 /** A system body — the per-chunk callback (§6.2). */
 export type SystemBody = (batch: Batch, ctx: SystemCtx) => void;
 
+/**
+ * A system's value read/write access declaration (Patch Note 001 §2.1). The **envelope** — a union
+ * over all conditions, an upper bound on the columns the body may touch on any frame (001 Rule 1),
+ * value read/write only (never structural, §5.4). Optional in the base runtime; becomes dev-enforced
+ * for writers once reactivity is active (001 §2.4). Components only in v1 — tags/relations are
+ * membership filters and resources are a deferred extension (001 §5).
+ */
+export interface SystemAccess {
+  /** Component columns this system may MUTATE (value writes). Union over all conditions (001 Rule 1). */
+  readonly write?: readonly Component[];
+  /**
+   * Component columns treated as READ-ONLY. When omitted, defaults to the query's components that are
+   * not in `write` — a system reads what it queries unless declared otherwise (001 §2.3). That default
+   * is **not materialized here**; consumers derive it via `effectiveRead` (access-diagnostics.ts), so
+   * the stored declaration stays the author's literal input.
+   */
+  readonly read?: readonly Component[];
+}
+
 export interface System {
   /** Display name for tools/instrumentation (observe.ts) — `opts.name`, else the body fn's name. */
   readonly name: string;
   readonly query: Query;
   readonly body: SystemBody;
   readonly runIf?: Condition;
+  /** Declared value read/write access (001 §2.1) — the envelope consumed by reactivity + diagnostics. */
+  readonly access?: SystemAccess;
 }
 
 export interface Phase {
@@ -183,13 +204,19 @@ export interface Phase {
 /** A pipeline is a positional array of phases; array order is run order (§7). */
 export type Pipeline = readonly Phase[];
 
-/** Pair a query with a body (§7). `opts.name` labels the system for tools/instrumentation. */
+/** Pair a query with a body (§7). `opts.name` labels the system; `opts.access` declares its columns (001 §2.1). */
 export function defineSystem(
   query: Query,
   body: SystemBody,
-  opts?: { runIf?: Condition; name?: string },
+  opts?: { runIf?: Condition; name?: string; access?: SystemAccess },
 ): System {
-  return { name: opts?.name ?? (body.name || "system"), query, body, runIf: opts?.runIf };
+  return {
+    name: opts?.name ?? (body.name || "system"),
+    query,
+    body,
+    runIf: opts?.runIf,
+    access: opts?.access,
+  };
 }
 
 /** Group systems into a named, ordered phase, optionally gated (§7). */

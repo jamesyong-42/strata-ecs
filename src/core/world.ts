@@ -10,10 +10,12 @@
 import type { Entity } from "./entity";
 import type { Component, FieldId, Relation, Resource, Tag } from "./schema";
 import type { Batch, Query } from "./query";
-import { devError } from "./dev";
+import { DEV, devError } from "./dev";
 import type { WorldObserver } from "./observe";
 import { RuntimeStore, type SpawnInit } from "./runtime-store";
 import { type EntityEditor, type Pipeline, SystemCtx, makeEditor } from "./system";
+import { Reactive } from "./reactive";
+import { validatePipelineAccess } from "./access-diagnostics";
 import { exportSnapshot, importSnapshot } from "./snapshot";
 
 /** What the world knows about a layer's inbound rhythm — the entire coupling (§16.1). */
@@ -25,6 +27,12 @@ export class World {
   private readonly store = new RuntimeStore();
   private readonly inbound: InboundSource[] = [];
   private tickCounter = 0;
+  /**
+   * The reactive layer (Patch Note 002), created lazily on first `world.reactive` access and cached
+   * for this World's life — `null` until then, so a pure Part I world that never observes pays
+   * nothing (no per-system stamping, no dev-enforcement). Does NOT survive a world swap (002 §6).
+   */
+  private reactiveInstance: Reactive | null = null;
   readonly name: string;
 
   constructor(opts?: { name?: string }) {
@@ -34,6 +42,19 @@ export class World {
   /** Ticks run so far — the tools' time axis (increments as each `tick()` enters, observe.ts). */
   get tickCount(): number {
     return this.tickCounter;
+  }
+
+  /**
+   * The reactive observer layer (Patch Note 002). Lazily created + cached; accessing it is what
+   * turns the feature on (its first observer arms 001's dev-enforcement, §2.4). Each World has its
+   * own — it belongs to this world's store and dies with it (002 §6).
+   */
+  get reactive(): Reactive {
+    if (this.reactiveInstance === null) {
+      this.store.enableReactive(); // arms the store's stamp/bump sites — zero stores before this
+      this.reactiveInstance = new Reactive(this.store);
+    }
+    return this.reactiveInstance;
   }
 
   /**
@@ -145,6 +166,8 @@ export class World {
   tick(pipeline: Pipeline): void {
     const tick = ++this.tickCounter;
     const obs = this.store.observers; // captured once — the tick-telemetry roster (observe.ts)
+    const reactive = this.reactiveInstance; // null unless world.reactive was ever accessed — pure Part I pays nothing
+    if (DEV && reactive !== null) validatePipelineAccess(pipeline); // advisory access diagnostics (001 §3.3), self-dedupes per pipeline
     let tickStart = 0;
     if (obs !== null) {
       tickStart = performance.now();
@@ -172,12 +195,19 @@ export class World {
             if (obs !== null) emitSystemRun(obs, phase.name, system.name, false, 0);
             continue;
           }
+          if (DEV && reactive !== null) this.store.beginSystemAccess(system); // 001 Rule 3 enforcement window
           if (obs !== null) {
             const t0 = performance.now();
             this.store.query(system.query).each((batch) => system.body(batch, ctx));
             emitSystemRun(obs, phase.name, system.name, true, (performance.now() - t0) * 1000);
           } else {
             this.store.query(system.query).each((batch) => system.body(batch, ctx));
+          }
+          // Reactive change detection: blanket-stamp the system's declared writes (001 §3.1 route 1,
+          // 002 §2.3). A gated-off system never reaches here, so it never stamps (001 §3.4).
+          if (reactive !== null) {
+            const w = system.access?.write;
+            if (w !== undefined && w.length > 0) this.store.stampWrites(system.query, w);
           }
         }
         if (obs !== null) {
@@ -195,6 +225,9 @@ export class World {
           this.store.flushCommandBuffer(buf); // phase boundary: shape changes become visible (§7)
         }
       } finally {
+        // Clear the 001-enforcement window after the phase — also the backstop if a system body threw
+        // (a stuck currentSystem would spuriously check out-of-tick edits before the next tick resets it).
+        if (DEV && reactive !== null) this.store.endSystemAccess();
         // Always return the buffer to the pool — even if a system body throws (the pool must not
         // leak, and a thrown phase is simply abandoned without flushing).
         this.store.releaseCommandBuffer(buf);

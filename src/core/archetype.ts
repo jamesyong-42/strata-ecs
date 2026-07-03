@@ -28,6 +28,19 @@ export class Archetype {
   /** Number of live rows. */
   count = 0;
 
+  /**
+   * Change-detection stamps (Patch Note 002 §2.1): one `store.frame` per *component*, indexed by
+   * the component's position in {@link componentIds} (NOT per field — a multi-field component is a
+   * single stamp). Bumped off the hot path when a column is written; observers compare it against a
+   * stored `lastSeenFrame`. Float64 so the monotone frame counter never wraps and it is one alloc.
+   */
+  readonly lastWrittenFrame: Float64Array;
+  /**
+   * The §4.2 rows-version: set to `store.frame` whenever a row is gained or lost (place/unplace).
+   * Tier-1 query observers read it to detect membership change without a per-column stamp.
+   */
+  lastStructuralFrame = 0;
+
   private capacity: number;
 
   constructor(id: number, key: string, componentIds: readonly ComponentId[], fields: readonly FieldMeta[]) {
@@ -36,6 +49,7 @@ export class Archetype {
     this.componentIds = componentIds;
     this.componentSet = new Set(componentIds);
     this.fields = fields;
+    this.lastWrittenFrame = new Float64Array(componentIds.length);
     this.capacity = INITIAL_ROW_CAPACITY;
     this.entities = new Uint32Array(this.capacity);
     this.columns = new Map();
@@ -52,6 +66,17 @@ export class Archetype {
   /** Whether the given component is present in this archetype. */
   hasComponent(componentId: ComponentId): boolean {
     return this.componentSet.has(componentId);
+  }
+
+  /**
+   * The index of `cid` in the sorted {@link componentIds} — the slot its {@link lastWrittenFrame}
+   * stamp lives at, or `-1` if absent. A linear scan: `componentIds` is short and already sorted,
+   * so this is cheaper than a parallel map and matches the hot-path's O(fields) budget (§2.1).
+   */
+  componentSlot(cid: ComponentId): number {
+    const ids = this.componentIds;
+    for (let i = 0; i < ids.length; i++) if (ids[i] === cid) return i;
+    return -1;
   }
 
   /** Grow the columns + back-pointer array to hold at least `rows` (geometric doubling). */

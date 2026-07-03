@@ -43,11 +43,16 @@ export type { Query, QueryTerm, Atom, RelTerm, Batch } from "./query";
 
 // --- systems + schedule ---
 export { defineSystem, phase, SystemCtx } from "./system";
-export type { System, Phase, Pipeline, Condition, SystemBody, EntityEditor } from "./system";
+export type { System, Phase, Pipeline, Condition, SystemBody, EntityEditor, SystemAccess } from "./system";
+export { validatePipelineAccess } from "./access-diagnostics";
 
 // --- world ---
 export { World, createWorld } from "./world";
 export type { InboundSource } from "./world";
+
+// --- reactivity (Patch Note 002) — the poll-at-boundary observer layer, reached via world.reactive ---
+export { Reactive } from "./reactive";
+export type { Unsubscribe } from "./reactive";
 
 // --- dev-tool observability (the `strata/tools` data feed) ---
 export type { WorldObserver } from "./observe";

@@ -59,7 +59,7 @@ A separate `access` block is a second source of truth that *could* drift from wh
 
 - **Enforced (dev, whenever reactivity is active): the accessor-level check.** Calling `batch.col(C)` (or `batch.colW(C)`, 002 §2.3) for a `C` in neither `access.write` nor `access.read` **throws immediately**, naming the system and component — before any element is touched. Set membership once per `batch.col(C)` call (once per archetype per system per frame). The returned columns stay the raw typed arrays, dev and prod identical.
 - **Enforced exactly (dev, all paths): the edit chokepoint.** Writes via `ctx.edit(e).set(C, v)` route through `writeComponent`, which asserts `C ∈ access.write` for the running system precisely — no wrapper needed. This is what checks Rule 2's headline case (writes to entities outside the query's archetypes).
-- **Opt-in strict mode (tests only): per-element assertion.** A test-build flag may wrap columns to assert every element write and record the precise written set. This is a CI tool for auditing declarations, never the default dev experience.
+- **Opt-in strict mode (tests only): per-element assertion.** A test-build flag may wrap columns to assert every element write and record the precise written set. This is a CI tool for auditing declarations, never the default dev experience. (**Deferred** — the per-element strict mode is not in the first implementation round; the shipped enforcement is the accessor-level `col()` check plus the `writeComponent` edit chokepoint.)
 
 **Production returns the raw typed-array views with no wrapper and no check — byte-for-byte identical to today's hot path.** The honesty guarantee, stated exactly: a declaration that under-claims throws in dev *when that code path runs with reactivity attached*. Coverage of conditional branches is the test suite's job (run reactive tests in strict mode); production always trusts the declaration — an under-claim that survives to prod shows up as stale UI, not corruption. This is the same trade flecs/DOTS make.
 
@@ -104,7 +104,7 @@ These are **advisory only** — they help the author hand-order correctly withou
 Blanket stamping (002 §2.3) stamps a system's `access.write` on every frame **the body runs** — a system with `runIf: () => true` that writes only during a live drag stamps `Position` at 60fps while idle, and a Tier-1 canvas observer then repaints continuously (Tier 3's equality check protects only Tier 3; DOTS' chunk-version false positives are the cautionary precedent). Two blessed patterns, stated here because §7.1's "an empty query iterates free, don't bother gating" advice pulls the other way:
 
 - **`runIf`-gate conditional writers** when reactivity is on: a gated-off system doesn't run, so it doesn't stamp. (The canvas example's `DragMove` already does this — `runIf: mode === "drag"` — which is why its idle frames are stamp-free.)
-- Or use the **lazy write-accessor `colW`** (002 §2.3) in systems where even a run-but-wrote-nothing frame must not stamp.
+- Or use the **lazy write-accessor `colW`** (002 §2.3) in systems where even a run-but-wrote-nothing frame must not stamp. (`colW` is **deferred** — not in the first implementation round; `runIf`-gating is the shipped answer.)
 
 Under reactivity, gating a conditional writer is not a micro-optimization — it is what keeps Tier-1 observers quiet at idle.
 

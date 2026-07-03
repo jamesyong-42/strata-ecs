@@ -44,6 +44,8 @@ import type { CommandBuffer, StructuralCommand } from "./command";
 import type { ECSStore } from "./ecs-store";
 import { DEV, devError, devWarn } from "./dev";
 import type { WorldObserver } from "./observe";
+import type { System } from "./system";
+import { effectiveRead } from "./access-diagnostics";
 
 /** A component handle paired with a value of its field type — the typed spawn/init form. */
 export type ComponentEntry<S = unknown> = readonly [Component<S>, S];
@@ -92,6 +94,63 @@ export class RuntimeStore implements ECSStore {
    * spawn/destroy hot paths pay exactly one branch-on-null (docs/plan-tools-observer.md).
    */
   private observerList: WorldObserver[] | null = null;
+  /**
+   * The reactive change-detection frame counter (Patch Note 002 §2.1). Every stamp — value writes,
+   * structural bumps, tag/relation bumps — records this value; the reactive layer advances it at the
+   * END of its notify pass (§4.1a), so an out-of-tick write between passes stamps a frame strictly
+   * greater than any observer's `lastSeenFrame` and is never missed. Starts at 1 so a never-stamped
+   * slot (0) always reads as older.
+   */
+  private frameCounter = 1;
+  /**
+   * The §4.2 global tag/relation membership version — set to `frameCounter` at every tag/relation
+   * mutation (which move no archetype rows yet change tag/relation-filtered query membership). Only
+   * row-filtered Tier-1 observers consult it; a coarse single counter is sufficient (§4.2).
+   */
+  private tagRelFrame = 0;
+  /**
+   * Master gate for ALL reactive bookkeeping (value stamps, structural bumps, tag/relation bumps) —
+   * false until the world's reactive layer is first touched, so a world that never uses reactivity
+   * pays literally zero stores on the mutation paths (the same branch-on-null discipline as the T0
+   * observer roster; the bench A/B gate measured the always-on variant at +17–28% on migrate-heavy
+   * scenarios, which is what forced this gate).
+   */
+  private reactiveOn = false;
+
+  /** @internal Arm reactive bookkeeping — one-way, flipped on first `world.reactive` access. */
+  enableReactive(): void {
+    this.reactiveOn = true;
+  }
+
+  /**
+   * The reactive layer's eager-death hook (002 §3.4) — a single dedicated slot, deliberately NOT a
+   * {@link WorldObserver}: routing it through `addObserver` would flip the T0 telemetry roster
+   * non-null and tax every tick with per-system `performance.now` timing. `null` until the first
+   * entity/value watch registers; called pre-teardown in {@link destroy} to QUEUE the dying entity
+   * (queue-only — it must never fire callbacks or mutate).
+   */
+  private reactiveDeathHook: ((e: Entity) => void) | null = null;
+
+  /** @internal Install/clear the reactive death hook (the reactive layer owns this seam, §3.4). */
+  setReactiveDeathHook(hook: ((e: Entity) => void) | null): void {
+    this.reactiveDeathHook = hook;
+  }
+
+  /** Set `tagRelFrame` (002 §4.2) — no-op until reactivity is enabled. */
+  private bumpTagRel(): void {
+    if (this.reactiveOn) this.tagRelFrame = this.frameCounter;
+  }
+  /**
+   * Access enforcement state (001 Rule 3, armed by the reactive layer §2.4). `accessArmed` flips on
+   * when the first reactive observer registers and stays on for the world's life; `currentSystem` is
+   * set by the tick around each system's run so the `col()`/`writeComponent` chokepoints can name it
+   * in a throw. Both reads are DEV-only and short-circuit when disarmed or outside a system, so the
+   * hot path pays at most one branch.
+   */
+  private accessArmed = false;
+  private currentSystem: System | null = null;
+  /** Per-system allowed component set (write ∪ effectiveRead) for the `col()` check, memoized (001 Rule 3). */
+  private readonly allowedAccess = new WeakMap<System, Set<ComponentId>>();
 
   private ensureIdentity(n: number): Int32Array {
     if (this.identityRows.length < n) {
@@ -175,6 +234,31 @@ export class RuntimeStore implements ECSStore {
   /** True while observer callbacks run — DEV mutation guards in spawn/destroy read it. */
   private inObserverEmit = false;
 
+  /**
+   * @internal Set the observer-emit reentrancy flag and return its prior value. `reactive.notify`
+   * wraps its callback dispatch in this so the spawn/destroy DEV guards reject structural mutation
+   * from a reactive callback (002 §6 — callbacks may SCHEDULE work instead).
+   */
+  setObserverEmit(active: boolean): boolean {
+    const prev = this.inObserverEmit;
+    this.inObserverEmit = active;
+    return prev;
+  }
+
+  /**
+   * DEV guard (002 §6): a STRUCTURAL mutation issued from inside an observer / reactive callback is
+   * rejected — mid-flush it would corrupt the command-buffer drain, mid-notify it would re-enter
+   * iteration; callbacks must SCHEDULE work instead. Returns true when blocked so the caller
+   * early-returns. Value writes (`writeComponent`) are exempt — immediate and non-structural.
+   */
+  private rejectMutationInEmit(op: string): boolean {
+    if (DEV && this.inObserverEmit) {
+      devError(`observer callbacks must not mutate the world — ${op}() from inside a callback is ignored (observe.ts).`);
+      return true;
+    }
+    return false;
+  }
+
   /** Fan an entity birth out to observers. Callers guard `observerList !== null` (hot path). */
   private emitSpawn(e: Entity): void {
     const obs = this.observerList as WorldObserver[];
@@ -227,6 +311,142 @@ export class RuntimeStore implements ECSStore {
   }
 
   // ---------------------------------------------------------------------------
+  // Reactive change-detection stamps (Patch Note 002 §2)
+  // ---------------------------------------------------------------------------
+
+  /** @internal The current reactive frame; observers compare stamps against it (002 §2.1). */
+  get frame(): number {
+    return this.frameCounter;
+  }
+
+  /** @internal Advance the frame at the END of the reactive notify pass (002 §4.1a). */
+  advanceFrame(): void {
+    this.frameCounter++;
+  }
+
+  /** @internal The frame of the most recent tag/relation mutation (002 §4.2 membership). */
+  get lastTagRelFrame(): number {
+    return this.tagRelFrame;
+  }
+
+  /**
+   * Stamp `cid`'s column in `A` with the current frame (002 §2.1). No-op if `A` lacks the component,
+   * so callers need not pre-check membership. A single integer store after a `componentSlot` scan.
+   */
+  private stampComponent(A: Archetype, cid: ComponentId): void {
+    if (!this.reactiveOn) return;
+    const slot = A.componentSlot(cid);
+    if (slot >= 0) A.lastWrittenFrame[slot] = this.frameCounter;
+  }
+
+  /**
+   * @internal 001 §3.1 route 1: after a system runs, stamp its `access.write` set across the
+   * archetypes matching `q` (blanket, `hasComponent`-guarded — 002 §2.3). Seeds the query's
+   * matching-archetype cache the same way {@link runQuery} does if it has never run.
+   */
+  stampWrites(q: Query, comps: readonly Component[]): void {
+    let matches = this.queryMatches.get(q);
+    if (matches === undefined) {
+      matches = this.buildMatches(q);
+      this.queryMatches.set(q, matches);
+    }
+    for (const arch of matches) {
+      for (const c of comps) {
+        if (arch.hasComponent(c.id)) this.stampComponent(arch, c.id);
+      }
+    }
+  }
+
+  /**
+   * @internal 002 §2.2 escape hatch (`world.reactive.invalidate`): stamp `c`'s column in every
+   * archetype that holds it — for writes no chokepoint can see (raw column pokes, future feeds).
+   */
+  invalidateComponent(c: Component): void {
+    for (const arch of this.archetypesById) {
+      if (arch !== undefined && arch.hasComponent(c.id)) this.stampComponent(arch, c.id);
+    }
+  }
+
+  /**
+   * @internal The cached matching-archetype list for `q`, seeded on first use exactly like
+   * {@link stampWrites} / {@link runQuery} (Tier-1 observers read it directly, 002 §3.1). The
+   * returned array is the store's live cache — the archetype-creation hook keeps appending
+   * newly-matching archetypes to it, so a held reference stays current across spawns.
+   */
+  matchesFor(q: Query): readonly Archetype[] {
+    let matches = this.queryMatches.get(q);
+    if (matches === undefined) {
+      matches = this.buildMatches(q);
+      this.queryMatches.set(q, matches);
+    }
+    return matches;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Access enforcement (001 Rule 3 — accessor-level; armed by the reactive layer, §2.4)
+  // ---------------------------------------------------------------------------
+
+  /** @internal Turn on dev-mode access enforcement. The first reactive observer calls this once. */
+  armAccessEnforcement(): void {
+    this.accessArmed = true;
+  }
+
+  /** @internal Tick sets the running system so `col()`/`writeComponent` can enforce its access (DEV). */
+  beginSystemAccess(system: System): void {
+    this.currentSystem = system;
+  }
+
+  /** @internal Tick clears the running system after the phase (also the throw backstop). */
+  endSystemAccess(): void {
+    this.currentSystem = null;
+  }
+
+  /** The write ∪ effectiveRead id set the running system may `col()`, memoized per System (001 Rule 3). */
+  private allowedFor(system: System): Set<ComponentId> {
+    let set = this.allowedAccess.get(system);
+    if (set === undefined) {
+      set = new Set<ComponentId>();
+      if (system.access?.write !== undefined) for (const c of system.access.write) set.add(c.id);
+      for (const c of effectiveRead(system)) set.add(c.id);
+      this.allowedAccess.set(system, set);
+    }
+    return set;
+  }
+
+  /**
+   * @internal 001 Rule 3 accessor check — `batch.col(c)` for a `c` in neither `access.write` nor the
+   * (default-or-declared) read set throws, naming the system + component. DEV + armed + in-a-system
+   * only; out-of-tick `world.query().each` has `currentSystem === null` and is exempt.
+   */
+  enforceColAccess(c: Component): void {
+    if (!this.accessArmed) return;
+    const system = this.currentSystem;
+    if (system === null) return;
+    if (!this.allowedFor(system).has(c.id)) {
+      throw new Error(
+        `strata: system "${system.name}" accessed component "${c.name}" via col() but did not declare it in access (add it to access.read or access.write, 001 Rule 3).`,
+      );
+    }
+  }
+
+  /**
+   * 001 Rule 3 edit chokepoint — a `ctx.edit(e).set(c, v)` write to a `c` outside `access.write`
+   * throws exactly (checks Rule 2's write-outside-query case). Out-of-tick edits are exempt
+   * (`currentSystem === null`). DEV + armed only.
+   */
+  private enforceWriteAccess(c: Component): void {
+    if (!this.accessArmed) return;
+    const system = this.currentSystem;
+    if (system === null) return;
+    const w = system.access?.write;
+    if (w === undefined || !w.some((x) => x.id === c.id)) {
+      throw new Error(
+        `strata: system "${system.name}" wrote component "${c.name}" via edit().set but did not declare it in access.write (001 Rule 3).`,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Physical primitives (§5.5)
   // ---------------------------------------------------------------------------
 
@@ -240,6 +460,7 @@ export class RuntimeStore implements ECSStore {
     A.entities[row] = e;
     this.table.setPlacement(slotOf(e), A.id, row);
     A.count++;
+    if (this.reactiveOn) A.lastStructuralFrame = this.frameCounter; // rows-version bump (002 §4.2)
   }
 
   /**
@@ -262,6 +483,7 @@ export class RuntimeStore implements ECSStore {
       }
     }
     A.count--;
+    if (this.reactiveOn) A.lastStructuralFrame = this.frameCounter; // rows-version bump (002 §4.2)
   }
 
   /**
@@ -289,6 +511,28 @@ export class RuntimeStore implements ECSStore {
     }
     this.place(e, newA, fieldValues); // appends to newA, re-points table[slot] → newA
     this.unplace(oldA, oldRow, e); // swap-pop out of the captured old location
+    // Reconcile the destination's per-column value stamps (002 §2.2(2)). One pass over the
+    // destination's sorted componentIds (the loop index IS the stamp slot — no scans):
+    //   - ADDED column (absent in the source) → a gained component is a value write → stamp now.
+    //   - CARRIED column → carry the source's stamp FORWARD (max), so a value write made in the SAME
+    //     frame as the migrate (its stamp lives in the OLD archetype) is not lost to a Tier-2/3 watch
+    //     reading the entity's NEW archetype (adversarial-review fix). `max` never downgrades a
+    //     destination column another entity stamped more recently.
+    // Skipped wholesale until reactivity is enabled (the bench gate caught the always-on variant at
+    // +28% on add_remove).
+    if (this.reactiveOn) {
+      const ids = newA.componentIds;
+      const lwf = newA.lastWrittenFrame;
+      for (let slot = 0; slot < ids.length; slot++) {
+        const oldSlot = oldA.componentSlot(ids[slot]);
+        if (oldSlot < 0) {
+          lwf[slot] = this.frameCounter; // added column
+        } else {
+          const carried = oldA.lastWrittenFrame[oldSlot];
+          if (carried > lwf[slot]) lwf[slot] = carried; // carry the pre-migrate value stamp forward
+        }
+      }
+    }
   }
 
   private static sortedInsert(ids: readonly ComponentId[], id: ComponentId): ComponentId[] {
@@ -373,11 +617,15 @@ export class RuntimeStore implements ECSStore {
     // BEFORE teardown, so the dying entity is still fully readable inside the hook (observe.ts).
     // Covers both surfaces: immediate world.destroy and the flush's despawn command (§5.4).
     if (this.observerList !== null) this.emitDestroy(e);
+    // The reactive layer's eager-death queue (002 §3.4) — a dedicated slot, not a WorldObserver, so it
+    // never lights up the T0 tick-telemetry path. Pre-teardown + queue-only (fires undefined at notify).
+    if (this.reactiveDeathHook !== null) this.reactiveDeathHook(e);
     const slot = slotOf(e);
     // Per-entity state living outside the archetype must be torn down for placed AND
     // identity-only entities so a reused slot starts clean (§5.5):
     this.relations.clearEntity(e); // both directions, inline, terminal
     this.tags.clearAll(slot); // mandatory — bitsets are slot-indexed, not generation-indexed (§3.2)
+    this.bumpTagRel(); // teardown changes tag/relation-filtered membership (002 §4.2)
     if (this.table.isPlaced(e)) {
       const A = this.archetypesById[this.table.archetypeOf(slot)];
       this.unplace(A, this.table.rowOf(slot), e);
@@ -416,6 +664,7 @@ export class RuntimeStore implements ECSStore {
 
   /** Attach a component the entity does not have (shape change). Throws if already present (§5.3). */
   addComponent<S>(e: Entity, c: Component<S>, value: S): void {
+    if (this.rejectMutationInEmit("addComponent")) return; // 002 §6 — no structural mutation from a callback
     this.assertAlive(e, "addComponent");
     if (this.has(e, c)) {
       throw new Error(`strata: component "${c.name}" is already present — use edit().set / writeComponent to overwrite its value.`);
@@ -432,6 +681,7 @@ export class RuntimeStore implements ECSStore {
 
   /** Detach a component (shape change). Throws if absent (§5.3). Empty result stays placed (∅). */
   removeComponent(e: Entity, c: Component): void {
+    if (this.rejectMutationInEmit("removeComponent")) return; // 002 §6
     this.assertAlive(e, "removeComponent");
     if (!this.has(e, c)) {
       throw new Error(`strata: component "${c.name}" is not present — cannot remove it.`);
@@ -446,12 +696,14 @@ export class RuntimeStore implements ECSStore {
     if (!this.has(e, c)) {
       throw new Error(`strata: component "${c.name}" is not present — use addComponent to attach it first.`);
     }
+    if (DEV) this.enforceWriteAccess(c); // 001 Rule 3: undeclared edit-path write throws before mutating
     const encoded = encodeComponentValue(c, value as Record<string, unknown>);
     const A = this.archetypeOfEntity(e);
     const row = this.table.rowOf(slotOf(e));
     for (const f of c.fields) {
       writeCell(A.columns.get(f.fieldId) as Column, f.kind, row, encoded.get(f.fieldId) as Stored);
     }
+    this.stampComponent(A, c.id); // edit-path value write (002 §2.2(3), 001 §3.1 route 2)
   }
 
   // ---------------------------------------------------------------------------
@@ -464,15 +716,17 @@ export class RuntimeStore implements ECSStore {
     const encoded = encodeComponentValue(c, value as Record<string, unknown>);
     if (this.table.isIdentityOnly(e)) {
       this.place(e, this.archetypeFor([c.id]), encoded);
+      this.stampComponent(this.archetypeOfEntity(e), c.id); // initial value of the projected column
     } else if (this.archetypeOfEntity(e).hasComponent(c.id)) {
       const A = this.archetypeOfEntity(e);
       const row = this.table.rowOf(slotOf(e));
       for (const f of c.fields) {
         writeCell(A.columns.get(f.fieldId) as Column, f.kind, row, encoded.get(f.fieldId) as Stored);
       }
+      this.stampComponent(A, c.id); // overwrite branch writes cells directly — stamp explicitly (002 §2.2)
     } else {
       const newIds = RuntimeStore.sortedInsert(this.archetypeOfEntity(e).componentIds, c.id);
-      this.migrate(e, newIds, encoded);
+      this.migrate(e, newIds, encoded); // migrate stamps the added column
     }
   }
 
@@ -537,15 +791,19 @@ export class RuntimeStore implements ECSStore {
 
   /** Add a tag; places an identity-only source so it becomes queryable (§5.2). */
   addTag(e: Entity, t: Tag): void {
+    if (this.rejectMutationInEmit("addTag")) return; // 002 §6
     this.assertAlive(e, "addTag");
     this.ensurePlaced(e);
     this.tags.set(t.id, slotOf(e));
+    this.bumpTagRel(); // tag-filtered membership changed (002 §4.2)
   }
 
   /** Remove a tag (does not unplace the entity). */
   removeTag(e: Entity, t: Tag): void {
+    if (this.rejectMutationInEmit("removeTag")) return; // 002 §6
     this.assertAlive(e, "removeTag");
     this.tags.clear(t.id, slotOf(e));
+    this.bumpTagRel(); // tag-filtered membership changed (002 §4.2)
   }
 
   /** Generation-guarded tag read: a stale handle reads `false`, never the reused slot's bit (§3.2). */
@@ -565,28 +823,34 @@ export class RuntimeStore implements ECSStore {
 
   /** Arity "one": set/replace the target. Places the source; the target is not placed (§5.2). */
   setRelation(e: Entity, rel: Relation, target: Entity): void {
+    if (this.rejectMutationInEmit("setRelation")) return; // 002 §6
     this.assertAlive(e, "setRelation");
     if (rel.arity !== "one") {
       throw new Error(`strata: setRelation is for arity "one" relations — use addRelation for "${rel.name}".`);
     }
     this.ensurePlaced(e);
     this.relations.setOne(rel, e, target);
+    this.bumpTagRel(); // relation-filtered membership changed (002 §4.2)
   }
 
   /** Arity "many": add an edge (idempotent). Places the source; the target is not placed. */
   addRelation(e: Entity, rel: Relation, target: Entity): void {
+    if (this.rejectMutationInEmit("addRelation")) return; // 002 §6
     this.assertAlive(e, "addRelation");
     if (rel.arity !== "many") {
       throw new Error(`strata: addRelation is for arity "many" relations — use setRelation for "${rel.name}".`);
     }
     this.ensurePlaced(e);
     this.relations.addMany(rel, e, target);
+    this.bumpTagRel(); // relation-filtered membership changed (002 §4.2)
   }
 
   /** Remove one edge (if `target` given) or all edges of `rel` from `e`. Does not unplace. */
   removeRelation(e: Entity, rel: Relation, target?: Entity): void {
+    if (this.rejectMutationInEmit("removeRelation")) return; // 002 §6
     this.assertAlive(e, "removeRelation");
     this.relations.remove(rel, e, target);
+    this.bumpTagRel(); // relation-filtered membership changed (002 §4.2)
   }
 
   /** The single target of an arity-"one" relation, validated (§3.3). */
@@ -736,15 +1000,18 @@ export class RuntimeStore implements ECSStore {
       case "addTag":
         this.ensurePlaced(cmd.entity);
         this.tags.set(cmd.tag, slotOf(cmd.entity));
+        this.bumpTagRel(); // direct bitset write — not routed through addTag (002 §4.2)
         return;
       case "removeTag":
         this.tags.clear(cmd.tag, slotOf(cmd.entity));
+        this.bumpTagRel(); // direct bitset write — not routed through removeTag (002 §4.2)
         return;
       case "setRelation": {
         const rel = relationById(cmd.relation);
         if (rel === undefined || !this.table.isAlive(cmd.target)) return; // drop an edge to a dead target
         this.ensurePlaced(cmd.entity);
         this.relations.setOne(rel, cmd.entity, cmd.target);
+        this.bumpTagRel(); // direct index write — not routed through setRelation (002 §4.2)
         return;
       }
       case "addRelation": {
@@ -752,12 +1019,14 @@ export class RuntimeStore implements ECSStore {
         if (rel === undefined || !this.table.isAlive(cmd.target)) return;
         this.ensurePlaced(cmd.entity);
         this.relations.addMany(rel, cmd.entity, cmd.target);
+        this.bumpTagRel(); // direct index write — not routed through addRelation (002 §4.2)
         return;
       }
       case "removeRelation": {
         const rel = relationById(cmd.relation);
         if (rel === undefined) return;
         this.relations.remove(rel, cmd.entity, cmd.target);
+        this.bumpTagRel(); // direct index write — not routed through removeRelation (002 §4.2)
         return;
       }
     }
@@ -1039,6 +1308,7 @@ class ArchetypeChunk implements Batch {
   }
 
   col(c: Component): Record<string, Column> {
+    if (DEV) this.store.enforceColAccess(c); // 001 Rule 3 — undeclared access throws before any element (no-op unless armed + in a system)
     const out: Record<string, Column> = {};
     for (const f of c.fields) out[f.name] = this.arch.columns.get(f.fieldId) as Column;
     return out;
