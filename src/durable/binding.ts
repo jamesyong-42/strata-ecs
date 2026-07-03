@@ -56,6 +56,7 @@ import {
 } from "../substrate";
 import type { ChangeBatch, ChangeEvent, ComponentValue, EntityRecord, Snapshot, Unsubscribe } from "../substrate";
 import type { DurableBijection, DurableStore } from "./durable-store";
+import type { TxRuntime } from "./transaction";
 
 /**
  * The detach handle `attachDurable` returns (§12.4). NOT another `DurableTarget` — attaching never
@@ -114,6 +115,7 @@ export function attachDurable(world: World, store: DurableStore): Attachment {
   // start capturing local echoes. Order after seeding: no user code runs during the synchronous seed,
   // so nothing can commit or drain into a half-built binding.
   store.setBijection(binding.bijection);
+  store.setTxRuntime(binding.txRuntime); // M3 upward face: the recorder reaches the projector + baseline here
   world.registerInboundSource(binding);
   binding.subscribeLocalEchoes();
   ATTACHED.add(store);
@@ -158,6 +160,17 @@ class DurableBinding implements InboundSource {
       keyOf: (e: Entity) => this.projector.keyFor(e),
       resolve: (key: EntityKey) => this.projector.handleFor(key),
     };
+  }
+
+  /**
+   * @internal The transaction seam the store installs at attach (M3, §12.4). Bundles the three things
+   * the recorder/executor need that live on the binding side of the seam: the runtime (identity mint +
+   * synchronous value writes), the projector (bijection + the `requireKey` durability gate), and the
+   * baseline (overlay seed + the value agreement point). The document is reached via the store's own
+   * `snapshot`. The binding never exposes `transaction` itself — only the pieces the store's call needs.
+   */
+  get txRuntime(): TxRuntime {
+    return { runtime: this.world.runtime, projector: this.projector, baseline: this.baseline };
   }
 
   // --- attach: two-phase projection seeding the baseline (§13.1) ------------------------------------
@@ -381,6 +394,7 @@ class DurableBinding implements InboundSource {
     this.store.drainPending(); // ... and any queued-but-undrained remote batches on the store
     this.projector.teardown(); // 3. despawn every projected entity + clear the bijection
     this.store.setBijection(null); // handle-addressed reads return undefined between attachments (§14.3)
+    this.store.setTxRuntime(null); // doc.transaction throws again once detached (no projector to mint)
     ATTACHED.delete(this.store); // mark re-attachable
   }
 

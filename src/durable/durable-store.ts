@@ -23,8 +23,10 @@
  *   - **`subscribeOutbound`** (§14.2): the OUTBOUND wire — on each sealed LOCAL commit, ship the update
  *     increment since the last send to every subscriber.
  *
- * NOT M1: `transaction` (M3), `attachDurable`/the binding/projection/reconcile (M2/M4), the public
- * `strata-ecs/durable` barrel (M5 — `src/durable/index.ts` keeps throwing until then).
+ * NOT M1: `attachDurable`/the binding/projection/reconcile (M2/M4), the public `strata-ecs/durable`
+ * barrel (M5 — `src/durable/index.ts` keeps throwing until then). **M3 adds `transaction`** (the
+ * upward boundary, §12) — recorder + executor in `transaction.ts`, reached through the `TxRuntime`
+ * seam M2's attach installs here; legal only on an attached store.
  *
  * ============================================================================================
  * DECISIONS (load-bearing; see the task brief + design.md §14)
@@ -54,6 +56,7 @@ import type { LoroDoc } from "loro-crdt"; // the ONE loro import — parameter t
 import { type Component, type Entity, type EntityKey, entityKey } from "../core";
 import type { ChangeBatch, Unsubscribe } from "../substrate";
 import { LoroSnapshot, type OutboundCursor } from "./loro-snapshot";
+import { type Mutator, runTransaction, type TxRuntime } from "./transaction";
 
 /** The reserved "meta" slot holding the document GUID (§14.1). */
 const DOC_ID_KEY = "docId";
@@ -108,6 +111,14 @@ export class DurableStore {
   private counter: number;
   /** Installed by M2's attach; null pre-attach → handle-addressed reads return undefined (the seam). */
   private bijection: DurableBijection | null = null;
+  /**
+   * The transaction seam (runtime + projector + baseline) M2's attach installs; null pre-/post-attach
+   * (M3). `transaction` needs the projector to mint identity and the baseline for the overlay, so it is
+   * legal ONLY while attached — a null seam is the "unattached" signal (§12.4, transaction.ts decision A).
+   */
+  private txRuntime: TxRuntime | null = null;
+  /** True between `transaction` entry and exit — the one-open-transaction-per-store gate (nested throws). */
+  private txOpen = false;
   /** Per-commit batches awaiting M2's binding drain (both own-echo and remote arrive here via applyRemote). */
   private pendingInbound: ChangeBatch[] = [];
   /** Outbound-byte sinks (transport senders). All receive the SAME bytes per commit (decision B). */
@@ -153,6 +164,44 @@ export class DurableStore {
    */
   setBijection(bijection: DurableBijection | null): void {
     this.bijection = bijection;
+  }
+
+  /**
+   * @internal Install (or clear) the transaction seam — M2's `attachDurable` sets it alongside the
+   * bijection, detach clears it back to null (M3, §12.4). Until set, `transaction` throws (an
+   * unattached store has no projector to mint identity / no baseline for the overlay).
+   */
+  setTxRuntime(txRuntime: TxRuntime | null): void {
+    this.txRuntime = txRuntime;
+  }
+
+  // --- the transaction: the upward boundary (§12) --------------------------------------------------
+
+  /**
+   * Run a block as ONE document change (design.md §12): `fn` records mutations through the `tx`
+   * {@link Mutator}, the block seals as one Loro commit / one undo unit / one sync message, and
+   * `fn`'s result is returned. Value writes to pre-existing components apply to runtime + document +
+   * baseline synchronously; all structure reaches the runtime via projection at the next `sync()`
+   * (§12.3). Works identically inside or outside a system (identity-mint and value-writes are
+   * iteration-safe; structure rides projection) — no iteration guard. On any throw nothing commits
+   * and the transaction rolls back (minted identities invalidated, keys burned — transaction.ts).
+   *
+   * Legal ONLY on an ATTACHED store (the recorder needs the projector + baseline the binding installs)
+   * and NOT re-entrantly (one open transaction per store — a nested `transaction` throws).
+   */
+  transaction<R>(fn: (tx: Mutator) => R): R {
+    if (this.txRuntime === null) {
+      throw new Error("strata: doc.transaction requires an attached store — call attachDurable(world, store) first (§12.4).");
+    }
+    if (this.txOpen) {
+      throw new Error("strata: nested doc.transaction is not allowed — one open transaction per store (§12.2).");
+    }
+    this.txOpen = true;
+    try {
+      return runTransaction(this.snapshot, this.txRuntime, fn);
+    } finally {
+      this.txOpen = false;
+    }
   }
 
   /** The durable key bound to `e`, or `undefined` if `e` isn't a durable handle — or pre-attach (§14.3). */
