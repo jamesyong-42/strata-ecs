@@ -615,6 +615,18 @@ Beyond the structural `world.*` methods: **`world.tick()`** throws on `iteration
 
 `addTag`/`setRelation`/`addRelation` bump the coarse global tag/relation version **unconditionally** as-built (002 §4.2's cheap membership signal), so a duplicate structural re-apply is state-idempotent on both sides but may re-fire a Tier-1 query — permitted by 002's "may over-fire, never miss" contract. P7 asserts state-idempotence for every duplicate fact, and notify-silence on the equality-suppressed (Tier-3/resource) and genuinely stampless channels. Part III's reconcile should expect the Tier-1 over-fire on structural own-echo re-applies and not treat it as a bug.
 
+### 10.8 Adapter-level store-support surface (added by Part III M1; NOT on the frozen `CRDTSnapshot`)
+
+`CRDTSnapshot` stays frozen as §1.2 defines it. The concrete `LoroSnapshot` additionally exposes an
+adapter-level surface its owning `DurableStore` needs (bd665d2): `peerIdStr`, `entityKeysRaw()` (the
+key-mint counter-resume scan), `version()` + `exportUpdatesSince(from)` (per-commit outbound
+increments — an increment presupposes the receiver holds the causal base; a fresh receiver importing
+one takes a **pending** import and quarantines, so joiners bootstrap from a snapshot first), and a
+third reserved **`meta` root map** (`readMeta`/`ensureMeta` — holds `docId`; writes are tagged
+`META_ORIGIN` and excluded from the UndoManager so bookkeeping is never an undo step; meta paths are
+invisible to the batch translation). A future non-Loro adapter must ship equivalents; Part III's
+store is written against this adapter-level contract, not raw loro.
+
 ---
 
 *Sources: `004-part2-4-revision.md` (post-red-team, settled) §§A1–A2, B4, C1–C4, D1–D7, E; as-built `src/core/{field,schema,ecs-store,runtime-store,world,snapshot}.ts`; `002-reactivity.md`; `design-comments.md` (the external review driving issues 1–2). This note is the normative Part II; `design.md` §9–§10 + the Part II API reference are superseded per §0. §10's amendments were settled by the Part II adversarial review (17-agent workflow, findings verified with executed repros).*
