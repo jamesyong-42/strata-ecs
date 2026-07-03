@@ -446,6 +446,20 @@ export class World {
   get runtime(): RuntimeStore {
     return this.store;
   }
+
+  /**
+   * @internal True while an IMMEDIATE structural projection would be unsafe — mid query-iteration
+   * (`iterationDepth > 0`, a walk whose archetype rows a migration would reorder) or inside `tick()`
+   * (a phase flush in progress). A durable/ephemeral `attachDurable` reads this to refuse attaching at
+   * such a moment, mirroring `sync()`'s own iteration guard (Part III §13.1): attach projects the whole
+   * document synchronously through the projector — the same posture as a drain — so it must be barred
+   * exactly where a drain is. Read-only INTROSPECTION, not durable coupling — the core names no layer
+   * type; the layer consults a plain boolean. (The mid-observer-emit case is caught separately via the
+   * store's `inObserverEmitActive`, matching `sync()`'s DEV in-emit assert.)
+   */
+  get inImmediateProjectionUnsafeContext(): boolean {
+    return this.iterationDepth > 0 || this.ticking;
+  }
 }
 
 /** Report a throwing observer callback — swallowed, never propagated into tick control flow. */
