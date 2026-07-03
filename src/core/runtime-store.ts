@@ -304,6 +304,28 @@ export class RuntimeStore implements ECSStore {
     }
   }
 
+  /**
+   * Fan a wholesale reset out to observers (observe.ts). Fired ONCE by {@link reset} AFTER teardown
+   * — never a per-entity `onDestroy` (a 100k reset must not emit 100k callbacks). Callers guard
+   * `observerList !== null`. Runs under the observer-emit flag so a callback cannot re-enter mutation.
+   */
+  private emitReset(): void {
+    const obs = this.observerList as WorldObserver[];
+    const prev = this.inObserverEmit;
+    this.inObserverEmit = true;
+    try {
+      for (let i = 0; i < obs.length; i++) {
+        try {
+          obs[i].onReset?.();
+        } catch (err) {
+          devError(`observer onReset threw — swallowed; callbacks must not throw (observe.ts): ${String(err)}`);
+        }
+      }
+    } finally {
+      this.inObserverEmit = prev;
+    }
+  }
+
   /** @internal All archetypes that currently exist (for queries to seed their caches; also the
    *  tools' reflection walk). Returns the internal {@link Archetype} type — not public API. */
   archetypes(): readonly Archetype[] {
@@ -671,6 +693,64 @@ export class RuntimeStore implements ECSStore {
   }
   isIdentityOnly(e: Entity): boolean {
     return this.table.isIdentityOnly(e);
+  }
+
+  /**
+   * @internal Clear the world IN PLACE (R3), keeping this store's identity and every attached
+   * observer + reactive registration. Surfaced via `world.reset()` (World rejects the mid-tick
+   * case); a `world.import(bytes, { replace: true })` is reset-then-import. Contract:
+   *
+   * - **No alias.** Every live slot is freed WITH a generation bump (entity-table.reset), so every
+   *   pre-reset handle reads dead — never aliased to an entity later minted at the same slot. This
+   *   is the point: a fresh-world swap re-mints identical slot/gen sequences, so a stale pre-swap
+   *   handle silently aliased a restored entity; freeing in place is strictly safer.
+   * - **Archetypes are KEPT but emptied.** Their object identity backs the Tier-1 query caches
+   *   (`queryMatches` / a watch's `matches` reference), which must stay valid; only rows are dropped.
+   *   Tags, relations, and resources are cleared wholesale (no per-entity cascade — reset IS the
+   *   cascade). The command buffers are pooled-empty at rest (reset runs only outside a tick), so
+   *   there is no pending deferred state to clear.
+   * - **WorldObserver attachments SURVIVE.** Per-entity `onDestroy` is NOT fired; a single `onReset`
+   *   fires AFTER teardown (observe.ts).
+   * - **Reactive registrations SURVIVE and settle at the next `notify()`.** Tier-1 watches wake from
+   *   the emptied archetypes' bumped `lastStructuralFrame` + `tagRelFrame`; Tier-2/3 entity watches
+   *   see their now-dead entity (generation bumped) via notifyWatches' dead-entity path and fire
+   *   `undefined` once + self-remove; resource watches see the cleared value via bumped resource
+   *   stamps. All stamps sit at the CURRENT frame — reset is a normal mutation burst and does NOT
+   *   advance the frame (notify still owns that boundary, 002 §4.1a), so a watch subscribed AFTER a
+   *   reset but before the next notify is correctly baselined and does not fire for the reset.
+   *
+   * Rejected from inside an observer/reactive callback (mid-emit): a wholesale teardown there would
+   * corrupt an in-flight dispatch — the same posture as {@link rejectMutationInEmit}.
+   */
+  reset(): void {
+    if (this.inObserverEmit) {
+      throw new Error(
+        "strata: world.reset() cannot run from inside an observer or reactive callback — reset only outside iteration (observe.ts).",
+      );
+    }
+    const frame = this.frameCounter; // reset stamps at the CURRENT frame — a normal mutation burst
+    // Empty every archetype that holds rows (keep identity for the query caches). Bump the emptied
+    // archetype's rows-version so surviving Tier-1 watches wake at the next notify (002 §4.2).
+    for (const arch of this.archetypesById) {
+      if (arch === undefined || arch.count === 0) continue;
+      arch.clear();
+      if (this.reactiveOn) arch.lastStructuralFrame = frame;
+    }
+    // Stamp every resource that HELD a value so its watch observes the transition to undefined at
+    // the next notify — keyed off the live map (not resourceFrames' length) so a resource set BEFORE
+    // reactivity armed, whose stamp is still 0, is covered too; grows resourceFrames as needed. Runs
+    // BEFORE the clear so the ids are still known. A never-set resource stays at 0 and does not fire.
+    if (this.reactiveOn) for (const id of this.resources.keys()) this.bumpResource(id as ResourceId);
+    // Clear tags / relations / resources wholesale.
+    this.tags.reset();
+    this.relations.reset();
+    this.resources.clear();
+    // Free every live slot with a generation bump — stale handles now read dead, never aliased.
+    this.table.reset();
+    // A single tag/relation bump wakes any row-filtered / relation-seeded Tier-1 watch once (§4.2).
+    if (this.reactiveOn) this.tagRelFrame = frame;
+    // WorldObserver roster survives — one wholesale onReset AFTER teardown (never per-entity onDestroy).
+    if (this.observerList !== null) this.emitReset();
   }
 
   // ---------------------------------------------------------------------------

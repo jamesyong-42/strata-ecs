@@ -88,21 +88,51 @@ export class EntityTable {
   free(e: Entity): boolean {
     if (!this.isAlive(e)) return false;
     const slot = slotOf(e);
+    this.bumpGeneration(slot);
+    this.archetypeIds[slot] = NO_ARCHETYPE;
+    this.rows[slot] = NO_ROW;
+    this.freeList.push(slot);
+    return true;
+  }
+
+  /**
+   * Clear the table IN PLACE, keeping slot identity strictly monotonic (R3): bump every LIVE
+   * slot's generation so every pre-reset handle reads dead — never aliased to an entity later
+   * minted at the same slot — then return every slot to the free list for reuse. Slots already
+   * on the free list carry an already-bumped generation and are left as-is. The high-water mark
+   * and per-slot generation history are preserved, so a subsequent spawn/import reuses slots via
+   * the free-list branch of {@link allocate} (which does NOT re-seed the generation), issuing
+   * handles with strictly-greater generations than any stale pre-reset handle.
+   */
+  reset(): void {
+    // Mark which slots are already free; the rest of [0, slotCount) are live (a slot is live iff
+    // it is in range and not on the free list — placement alone can't tell them apart, §5.2).
+    const onFreeList = new Uint8Array(this.slotCount);
+    for (const s of this.freeList) onFreeList[s] = 1;
+    this.freeList.length = 0;
+    for (let slot = 0; slot < this.slotCount; slot++) {
+      if (onFreeList[slot] === 0) this.bumpGeneration(slot); // live slot → invalidate every stale handle
+      this.archetypeIds[slot] = NO_ARCHETYPE;
+      this.rows[slot] = NO_ROW;
+      this.freeList.push(slot);
+    }
+  }
+
+  /**
+   * Advance a slot's generation, wrapping past {@link MAX_GENERATION} (skipping 0 so it stays
+   * distinct from "never issued"). The shared invalidation discipline for {@link free} and
+   * {@link reset}: past a wrap a stale handle to this slot can alias the live entity — a defined
+   * but lossy limit of the 20/12 split (§2), surfaced via a DEV warn (stripped in production).
+   */
+  private bumpGeneration(slot: number): void {
     let next = this.generations[slot] + 1;
     if (next > MAX_GENERATION) {
-      // Wrap skips 0 so it stays distinct from "never issued". Surface the moment ABA risk begins:
-      // past here a stale handle to this slot can alias the live entity (a defined but lossy limit
-      // of the 20/12 split, §2). DEV-only; stripped in production.
       next = 1;
       devWarn(
         `entity slot ${slot} exhausted its ${MAX_GENERATION} generations and wrapped — a stale handle to this slot can now read as alive (ABA). Defined but lossy under the 20/12 handle split (§2).`,
       );
     }
     this.generations[slot] = next;
-    this.archetypeIds[slot] = NO_ARCHETYPE;
-    this.rows[slot] = NO_ROW;
-    this.freeList.push(slot);
-    return true;
   }
 
   /** True if the handle names a currently-live entity (identity-only OR placed) — "not dead". */

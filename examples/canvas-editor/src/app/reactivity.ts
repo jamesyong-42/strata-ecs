@@ -9,51 +9,44 @@
  * a live resize (`edit().set` at the write chokepoint), or a running sim (Integrate's stamp).
  * The world is the change detector; the app just reacts.
  *
- * Per-observer, so it dies with its world (002 §6): a `world.import()` restore mints a fresh
- * world with a fresh reactive registry, so `wireReactivity()` re-subscribes after every swap
- * (main.ts's boot call + the `onRestore` re-attach). The registration itself is a frame
- * boundary and never fires for data that existed before it, so the first post-restore/boot
- * paint still comes from a manual `dirty.doc` (commands.ts) — see frameLoop.ts.
+ * Subscribed ONCE, at boot — the World is stable now (restore clears in place via
+ * `import(bytes, { replace: true })`, R3), so these registrations SURVIVE a restore. There is no
+ * swap and no re-subscribe: the wipe + refill of a restore stamp the same archetypes this same
+ * observer watches, so the first post-restore frame repaints on its own. (The boot's very first
+ * paint predates this call — reactivity isn't armed until `wireReactivity()` runs — and comes from
+ * `repaint.doc`'s initial `true` instead; registration is a frame boundary and never back-fires.)
  */
 
-import type { Unsubscribe } from "strata";
 import { renderable } from "../ecs/queries";
 import { Camera, Fill, Kind, Label, Position, Size, ZIndex } from "../ecs/schema";
 import { scheduleAutosave } from "./persistence";
-import { worldRef } from "./worldRef";
+import { world } from "./worldRef";
 
 /** Observer-driven repaint channel: raised by the reactive callbacks, consumed after each
  *  paint (the frame loop resets it alongside `dirty.doc`). Initial `true` so the very first
  *  frame paints even before anything stamps. */
 export const repaint = { doc: true };
 
-const unsubs: Unsubscribe[] = [];
-
 /**
- * (Re)subscribe the editor's observers to the current world. Drops any prior subscriptions
- * first — a restore swaps `worldRef.current`, and a watch on the dead world's registry
- * would silently observe nothing.
+ * Subscribe the editor's repaint observers to the world. Called once at boot; the subscriptions
+ * live for the app's life (they survive restore — the World is stable, R3).
  */
 export function wireReactivity(): void {
-  for (const u of unsubs) u();
-  unsubs.length = 0;
-  const reactive = worldRef.current.reactive;
-  unsubs.push(
-    reactive.observeQuery(
-      renderable,
-      // Watch every drawable column (Label included — a note's text edit must repaint too).
-      [Position, Size, Fill, Kind, ZIndex, Label],
-      () => {
-        repaint.doc = true;
-        scheduleAutosave();
-      },
-    ),
-    // Pan/zoom/resize: camera mutations write the Camera resource immediately (camera.ts),
-    // and this Tier-3 watch turns the stamp into a repaint (003 §1.4). View-only —
-    // deliberately NOT wired to autosave (per-pan churn is noise; any doc edit persists the
-    // viewport, which rides the snapshot as a resource).
-    reactive.observeResource(Camera, () => {
+  const reactive = world.reactive;
+  reactive.observeQuery(
+    renderable,
+    // Watch every drawable column (Label included — a note's text edit must repaint too).
+    [Position, Size, Fill, Kind, ZIndex, Label],
+    () => {
       repaint.doc = true;
-    }),
+      scheduleAutosave();
+    },
   );
+  // Pan/zoom/resize: camera mutations write the Camera resource immediately (camera.ts), and this
+  // Tier-3 watch turns the stamp into a repaint (003 §1.4). View-only — deliberately NOT wired to
+  // autosave (per-pan churn is noise; any doc edit persists the viewport, which rides the snapshot
+  // as a resource).
+  reactive.observeResource(Camera, () => {
+    repaint.doc = true;
+  });
 }

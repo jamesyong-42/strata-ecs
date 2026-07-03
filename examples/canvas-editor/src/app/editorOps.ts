@@ -10,12 +10,12 @@ import type { Entity } from "strata";
 import { selectedBoxes } from "../ecs/queries";
 import { Fill, Kind, Label, Position, Selected, Size, Velocity, ZIndex } from "../ecs/schema";
 import { mutate, stats } from "./commands";
-import { worldRef } from "./worldRef";
+import { world } from "./worldRef";
 
 /** Collect the current selection (read-only walk). */
 export function selectedEntities(): Entity[] {
   const out: Entity[] = [];
-  worldRef.current.query(selectedBoxes).each((b) => {
+  world.query(selectedBoxes).each((b) => {
     for (const r of b) out.push(b.entity(r));
   });
   return out;
@@ -23,7 +23,7 @@ export function selectedEntities(): Entity[] {
 
 export function selectedCount(): number {
   let n = 0;
-  worldRef.current.query(selectedBoxes).each((b) => {
+  world.query(selectedBoxes).each((b) => {
     n += b.count;
   });
   return n;
@@ -33,7 +33,7 @@ export function selectedCount(): number {
  *  have been retained across a delete (e.g. a marquee preview when Delete fired mid-sweep),
  *  so the commit re-validates liveness — stale handles are skipped, never thrown on. */
 export function setSelection(entities: readonly Entity[], additive = false): void {
-  const w = worldRef.current;
+  const w = world;
   const prev = additive ? [] : selectedEntities();
   mutate("select", () => {
     for (const e of prev) w.removeTag(e, Selected);
@@ -42,7 +42,7 @@ export function setSelection(entities: readonly Entity[], additive = false): voi
 }
 
 export function toggleSelection(e: Entity): void {
-  const w = worldRef.current;
+  const w = world;
   mutate("toggle-select", () => {
     if (w.hasTag(e, Selected)) w.removeTag(e, Selected);
     else w.addTag(e, Selected);
@@ -57,7 +57,7 @@ export function clearSelection(): void {
  *  code — relation edges cascade-clean on destroy (the framework demo moment). */
 export function deleteSelection(): number {
   const doomed = selectedEntities(); // collect BEFORE mutating
-  const w = worldRef.current;
+  const w = world;
   mutate("delete", () => {
     for (const e of doomed) w.destroy(e);
   });
@@ -73,7 +73,7 @@ export interface DuplicateResult {
 /** Cmd-D: clone every selected shape (+16,+16), selection moves to the clones. The timing
  *  toast this feeds is honest evidence of strata's measured lifecycle win. */
 export function duplicateSelection(): DuplicateResult {
-  const w = worldRef.current;
+  const w = world;
   const originals = selectedEntities();
   const t0 = performance.now();
   const clones: Entity[] = [];
@@ -128,7 +128,7 @@ const CREATE_FILL: Record<ShapeKind, { r: number; g: number; b: number; a: numbe
 
 /** Draw-tool entry: spawn a shape at a point (drag-to-size updates it live afterwards). */
 export function createShape(kind: ShapeKind, x: number, y: number): Entity {
-  const w = worldRef.current;
+  const w = world;
   let e!: Entity;
   mutate("create", () => {
     // Ternary at the CALL (see duplicateSelected): the note arm carries a Label, so the two arms
@@ -164,14 +164,14 @@ export function createShape(kind: ShapeKind, x: number, y: number): Entity {
 /** Live drag-to-size during creation — whole-value `edit().set` on present components:
  *  the immediate outside-tick value-write surface (§5.6, row 1). */
 export function resizeShape(e: Entity, cx: number, cy: number, w2: number, h2: number): void {
-  const w = worldRef.current;
+  const w = world;
   mutate("size", () => {
     w.edit(e).set(Position, { x: cx, y: cy }).set(Size, { w: Math.max(w2, 1), h: Math.max(h2, 1) });
   });
 }
 
 export function destroyShape(e: Entity): void {
-  const w = worldRef.current;
+  const w = world;
   mutate("destroy", () => w.destroy(e));
   stats.entities -= 1;
 }

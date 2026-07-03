@@ -10,7 +10,7 @@ import { mutate, stats } from "./commands";
 import { scheduleAutosave } from "./persistence";
 import { seedBoard } from "./seed";
 import { isSimOn, setSimBound, setSimulate } from "./sim";
-import { worldRef } from "./worldRef";
+import { world } from "./worldRef";
 
 export const MAX_ENTITIES = 100_000; // well under strata's 2^20 slot ceiling — Canvas2D is the real limit
 
@@ -24,7 +24,7 @@ export function stressSpawn(n: number): StressResult {
   const count = Math.min(n, room);
   if (count === 0) return { spawned: 0, ms: 0 };
   // vary the seed per wave so clusters land in fresh spots
-  const r = seedBoard(worldRef.current, count, 42 + stats.entities);
+  const r = seedBoard(world, count, 42 + stats.entities);
   setSimBound(Math.sqrt(stats.entities) * 55 * 1.5);
   // spawning into a running storm: the new wave must move too (velocities default to 0)
   if (isSimOn()) setSimulate(true);
@@ -34,7 +34,7 @@ export function stressSpawn(n: number): StressResult {
 
 /** Destroy the whole document (collect-then-mutate — never destroy mid-walk, §16). */
 export function clearBoard(): number {
-  const w = worldRef.current;
+  const w = world;
   const doomed: Entity[] = [];
   w.query(renderable).each((b) => {
     for (const r of b) doomed.push(b.entity(r));

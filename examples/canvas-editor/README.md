@@ -52,7 +52,7 @@ src/
     systems/integrate.ts          Integrate → Bounce; same-phase order is load-bearing  §7.2
     pipeline.ts                   the schedule as a VALUE — rebuilt live by HUD toggles §7
   app/                          the editor around the world
-    worldRef.ts                   THE single World reference (restore swaps it)
+    worldRef.ts                   THE single, stable World (restore clears it in place, R3)
     frameLoop.ts                  sync() → tick() → paint, ecs/paint split measured     §16.2
     commands.ts                   the mutation funnel: autosave hook + future undo/tx seam
                                   (change detection moved out — see reactivity.ts)
@@ -65,7 +65,7 @@ src/
     editorOps.ts                  selection (Selected tag = the truth), delete, duplicate
     sim.ts / stress.ts            simulate toggle, +10k waves, clear board
     describe.ts                   the app-supplied labeling the observer panel renders
-    persistence.ts                export/import, autosave, the worldRef-swap discipline §8
+    persistence.ts                export/import, autosave, the in-place restore discipline §8
     camera.ts / seed.ts           infinite viewport math · deterministic clustered board
   render/
     drawBuffer.ts                 packed typed-array draw list (chunk-scoped Batch data

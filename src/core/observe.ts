@@ -26,6 +26,11 @@
  * - ROSTER SEMANTICS — the observer list is copy-on-write. Lifecycle events snapshot it per
  *   event; `tick()` snapshots it once at entry, so attaching/detaching mid-tick affects tick
  *   telemetry from the NEXT tick. Detaching from inside a callback never skips a sibling.
+ * - RESET IS WHOLESALE — a `world.reset()` (or `import(bytes, { replace: true })`) does NOT fire
+ *   per-entity `onDestroy`: a 100k-entity reset would otherwise emit 100k callbacks. The roster
+ *   SURVIVES the reset (attachments are not detached); a single `onReset` fires AFTER teardown
+ *   completes (the world is already empty and all pre-reset handles read dead inside it). `onReset`
+ *   is the signal to drop per-entity state wholesale — a re-import's `onSpawn` events repopulate it.
  */
 
 import type { Entity } from "./entity";
@@ -35,6 +40,12 @@ export interface WorldObserver {
   onSpawn?(e: Entity): void;
   /** An entity is about to be torn down — still fully readable inside the callback. */
   onDestroy?(e: Entity): void;
+  /**
+   * The world was reset wholesale (`world.reset()` / `import` with `replace`) — fired ONCE after
+   * teardown, in place of per-entity `onDestroy`. Optional and backward-compatible: an observer
+   * that ignores it simply keeps stale per-entity records that no longer name live entities.
+   */
+  onReset?(): void;
   /** `world.tick()` entered. `tick` is the 1-based running `world.tickCount`. */
   onTickStart?(tick: number): void;
   /**

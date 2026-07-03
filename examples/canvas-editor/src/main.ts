@@ -22,7 +22,7 @@ import { seedBoard } from "./app/seed";
 import { isSimOn, setSimBound, setSimulate } from "./app/sim";
 import { clearBoard, stressSpawn } from "./app/stress";
 import { interaction, pointerDown, pointerMove, pointerUp, setTool } from "./app/tools";
-import { worldRef } from "./app/worldRef";
+import { world } from "./app/worldRef";
 import { buildPipeline, SYSTEM_NAMES, type SystemName } from "./ecs/pipeline";
 import { cullFlags } from "./ecs/systems/cull";
 import { ContentLayer, lodFlags } from "./render/contentLayer";
@@ -111,7 +111,7 @@ if (!params.has("count") && params.get("fresh") !== "1" && hasAutosave()) {
   }
 }
 if (!booted) {
-  const seeded = seedBoard(worldRef.current, count);
+  const seeded = seedBoard(world, count);
   setSimBound(Math.sqrt(count) * 55 * 1.5); // fit the bounce box to the seeded spread
   notify(`seeded ${seeded.count.toLocaleString()} shapes + ${seeded.arrows} arrows in ${seeded.ms.toFixed(1)}ms`);
   zoomToFit();
@@ -133,15 +133,11 @@ const obsOpts: ObserverOptions = {
   // `tab` (not defaultTab): a shared ?obs= link must win over this browser's persisted layout
   tab: obsTab === "systems" || obsTab === "timeline" || obsTab === "entities" ? obsTab : undefined,
 };
-let observer = attachObserver(worldRef.current, obsOpts);
-// a restore swaps the World instance — re-attach the observer and re-sync chrome state
-onRestore(() => {
-  observer.dispose();
-  observer = attachObserver(worldRef.current, obsOpts);
-  wireReactivity(); // fresh world = fresh reactive registry — re-subscribe (002 §6); restore()
-  // already set dirty.doc so the first post-restore frame paints (registration never back-fires)
-  hud.setSimState(isSimOn()); // SimMode rides in the snapshot — a restored storm resumes
-});
+attachObserver(world, obsOpts); // mounted for the app's life — no dispose (the World never swaps, R3)
+// Restore clears the World in place (R3): the observer panel and the reactive repaint watch both
+// survive it, so there is nothing to re-attach or re-subscribe. onRestore only re-syncs the chrome
+// the snapshot changed — the sim toggle (SimMode rides the snapshot, so a restored storm resumes).
+onRestore(() => hud.setSimState(isSimOn()));
 startFrameLoop(
   () => pipeline,
   () => contentLayer.paint(drawBuffer),
@@ -154,8 +150,8 @@ if (params.get("sim") === "1") setSimulate(true);
 hud.setSimState(isSimOn()); // boot may have restored (or forced) a running storm
 
 // ?script=persist exercises the full save→clear→restore cycle in-process: export bytes,
-// wipe the world, import into a FRESH world (ref swap + observer re-attach) — the same
-// code path the autosave boot-restore takes.
+// wipe the world, import back IN PLACE (world.import replace, R3) — the same code path the
+// autosave boot-restore takes.
 // ?script=pan proves the camera→resource→observeResource→repaint chain (003 §1.4) headlessly:
 // a programmatic pan long after boot must repaint (the screenshot shows an off-center board);
 // a broken chain would leave the zoom-to-fit framing frozen on screen.
@@ -178,7 +174,7 @@ if (params.get("script") === "persist") {
     const load = loadAutosave();
     notify(
       load === "restored"
-        ? `persist test: saved ${before.toLocaleString()} → cleared ${cleared} → restored ${stats.entities.toLocaleString()} into a fresh world`
+        ? `persist test: saved ${before.toLocaleString()} → cleared ${cleared} → restored ${stats.entities.toLocaleString()} in place`
         : `persist test FAILED at restore (${load})`,
     );
   }, 600);

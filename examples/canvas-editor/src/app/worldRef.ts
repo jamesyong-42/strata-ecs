@@ -1,19 +1,15 @@
 /**
- * The single World reference. `world.import()` only loads into an EMPTY world, so restore
- * (E3) replaces the instance — everything reaches the world through this ref, and nothing
- * may cache a World or Entity handle across a swap (stale handles read as dead, silently).
+ * THE single World — constructed once and stable for the app's life. Restore no longer swaps the
+ * instance: `world.import(bytes, { replace: true })` (R3) clears in place, keeping this identity,
+ * every attached observer, and every reactive registration. So handles are only invalidated by the
+ * restore that replaces the entities they name (and those read dead, never aliased) — there is no
+ * app-wide swap to reason about, and nothing needs an indirection cell.
  */
 
-import type { World } from "strata";
 import { createWorld } from "strata";
 import { Camera, Gesture, SimMode } from "../ecs/schema";
 
-function freshWorld(): World {
-  const w = createWorld({ name: "canvas" });
-  w.setResource(Camera, { x: 0, y: 0, zoom: 1, w: 0, h: 0 });
-  w.setResource(Gesture, { mode: "idle", dx: 0, dy: 0 });
-  w.setResource(SimMode, { on: false, bound: 4000 });
-  return w;
-}
-
-export const worldRef: { current: World } = { current: freshWorld() };
+export const world = createWorld({ name: "canvas" });
+world.setResource(Camera, { x: 0, y: 0, zoom: 1, w: 0, h: 0 });
+world.setResource(Gesture, { mode: "idle", dx: 0, dy: 0 });
+world.setResource(SimMode, { on: false, bound: 4000 });

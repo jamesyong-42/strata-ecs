@@ -8,20 +8,20 @@
 import { simulated } from "../ecs/queries";
 import { SimMode, Velocity } from "../ecs/schema";
 import { scheduleAutosave } from "./persistence";
-import { worldRef } from "./worldRef";
+import { world } from "./worldRef";
 
 export function isSimOn(): boolean {
-  return worldRef.current.getResource(SimMode)?.on === true;
+  return world.getResource(SimMode)?.on === true;
 }
 
 /** Fit the bounce box to the board (called after seeding/stress spawns). */
 export function setSimBound(bound: number): void {
-  const w = worldRef.current;
+  const w = world;
   w.setResource(SimMode, { on: isSimOn(), bound });
 }
 
 export function setSimulate(on: boolean): void {
-  const w = worldRef.current;
+  const w = world;
   const bound = w.getResource(SimMode)?.bound ?? 4000;
   if (on) {
     // one-shot randomize — deterministic, and a nice showcase of immediate column writes

@@ -8,7 +8,7 @@
 
 import { renderable } from "../ecs/queries";
 import { Position, Size, Camera as CameraRes } from "../ecs/schema";
-import { worldRef } from "./worldRef";
+import { world } from "./worldRef";
 
 export const MIN_ZOOM = 0.02;
 export const MAX_ZOOM = 16;
@@ -17,7 +17,7 @@ export const cam = { x: 0, y: 0, zoom: 1, w: 0, h: 0 };
 
 /** Write the app camera into the ECS resource — the stamp-bearing write chokepoint. */
 export function syncCameraResource(): void {
-  worldRef.current.setResource(CameraRes, { x: cam.x, y: cam.y, zoom: cam.zoom, w: cam.w, h: cam.h });
+  world.setResource(CameraRes, { x: cam.x, y: cam.y, zoom: cam.zoom, w: cam.w, h: cam.h });
 }
 
 export function screenToWorld(sx: number, sy: number): { x: number; y: number } {
@@ -58,7 +58,7 @@ export function zoomToFit(): void {
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  worldRef.current.query(renderable).each((b) => {
+  world.query(renderable).each((b) => {
     const px = b.col(Position).x;
     const py = b.col(Position).y;
     const sw = b.col(Size).w;

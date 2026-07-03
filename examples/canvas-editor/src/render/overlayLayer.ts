@@ -6,7 +6,7 @@
 
 import { cam } from "../app/camera";
 import { interaction } from "../app/tools";
-import { worldRef } from "../app/worldRef";
+import { world } from "../app/worldRef";
 import { selectedBoxes } from "../ecs/queries";
 import { Position, Size } from "../ecs/schema";
 
@@ -48,7 +48,6 @@ export class OverlayLayer {
     // + one stroke() (a strokeRect per shape is an order of magnitude more draw calls), and
     // sub-2-screen-px boxes are skipped: at far zoom a 5k selection would otherwise tank
     // idle fps for outlines nobody can see.
-    const world = worldRef.current;
     ctx.strokeStyle = SELECT_BLUE;
     ctx.lineWidth = 1.5 * px1;
     const minWorld = 2 * px1;

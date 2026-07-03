@@ -9,13 +9,13 @@
 import type { Entity } from "strata";
 import { renderable } from "../ecs/queries";
 import { Position, Size, ZIndex } from "../ecs/schema";
-import { worldRef } from "./worldRef";
+import { world } from "./worldRef";
 
 /** Topmost shape (by explicit z) containing the world-space point, or undefined. */
 export function hitTestPoint(wx: number, wy: number): Entity | undefined {
   let best: Entity | undefined;
   let bestZ = -Infinity;
-  worldRef.current.query(renderable).each((b) => {
+  world.query(renderable).each((b) => {
     const px = b.col(Position).x;
     const py = b.col(Position).y;
     const sw = b.col(Size).w;
@@ -48,7 +48,7 @@ export function hitTestRegion(x0: number, y0: number, x1: number, y1: number): R
   const maxY = Math.max(y0, y1);
   const entities: Entity[] = [];
   const rects: number[] = [];
-  worldRef.current.query(renderable).each((b) => {
+  world.query(renderable).each((b) => {
     const px = b.col(Position).x;
     const py = b.col(Position).y;
     const sw = b.col(Size).w;

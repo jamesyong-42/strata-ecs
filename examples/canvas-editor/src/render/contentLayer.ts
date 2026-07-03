@@ -10,7 +10,7 @@
 
 import type { Entity } from "strata";
 import { cam } from "../app/camera";
-import { worldRef } from "../app/worldRef";
+import { world } from "../app/worldRef";
 import { connected } from "../ecs/queries";
 import { ConnectedTo, Label, Position } from "../ecs/schema";
 import type { DrawBuffer } from "./drawBuffer";
@@ -61,7 +61,6 @@ export class ContentLayer {
   paint(db: DrawBuffer): void {
     const ctx = this.ctx;
     const dpr = this.dpr;
-    const world = worldRef.current;
 
     // screen-space clear + background
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -162,7 +161,6 @@ export class ContentLayer {
    * `getAllRelated` + `readField` endpoint reads stay honestly small-count.
    */
   private paintArrows(ctx: CanvasRenderingContext2D): void {
-    const world = worldRef.current;
     ctx.strokeStyle = "rgba(139,148,158,.55)";
     ctx.lineWidth = 2 / cam.zoom;
     // segment-AABB cull against the view rect (padded for arrowheads) — same brute-force

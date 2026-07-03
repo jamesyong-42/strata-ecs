@@ -102,6 +102,16 @@ export function createLifecycleRecorder(world: World, describe: DescribeFn, cap 
       rec.color = d.color ?? rec.color;
       rec.phase = d.phase ?? null;
     },
+    // A wholesale reset (world.reset / import replace) fires ONCE, in place of per-entity onDestroy,
+    // and the reset entities are already dead + unreadable here — so freezing final labels is not an
+    // option. A reset replaces the document, making the prior session's timeline meaningless, so drop
+    // it entirely; the re-import's onSpawn events repopulate it. This mirrors the pre-R3 world swap,
+    // which discarded the old recorder and built a fresh one on the new world.
+    onReset: () => {
+      list = [];
+      byId.clear();
+      deadCount = 0;
+    },
   });
 
   return {

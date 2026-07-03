@@ -3,14 +3,16 @@
  * `world.export()` → bytes (UTF-8 JSON) → localStorage autosave + .json file download, and
  * back via `world.import()`. No rival JS ECS ships this at all.
  *
- * THE RESTORE DISCIPLINE: `import()` only loads into an EMPTY world, so restore builds a
- * fresh World and swaps `worldRef.current`. Every entity handle minted before the swap is
- * dead — worse, both worlds mint the same dense slot/generation sequence, so an old handle
- * can silently ALIAS a restored entity. Hence the ordering here: the in-flight gesture is
- * cancelled FIRST (its draft shape dies in the world it belongs to), then the new world is
- * built and swapped, then app-side mirrors (stats, camera) are rebuilt from it. Anything
- * caching a World or Entity across this boundary is a bug; `onRestore` lets the chrome
- * re-attach (e.g. the observer panel).
+ * THE RESTORE DISCIPLINE (R3): restore loads IN PLACE via `world.import(bytes, { replace: true })`
+ * — one stable World for the app's life, no swap. The import validates the snapshot BEFORE it
+ * resets, so an incompatible board (schema drift) throws with the current document intact; on
+ * success it frees every prior entity WITH a generation bump, so any handle minted before the
+ * restore reads dead — never the silent ALIAS a fresh-world swap invited (both worlds used to mint
+ * the same slot/gen sequence). The in-flight gesture is still cancelled FIRST (its draft shape dies
+ * with the reset); app-side mirrors (stats, camera) are then rebuilt from the loaded world. The
+ * observer panel and the reactive repaint watch SURVIVE the restore (they belong to the stable
+ * World), so `onRestore` only re-syncs chrome the snapshot changed (the sim toggle) — not
+ * re-subscriptions.
  *
  * Autosave is debounced off the mutation funnel, runs on requestIdleCallback, and DEFERS
  * while a gesture is active — export is O(document) and must never hitch a drag (§8.3).
@@ -18,13 +20,12 @@
  * this example exists to drive framework development) is quarantined and reseeded over.
  */
 
-import { createWorld } from "strata";
 import { renderable } from "../ecs/queries";
 import { Camera as CameraRes, Gesture, ZIndex } from "../ecs/schema";
 import { cam, syncCameraResource } from "./camera";
-import { dirty, stats } from "./commands";
+import { stats } from "./commands";
 import { cancelGesture, gestureActive } from "./tools";
-import { worldRef } from "./worldRef";
+import { world } from "./worldRef";
 
 const LS_KEY = "strata-canvas:autosave";
 const LS_QUARANTINE = "strata-canvas:autosave-incompatible";
@@ -86,7 +87,7 @@ window.addEventListener("pagehide", () => {
 
 export function saveToLocalStorage(): boolean {
   try {
-    const bytes = worldRef.current.export();
+    const bytes = world.export();
     localStorage.setItem(LS_KEY, new TextDecoder().decode(bytes));
     lastSaveAt = performance.now(); // resets the max-wait clock for every real save path
     return true;
@@ -127,7 +128,7 @@ export function clearAutosave(): void {
 
 /** Download the document as a .json file (the snapshot IS readable JSON, §8.1). */
 export function downloadDoc(): void {
-  const bytes = worldRef.current.export();
+  const bytes = world.export();
   const blob = new Blob([bytes as BlobPart], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -141,25 +142,26 @@ export async function loadDocFile(file: File): Promise<void> {
   restore(new Uint8Array(await file.arrayBuffer()));
 }
 
-/** Load a snapshot: cancel the gesture (in the OLD world), fresh world, swap the ref,
- *  rebuild app-side mirrors, notify chrome. Throws if the bytes don't import — callers own
- *  the failure UX (boot quarantines, the file-open button toasts). */
+/** Load a snapshot IN PLACE (R3): cancel the gesture, `import({ replace: true })` into the stable
+ *  world, rebuild app-side mirrors, notify chrome. Throws if the bytes don't import — and because
+ *  the import validates before it resets, a throw leaves the current board untouched (callers own
+ *  the failure UX: boot quarantines, the file-open button toasts). */
 export function restore(bytes: Uint8Array): void {
-  // FIRST — an in-flight draw's draft must be destroyed in the world it belongs to; after
-  // the swap its handle would alias a freshly-imported entity (same slot/gen sequence)
+  // FIRST — an in-flight draw's draft dies with the reset; cancel it in the world it belongs to so
+  // no gesture handle is left dangling (dead, never aliased — R3's in-place generation bump).
   cancelGesture();
 
-  const w = createWorld({ name: "canvas" });
-  w.import(bytes); // throws on incompatibility — worldRef is untouched in that case
-  worldRef.current = w; // the swap — all old Entity/World references are dead from here
+  // Reset-in-place + import in one call. Validates before touching the world, so incompatible
+  // bytes throw here with the document intact (the quarantine + file-open failure paths rely on it).
+  world.import(bytes, { replace: true });
 
-  // a snapshot saved mid-gesture must not inject a live gesture into the fresh world
-  w.setResource(Gesture, { mode: "idle", dx: 0, dy: 0 });
+  // a snapshot saved mid-gesture must not inject a live gesture into the restored world
+  world.setResource(Gesture, { mode: "idle", dx: 0, dy: 0 });
 
   // rebuild the app-side mirrors from the loaded world (read-only walk)
   let n = 0;
   let maxZ = 0;
-  w.query(renderable).each((b) => {
+  world.query(renderable).each((b) => {
     const zz = b.col(ZIndex).z;
     for (let i = 0; i < b.count; i++) {
       const r = b.rows[i];
@@ -172,14 +174,16 @@ export function restore(bytes: Uint8Array): void {
 
   // the viewport rides in the snapshot too (Camera is a resource) — restore pan/zoom,
   // keep this window's size (w/h are set by the resize handler, not the document)
-  const saved = w.getResource(CameraRes);
+  const saved = world.getResource(CameraRes);
   if (saved !== undefined) {
     cam.x = saved.x;
     cam.y = saved.y;
     cam.zoom = saved.zoom;
   }
 
-  dirty.doc = true; // first post-restore paint (observer registration never back-fires)
-  syncCameraResource(); // write this window's w/h over the snapshot camera in the NEW world
+  // No manual first-paint flag: the import's wipe + refill stamped the renderable archetypes, so the
+  // surviving Tier-1 observer (reactivity.ts) repaints at the next notify. This write of the Camera
+  // resource (window w/h over the snapshot's) also wakes observeResource(Camera) (003 §1.4).
+  syncCameraResource();
   for (const fn of restoreListeners) fn();
 }

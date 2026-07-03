@@ -5,7 +5,7 @@
  * entities so they stay queryable (§3.1, §5.2).
  */
 
-import { type Column, allocColumn, growColumn } from "./field";
+import { type Column, allocColumn, growColumn, isStringKind } from "./field";
 import type { ComponentId, FieldId, FieldMeta } from "./schema";
 
 const INITIAL_ROW_CAPACITY = 8;
@@ -77,6 +77,23 @@ export class Archetype {
     const ids = this.componentIds;
     for (let i = 0; i < ids.length; i++) if (ids[i] === cid) return i;
     return -1;
+  }
+
+  /**
+   * Drop every row IN PLACE (a `world.reset()` wipe, R3). Nulls the live region of every string
+   * column so no reference survives above the reset `count` (the §3.4 "no live reference above
+   * count" invariant swap-and-pop upholds), then zeroes the count. Keeps object identity and
+   * column capacity — the query caches that reference this archetype stay valid, and a re-import
+   * reuses it. The caller owns the change-detection stamp (`lastStructuralFrame`), behind the gate.
+   */
+  clear(): void {
+    for (const f of this.fields) {
+      if (isStringKind(f.kind)) {
+        const col = this.columns.get(f.fieldId) as (string | null)[];
+        for (let r = 0; r < this.count; r++) col[r] = null;
+      }
+    }
+    this.count = 0;
   }
 
   /** Grow the columns + back-pointer array to hold at least `rows` (geometric doubling). */

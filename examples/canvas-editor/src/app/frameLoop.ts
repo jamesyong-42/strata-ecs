@@ -14,7 +14,7 @@ import { drawBuffer } from "../render/drawBuffer";
 import { dirty } from "./commands";
 import { repaint } from "./reactivity";
 import { syncGestureResource } from "./tools";
-import { worldRef } from "./worldRef";
+import { world } from "./worldRef";
 
 export interface FrameStats {
   frameMs: number;
@@ -35,7 +35,6 @@ export function startFrameLoop(
   let last = performance.now();
   const frame = (now: number): void => {
     requestAnimationFrame(frame);
-    const world = worldRef.current;
 
     world.sync(); // Part I no-op — kept from day one so the durable layer attaches with zero rewrite
     // (No camera sync step: camera mutations write the Camera resource immediately, 003 §1.4.)
@@ -48,9 +47,9 @@ export function startFrameLoop(
 
     // THE settled point (002 §4.1): after all ticks, compare stamps and fire dirty observers.
     // The renderable Tier-1 observer (app/reactivity.ts) sets repaint.doc here when any drawn
-    // column stamped this frame. Re-read worldRef so a mid-input restore's fresh world is the
-    // one we notify. Must run BEFORE the paint gate below.
-    worldRef.current.reactive.notify();
+    // column stamped this frame. The World is stable (restore clears in place, R3), so this is
+    // always the same reactive layer — no re-read. Must run BEFORE the paint gate below.
+    world.reactive.notify();
 
     // Content paint gate. The reactive observers (repaint.doc) ARE the change detection now —
     // drag/draw/duplicate/delete/running-sim reach it through column stamps + rows-version,

@@ -19,7 +19,7 @@ import {
   type ShapeKind,
 } from "./editorOps";
 import { hitTestPoint, hitTestRegion } from "./hitTest";
-import { worldRef } from "./worldRef";
+import { world } from "./worldRef";
 
 export type ToolId = "select" | "pan" | "rect" | "ellipse" | "note";
 
@@ -71,7 +71,7 @@ export function syncGestureResource(): void {
   if (m === "idle" && lastSyncedIdle && interaction.pendingDx === 0 && interaction.pendingDy === 0) return;
   const mode =
     m === "drag" || m === "dragEnd" ? "drag" : m === "marquee" ? "marquee" : m === "draw" ? "draw" : "idle";
-  worldRef.current.setResource(Gesture, { mode, dx: interaction.pendingDx, dy: interaction.pendingDy });
+  world.setResource(Gesture, { mode, dx: interaction.pendingDx, dy: interaction.pendingDy });
   interaction.pendingDx = 0;
   interaction.pendingDy = 0;
   lastSyncedIdle = m === "idle";
@@ -94,10 +94,10 @@ export function pointerDown(p: PointerInfo): void {
           // shift-click toggles; only drag if the shape ended up selected (a shift-DEselect
           // must not start dragging the rest of the selection out from under the cursor)
           toggleSelection(hit);
-          interaction.mode = worldRef.current.hasTag(hit, Selected) ? "drag" : "idle";
+          interaction.mode = world.hasTag(hit, Selected) ? "drag" : "idle";
           return;
         }
-        if (!worldRef.current.hasTag(hit, Selected)) {
+        if (!world.hasTag(hit, Selected)) {
           // clicking an already-selected shape keeps the multi-selection (drag moves it all)
           setSelection([hit]);
         }

@@ -33,7 +33,7 @@ interface EntityRecord {
   relations: Record<string, number | number[]>;
 }
 
-interface Snapshot {
+export interface Snapshot {
   meta: { name: string; format_version: number };
   resources: Record<string, unknown>;
   entities: EntityRecord[];
@@ -94,16 +94,45 @@ export function exportSnapshot(store: RuntimeStore, name: string): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(snapshot));
 }
 
+/**
+ * Parse + validate a snapshot's envelope and schema references, WITHOUT mutating a store (§8.2).
+ * Throws on an unsupported format version or any unknown component/tag/relation/resource name.
+ * Split out so `world.import(bytes, { replace: true })` can validate BEFORE it resets — an
+ * incompatible snapshot (schema drift) then leaves the world intact, so a failed document-open
+ * never wipes the live board (the boot-quarantine + file-open failure UX both rely on this).
+ */
+export function parseSnapshot(bytes: Uint8Array): Snapshot {
+  const snapshot = JSON.parse(new TextDecoder().decode(bytes)) as Snapshot;
+  if (snapshot.meta?.format_version !== FORMAT_VERSION) {
+    throw new Error(`strata: unsupported snapshot format version ${snapshot.meta?.format_version}.`);
+  }
+  for (const resName of Object.keys(snapshot.resources)) {
+    if (resourceByName(resName) === undefined) throw new Error(`strata: snapshot references unknown resource "${resName}".`);
+  }
+  for (const record of snapshot.entities) {
+    for (const cName of Object.keys(record.components)) {
+      if (componentByName(cName) === undefined) throw new Error(`strata: snapshot references unknown component "${cName}".`);
+    }
+    for (const tName of record.tags) {
+      if (tagByName(tName) === undefined) throw new Error(`strata: snapshot references unknown tag "${tName}".`);
+    }
+    for (const rName of Object.keys(record.relations)) {
+      if (relationByName(rName) === undefined) throw new Error(`strata: snapshot references unknown relation "${rName}".`);
+    }
+  }
+  return snapshot;
+}
+
 /** Rebuild the store's state from bytes into an EMPTY store (§8.2). Throws on unknown schema names. */
 export function importSnapshot(store: RuntimeStore, bytes: Uint8Array): void {
   if (store.liveCount() > 0) {
     throw new Error("strata: import() requires an empty world — create a fresh world to load a snapshot.");
   }
-  const snapshot = JSON.parse(new TextDecoder().decode(bytes)) as Snapshot;
-  if (snapshot.meta?.format_version !== FORMAT_VERSION) {
-    throw new Error(`strata: unsupported snapshot format version ${snapshot.meta?.format_version}.`);
-  }
+  applySnapshot(store, parseSnapshot(bytes));
+}
 
+/** Apply a parsed, validated snapshot into an EMPTY store (§8.2) — the mutating half of import. */
+export function applySnapshot(store: RuntimeStore, snapshot: Snapshot): void {
   for (const [resName, value] of Object.entries(snapshot.resources)) {
     const res = resourceByName(resName);
     if (res === undefined) throw new Error(`strata: snapshot references unknown resource "${resName}".`);

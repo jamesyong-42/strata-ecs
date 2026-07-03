@@ -141,6 +141,13 @@ export class RelationStore {
     return this.manyForward.get(rel.id)?.get(source)?.has(target) ?? false;
   }
 
+  /** Drop every edge in both directions — the wholesale clear a `world.reset()` routes through (R3, §5.5). */
+  reset(): void {
+    this.oneForward.clear();
+    this.manyForward.clear();
+    this.reverse.clear();
+  }
+
   private mapFor<V>(index: Map<RelationId, Map<Entity, V>>, rid: RelationId): Map<Entity, V> {
     let m = index.get(rid);
     if (m === undefined) {

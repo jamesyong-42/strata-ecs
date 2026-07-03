@@ -54,6 +54,11 @@ export class TagStore {
     return this.bitsets.get(tagId);
   }
 
+  /** Drop every bitset — the wholesale clear a `world.reset()` routes through (R3, §5.5). */
+  reset(): void {
+    this.bitsets.clear();
+  }
+
   private ensure(tagId: TagId, slot: number): Uint32Array {
     const wordsNeeded = (slot >>> 5) + 1;
     let b = this.bitsets.get(tagId);
