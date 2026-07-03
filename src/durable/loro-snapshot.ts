@@ -30,9 +30,16 @@
  *  3. PER-COMMIT SPLITTING (`applyRemote`). Consecutive same-peer commits COALESCE into ONE oplog
  *     `Change` by default (a 3-commit buffer → 1 change of length 3). Neither an incrementing
  *     `timestamp` nor a distinct `origin` prevents it; ONLY a distinct `commit({ message })` per commit
- *     keeps them separate (verified). So EVERY commit this adapter seals is tagged with a monotonic
- *     per-doc counter as its `message` — that is the sole reason for the message, and it is what lets a
- *     receiver recover commit boundaries. Split algorithm: record `beforeVV=doc.version()` +
+ *     keeps them separate (verified). So EVERY commit this adapter seals is tagged `strata:<n>` with a
+ *     monotonic per-doc counter — that is the sole reason for the message, and it is what lets a receiver
+ *     recover commit boundaries. The counter is namespaced (`strata:`) because the doc is CALLER-SUPPLIED:
+ *     a bare "0"/"1" would squat the user-visible commit-message channel and be indistinguishable from app
+ *     data. THE DURABLE LAYER RESERVES THE COMMIT-MESSAGE CHANNEL on any doc it is attached to. The counter
+ *     is SEEDED IN THE CONSTRUCTOR from this peer's max existing `strata:<n>` (never lazily from 0): a
+ *     session restart reusing the peer id would re-mint "strata:0" and loro would COALESCE the two commits
+ *     in the sender's OWN oplog — a permanently unrecoverable boundary. An inbound change whose `msg` is not
+ *     a strata tag is a FOREIGN writer (may have coalesced) — `applyRemote` DEV-warns once and treats its
+ *     boundaries as best-effort. Split algorithm: record `beforeVV=doc.version()` +
  *     `beforeFrontiers=doc.frontiers()`; `doc.import(bytes)`; `doc.exportJsonUpdates(beforeVV, afterVV,
  *     withPeerCompression=false)` → `.changes` topologically ordered, each = ONE commit; walk them,
  *     computing the frontier after each change and `doc.diff(prev, cur)` → that one commit's map diffs.
@@ -73,24 +80,88 @@
  *     a consistent store. An emptied child map LINGERS in "entities" with `keys().length === 0`; that is
  *     why `hasEntity` / `entities()` gate on `keys().length > 0` (existence-cell + derived liveness).
  *
- *  7. `UndoManager` (005 §1.3, LOCAL-ops-only, verified): `undo()`/`redo()` self-commit (advance
- *     frontiers, no explicit `doc.commit`), return a boolean, and revert ONLY the local peer's own ops —
- *     undoing after a remote import never touches a peer's edit. Their inverse edits flow out through
- *     the same frontier-diff path as an ordinary `local` batch. (Undo groups edits inside its own merge
- *     interval — two rapid same-key sets can be one undo step; that is loro policy, faithfully surfaced.)
+ *  7. `UndoManager` (005 §1.3, LOCAL-ops-only): `undo()`/`redo()` self-commit (advance frontiers, no
+ *     explicit `doc.commit`), return a boolean, and revert only ops the LOCAL peer authored. Their inverse
+ *     edits flow out through the same frontier-diff path as an ordinary `local` batch. Undo groups edits
+ *     inside its merge interval — we pass `mergeInterval: 0` so ONE sealed commit is ONE undo step.
+ *     CORRECTION (the earlier "never touches a peer's edit" claim was FALSE — probe-verified): undo does
+ *     NOT time-travel; it re-asserts the pre-op state as NEW lamport-latest ops. Two consequences:
+ *       (a) undoing a cell CLOBBERS a causally-NEWER remote overwrite of that same cell — the undo's op is
+ *           lamport-latest, so it wins LWW over the peer's newer value (not "leaves peer edits untouched");
+ *       (b) undoing a SPAWN commit despawns the entity, and (with the three-part contract) drops the
+ *           entity's cells — including components a peer added AFTER the spawn. So an undo can erase remote
+ *           work. Whether to accept that or gate it is a Part III M3 decision (TODO(M3-design)); this
+ *           adapter only surfaces faithful `UndoManager` behaviour. Both cases are pinned in the tests.
+ *     COMMIT-BOUNDARY: `undo()`/`redo()` self-commit with NO message by default, so consecutive undos (or
+ *     an undo+redo pair) COALESCE into one oplog change — the receiver then sees the wrong batch count (an
+ *     undo+redo can net to ZERO batches). We call `doc.setNextCommitMessage(strata:<n>)` right before the
+ *     `UndoManager` call so each self-commit is distinctly tagged (finding 3). If the call returns false no
+ *     commit happens and the pending message lingers — harmless: the next explicit `commit({message})`
+ *     overrides it.
  *
- *  8. `export({ mode:"snapshot" })` = full converged state (imports into a fresh doc).
+ *  8. `export({ mode:"snapshot" })` = full converged state (imports into a fresh doc). `doc.export`
+ *     IMPLICITLY seals staged ops — with no message and no local batch (they'd coalesce on the receiver),
+ *     so `export()` seals EXPLICITLY first (finding 10).
+ *
+ *  9. NEVER DELETE A PER-ENTITY CONTAINER. Containers are minted once per key (`ensureChild`) and never
+ *     removed; despawn deletes the KEYS INSIDE (incl. `exists`), leaving an empty map that reads absent.
+ *     A whole-container delete caused two probe-confirmed criticals: (a) two peers concurrently recreating
+ *     the same key after a despawn (ordinary flow) LWW-pick ONE container and SILENTLY orphan the other's
+ *     entire cell set — a purely-additive fact stream with no removal fact, so reconcile can NEVER learn of
+ *     the loss; (b) per-commit replay dropped EVERY fact of a commit whose container a later buffered commit
+ *     deleted (`getPathToContainer` resolves against the post-import head — `[spawn+set][set][despawn]` gave
+ *     ONE batch, not three). With no-delete, every child pair resolves and (b) is impossible.
+ *     POLICY FLIP (record for 006, TODO(006-amendment)): despawn-vs-concurrent-edit is now PER-CELL LWW, not
+ *     container-delete-wins. A remote `set` concurrent with a local despawn leaves THAT ONE CELL alive — so
+ *     an entity can converge RESURRECTED with only partial cells; reconcile classifies it as a structural
+ *     add (absent baseline). First-creation races still mint two containers if two peers create the SAME key
+ *     before any sync — impossible under peer-prefixed key minting; MutableSnapshot callers MUST use
+ *     peer-unique keys (design.md §14.2). Empty-container = absent is an ADAPTER-INTERNAL representation; the
+ *     ladder-visible semantics are unchanged, so the conformance suite passes untouched.
+ *
+ *  10. COMMIT SCOPE + REENTRANCY. A throwing `commit(body)` still SEALS what it staged (in `finally`, with a
+ *     message) and emits that partial batch locally BEFORE rethrowing — otherwise the dangling staged ops
+ *     get absorbed into the NEXT local batch while receivers already saw them (streams diverge). Atomic-abort
+ *     is the M3 recorder's job (buffer ops, write after `fn` returns — design.md §12.2/§12.3). `applyRemote`,
+ *     `undo`, `redo` THROW when a commit scope is open (a nested `applyRemote` double-delivers facts with the
+ *     wrong origins). `export()` seals staged ops explicitly (finding 8). EMPTY-BATCH stance: a remote commit
+ *     whose every fact lost LWW yields NO batch — so `commitId` MUST NOT be used for completeness accounting
+ *     (batch count ≤ commit count).
+ *     FRONTIER-VS-STAGING (verified): `doc.frontiers()` AND `doc.oplogFrontiers()` BOTH advance the instant an
+ *     op is STAGED (before any commit), so a "before" frontier read at seal time already counts the staged
+ *     ops and its diff to the post-commit head is EMPTY. The local-diff "from" is therefore tracked as
+ *     instance state (`sealedTo`, advanced by every emit), NOT read fresh at seal time; `getPendingTxnLength()`
+ *     is the reliable "are there staged ops?" gate. (Part IV's ephemeral adapter will hit the same.)
+ *
+ *  11. PENDING-IMPORT POISON (upstream loro-crdt@1.13.6 bug). An out-of-order MIXED-MODE import (a shuffled
+ *     mix of snapshot+update buffers whose deps are missing) can panic the wasm ("unreachable",
+ *     pending_changes.rs:146); after the panic EVERY import/export/commit throws (wasm lock poisoned) and
+ *     unexported local work is lost. In-order per-peer delivery never trips it (0/30 in the spike). The
+ *     precursor is detectable and deterministic: `doc.import(bytes)` returns `ImportStatus` whose `pending`
+ *     is a `Map | null` (test `=== null`, NOT truthiness). On `pending !== null`, `applyRemote` QUARANTINES
+ *     the adapter (this + every future call throws {@link PendingImportError}) BEFORE any panic — so
+ *     `export()` still recovers local work and the caller resyncs via a fresh doc + snapshot. TRANSPORTS
+ *     MUST guarantee per-peer causal in-order delivery, or exchange snapshots.
+ *
+ *  12. CONTAINER VALUES AT CELL KEYS. A hostile/buggy peer can `setContainer` at a `comp:`/`tag:`/`rel1:`/
+ *     `relN:`/resource key, or set a non-`LoroMap` (plain value / `LoroText`) as an entities-map value.
+ *     `map.get` and `doc.diff` both surface these as `isContainer(v) === true` (or a plain value). Reads
+ *     (`getComponent`/`getResource`/`getRelationOne`/…) and event translation treat any such value as
+ *     unresolvable — skip + one-shot warn — never leaking a live wasm handle into a `ChangeEvent` or read.
+ *     A poisoned entity-map value HEALS on a local spawn (`setContainer` overwrites it).
  *
  * ============================================================================================
  * DOCUMENT LAYOUT (plan-part3.md "Document layout", 005 §3 concretized)
  * ============================================================================================
- *  root LoroMap "entities":  <EntityKey> → a per-entity LoroMap (a container)
+ *  root LoroMap "entities":  <EntityKey> → a per-entity LoroMap (a container, NEVER deleted — finding 9)
  *  per-entity LoroMap:
  *    "exists"                → true                      the existence cell (005 §4.1; spawn = this only)
  *    "comp:<Name>"           → canonical value object    ONE atomic register, assigned WHOLESALE (§3.1)
  *    "tag:<Name>"            → true                       per-entry register (§3.2)
  *    "rel1:<Name>"           → <targetKey> string         arity "one" — one register
  *    "relN:" + JSON([<Name>,<targetKey>]) → true          arity "many" — one register PER edge
+ *  DESPAWN clears every key above (incl. `exists`) but KEEPS the empty container (finding 9). An empty
+ *  (or `exists`-less + cell-less) map reads ABSENT (hasEntity/entities gate on `keys().length > 0`).
  *  root LoroMap "resources": <ResourceName> → canonical value object (§3.1)
  *
  * REL-EDGE KEY ENCODING (collision-proof, per the task): relation names AND target keys are
@@ -106,7 +177,7 @@
  * loud placeholder until M5.
  */
 
-import { LoroDoc, LoroMap, UndoManager } from "loro-crdt";
+import { LoroDoc, LoroMap, UndoManager, isContainer } from "loro-crdt";
 import type { ContainerID, Diff, JsonChange, OpId } from "loro-crdt";
 import { devWarn } from "../core/dev";
 import { type EntityKey, entityKey } from "../core/field";
@@ -139,16 +210,61 @@ const tagKey = (t: Tag): string => TAG + t.name;
 const relOneKey = (r: Relation): string => REL_ONE + r.name;
 const relManyKey = (r: Relation, target: EntityKey): string =>
   REL_MANY + JSON.stringify([r.name, target]);
-/** Parse a "relN:" edge key back to [relationName, targetKey] (the JSON-array segment). */
-function parseRelManyKey(mapKey: string): [string, string] {
-  const [name, target] = JSON.parse(mapKey.slice(REL_MANY.length)) as [string, string];
-  return [name, target];
+/**
+ * TOTAL parse of a "relN:" edge key back to `[relationName, targetKey]`, or `undefined` when the
+ * segment is not a JSON array of exactly two strings. The `relN:` map keys are PEER-CONTROLLED: a
+ * hostile/buggy peer can write `relN:junk` (JSON.parse throws) or `relN:123` (parses to a number).
+ * A bare `JSON.parse` + destructure at every despawn scan / read would let ONE such key throw AFTER
+ * `doc.import` already advanced the frontier (the batch is then lost forever — retry returns []),
+ * and wedge `getRelationMany`/`readEntity`/despawn for the whole doc. So every caller uses this and
+ * treats `undefined` as an unknown edge (skip + one-shot warn), never a throw. */
+function tryParseRelManyKey(mapKey: string): [string, string] | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(mapKey.slice(REL_MANY.length));
+  } catch {
+    return undefined;
+  }
+  return Array.isArray(parsed) &&
+    parsed.length === 2 &&
+    typeof parsed[0] === "string" &&
+    typeof parsed[1] === "string"
+    ? [parsed[0], parsed[1]]
+    : undefined;
 }
 
 /** A `JsonOpID` is a `"counter@peer"` string (loro finding 3). Split on the LAST '@' (peer is numeric). */
 function parseJsonOpId(id: string): { peer: `${number}`; counter: number } {
   const at = id.lastIndexOf("@");
   return { counter: Number(id.slice(0, at)), peer: id.slice(at + 1) as `${number}` };
+}
+
+/** The durable layer's reserved commit-message namespace (finding 3): `strata:<monotonic per-doc n>`. */
+const MSG_PREFIX = "strata:";
+const strataMsg = (n: number): string => MSG_PREFIX + n;
+/** The `n` of a `strata:<n>` message, or `undefined` if the message is not a strata tag (foreign writer). */
+function strataMsgSeq(msg: string | null | undefined): number | undefined {
+  if (msg === null || msg === undefined || !msg.startsWith(MSG_PREFIX)) return undefined;
+  const n = Number(msg.slice(MSG_PREFIX.length));
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+
+/**
+ * Thrown by {@link LoroSnapshot.applyRemote} once the doc has taken a PENDING import (loro-crdt@1.13.6
+ * leaves changes with missing deps buffered as "pending"; a later out-of-order mixed-mode import can
+ * then panic the wasm and POISON the doc — every subsequent import/export/commit throws, unexported
+ * local work lost). The adapter quarantines itself the instant it sees `import().pending !== null`,
+ * BEFORE any such panic — so `export()` still works and the caller can resync via a fresh doc +
+ * snapshot. This and all FUTURE `applyRemote` calls throw this; the adapter is permanently quarantined.
+ */
+export class PendingImportError extends Error {
+  constructor() {
+    super(
+      "strata: this LoroSnapshot took a pending (missing-deps) import and is quarantined — " +
+        "resync via a fresh LoroDoc + snapshot; export() still works for local recovery.",
+    );
+    this.name = "PendingImportError";
+  }
 }
 
 /**
@@ -171,11 +287,35 @@ export class LoroSnapshot implements CRDTSnapshot {
 
   /** Subscribers to sealed batches (local commits AND remote imports). We manage this list ourselves. */
   private readonly listeners = new Set<(batch: ChangeBatch) => void>();
-  /** Monotonic per-doc commit counter — the `commit({ message })` that keeps commits un-coalesced (finding 3). */
-  private commitSeq = 0;
-  /** Reentrancy guard for `commit(body)` — nested commit throws (the pinned choice, plan-part3 M0). */
+  /**
+   * Monotonic per-doc commit counter — the `strata:<n>` `commit({ message })` that keeps commits
+   * un-coalesced (finding 3). SEEDED IN THE CONSTRUCTOR from this peer's existing history (never lazily
+   * from 0): a session restart that reuses the peer id would otherwise re-mint `strata:0`, and loro
+   * COALESCES two same-message commits in the sender's OWN oplog — a permanently unrecoverable batch
+   * boundary. Seeding past the max existing `strata:<n>` for this peer keeps the sequence strictly
+   * monotonic across restarts (gaps are harmless — only reuse coalesces).
+   */
+  private commitSeq: number;
+  /** Reentrancy guard for `commit(body)` — nested commit (and applyRemote/undo/redo mid-commit) throws. */
   private committing = false;
-  /** One-shot DEV diagnostic dedupe for unresolved durable names (005 §1.4; plan-part3 unknown-name rule). */
+  /**
+   * The committed frontier AS OF THE LAST EMITTED BATCH — the "from" of the next local diff. Tracked as
+   * state because loro's `frontiers()`/`oplogFrontiers()` BOTH advance the instant an op is STAGED (before
+   * any commit), so a "before" frontier read at seal time already includes the staged ops and the diff
+   * comes back empty (verified). Advanced by every emit (local seal AND remote import).
+   */
+  private sealedTo: OpId[];
+  /**
+   * PERMANENT quarantine (finding: pending-import poison). Set the instant `applyRemote` sees
+   * `import().pending !== null`; once set, every `applyRemote` throws {@link PendingImportError}. `export`
+   * stays functional so the caller can recover local work before resyncing on a fresh doc.
+   */
+  private quarantined = false;
+  /**
+   * One-shot DEV diagnostic dedupe — PER INSTANCE (fine: the schema is process-global, so an unresolved
+   * name / poisoned key is stable for the doc's life; a fresh adapter re-warns, which is the intent).
+   * Covers unresolved durable names (005 §1.4), poisoned entity-map keys, and the untagged-writer notice.
+   */
   private readonly warnedNames = new Set<string>();
 
   constructor(doc: LoroDoc) {
@@ -184,6 +324,11 @@ export class LoroSnapshot implements CRDTSnapshot {
     this.resourcesMap = doc.getMap("resources");
     this.entitiesRootId = String(this.entitiesMap.id);
     this.resourcesRootId = String(this.resourcesMap.id);
+    // Seed the commit counter from THIS peer's persisted strata-tagged history BEFORE the first seal.
+    this.commitSeq = this.seedCommitSeq();
+    // The last-emitted frontier starts at the committed head (imported history is already sealed; a fresh
+    // doc is []). No pending ops at construction, so `frontiers()` is the committed head here.
+    this.sealedTo = this.doc.frontiers();
     // Local-ops-only undo (finding 7). `mergeInterval: 0` makes ONE sealed commit ONE undo step — loro's
     // default TIME-merges rapid commits into a single step, but the transaction model (M3) is
     // one-transaction = one-commit = one-undo-step, so we opt out of time grouping. Constructed here so
@@ -191,12 +336,39 @@ export class LoroSnapshot implements CRDTSnapshot {
     this.undoManager = new UndoManager(doc, { mergeInterval: 0 });
   }
 
+  /** Max existing `strata:<n>` message across this peer's own changes, + 1 (0 on a fresh doc). */
+  private seedCommitSeq(): number {
+    const mine = this.doc.getAllChanges().get(this.doc.peerIdStr);
+    if (mine === undefined) return 0;
+    let max = -1;
+    for (const ch of mine) {
+      const n = strataMsgSeq(ch.message);
+      if (n !== undefined && n > max) max = n;
+    }
+    return max + 1;
+  }
+
+  /** The next `strata:<n>` commit message; advances the monotonic counter (never reused → never coalesces). */
+  private nextMsg(): string {
+    return strataMsg(this.commitSeq++);
+  }
+
   // --- child-map access ----------------------------------------------------------------------------
 
-  /** The per-entity child map, or undefined if the entity has no map yet. */
+  /**
+   * The per-entity child map, or `undefined` if the entity has no map yet OR the entity-map value at
+   * `key` is NOT a `LoroMap`. The value is peer-controlled: a hostile/buggy peer can `entities.set(key,
+   * 42)` or put a `LoroText` there. A blind `v as LoroMap` would then brick every read AND every despawn
+   * (removeIncoming's full scan) and throw on any write to that key. Treating a non-map value as absent
+   * makes reads/despawn total; a local `spawn` HEALS it — `ensureChild`'s `setContainer` overwrites the
+   * poison with a fresh `LoroMap` (probe-verified). One-shot DEV warn names the poisoned key.
+   */
   private childMap(key: EntityKey): LoroMap | undefined {
     const v = this.entitiesMap.get(key);
-    return v == null ? undefined : (v as LoroMap);
+    if (v == null) return undefined;
+    if (v instanceof LoroMap) return v;
+    this.warnUnknown("entity-map value", key);
+    return undefined;
   }
 
   /** The per-entity child map, creating it (a fresh LoroMap container) if absent. */
@@ -227,16 +399,21 @@ export class LoroSnapshot implements CRDTSnapshot {
 
   getComponent(key: EntityKey, c: Component): ComponentValue | undefined {
     const v = this.childMap(key)?.get(compKey(c));
-    return v === undefined ? undefined : (v as ComponentValue);
+    if (v === undefined) return undefined;
+    // A hostile `setContainer` at a comp: key would otherwise leak a live LoroMap handle as a value.
+    if (isContainer(v)) return void this.warnUnknown("component container", c.name);
+    return v as ComponentValue;
   }
 
   hasTag(key: EntityKey, t: Tag): boolean {
-    return this.childMap(key)?.get(tagKey(t)) === true;
+    return this.childMap(key)?.get(tagKey(t)) === true; // a container/any non-`true` value reads absent
   }
 
   getRelationOne(key: EntityKey, r: Relation): EntityKey | undefined {
     const v = this.childMap(key)?.get(relOneKey(r));
-    return v === undefined || v === null ? undefined : entityKey(String(v));
+    if (v === undefined || v === null) return undefined;
+    if (isContainer(v)) return void this.warnUnknown("relation container", r.name);
+    return entityKey(String(v));
   }
 
   getRelationMany(key: EntityKey, r: Relation): EntityKey[] {
@@ -246,8 +423,9 @@ export class LoroSnapshot implements CRDTSnapshot {
     for (const mk of m.keys()) {
       const s = String(mk);
       if (s.startsWith(REL_MANY)) {
-        const [name, target] = parseRelManyKey(s);
-        if (name === r.name) out.push(entityKey(target));
+        const parsed = tryParseRelManyKey(s);
+        if (parsed === undefined) this.warnUnknown("relation edge key", s);
+        else if (parsed[0] === r.name) out.push(entityKey(parsed[1]));
       }
     }
     return out;
@@ -255,7 +433,9 @@ export class LoroSnapshot implements CRDTSnapshot {
 
   getResource(res: Resource): ComponentValue | undefined {
     const v = this.resourcesMap.get(res.name);
-    return v === undefined ? undefined : (v as ComponentValue);
+    if (v === undefined) return undefined;
+    if (isContainer(v)) return void this.warnUnknown("resource container", res.name);
+    return v as ComponentValue;
   }
 
   /** Aggregate the entity's cells into a record — the derived bulk view (005 §1.2 direction rule). */
@@ -268,12 +448,22 @@ export class LoroSnapshot implements CRDTSnapshot {
     for (const rawKey of m.keys()) {
       const mk = String(rawKey);
       if (mk === EXISTS) continue;
-      if (mk.startsWith(COMP)) components[mk.slice(COMP.length)] = m.get(mk) as ComponentValue;
-      else if (mk.startsWith(TAG)) tags.push(mk.slice(TAG.length));
-      else if (mk.startsWith(REL_ONE))
-        relations[mk.slice(REL_ONE.length)] = entityKey(String(m.get(mk)));
-      else if (mk.startsWith(REL_MANY)) {
-        const [name, target] = parseRelManyKey(mk);
+      if (mk.startsWith(COMP)) {
+        const v = m.get(mk);
+        if (isContainer(v)) this.warnUnknown("component container", mk.slice(COMP.length));
+        else components[mk.slice(COMP.length)] = v as ComponentValue;
+      } else if (mk.startsWith(TAG)) tags.push(mk.slice(TAG.length));
+      else if (mk.startsWith(REL_ONE)) {
+        const v = m.get(mk);
+        if (isContainer(v)) this.warnUnknown("relation container", mk.slice(REL_ONE.length));
+        else relations[mk.slice(REL_ONE.length)] = entityKey(String(v));
+      } else if (mk.startsWith(REL_MANY)) {
+        const parsed = tryParseRelManyKey(mk);
+        if (parsed === undefined) {
+          this.warnUnknown("relation edge key", mk);
+          continue;
+        }
+        const [name, target] = parsed;
         const cur = relations[name];
         if (Array.isArray(cur)) cur.push(entityKey(target));
         else relations[name] = [entityKey(target)];
@@ -289,15 +479,27 @@ export class LoroSnapshot implements CRDTSnapshot {
     this.ensureChild(key).set(EXISTS, true);
   }
 
-  /** THREE-PART despawn (005 §1.3): record + outgoing edges (via whole-map delete) + incoming edges. */
+  /**
+   * THREE-PART despawn (005 §1.3): record + outgoing edges + incoming edges. NEVER deletes the per-entity
+   * container — it deletes the KEYS INSIDE it (`exists` + every comp/tag/edge) and leaves the empty map in
+   * place. Containers are created once per key (`ensureChild`) and never removed. This fixes two criticals
+   * a whole-container delete caused: (a) two peers concurrently recreating the same key after a despawn
+   * LWW-picked ONE container and SILENTLY orphaned the other's whole cell set with no removal fact reconcile
+   * could ever see; (b) per-commit replay dropped every fact of a commit whose container a LATER buffered
+   * commit deleted (`getPathToContainer` resolves against the post-import head). An empty map reads absent
+   * (hasEntity/entities gate on `keys().length > 0`); the `exists` deletion surfaces on the CHILD diff and
+   * `translateChildKey` maps it to the despawn fact. POLICY FLIP (see header): despawn-vs-concurrent-edit is
+   * now PER-CELL LWW, so a remote set concurrent with a local despawn leaves that one cell alive — a legal
+   * partial-cell resurrection. TODO(006-amendment): the orchestrator amends 006 for that reconcile case.
+   */
   despawn(key: EntityKey): void {
     // Part 3: sever every INCOMING edge `* --rel--> key` on every other entity (correctness-first scan;
-    // O(entities × edges-per-entity) per despawn — see COST note below). Do this BEFORE deleting the
-    // child map so a self-edge on `key` is handled by the delete, not double-touched.
+    // O(entities × edges-per-entity) per despawn — see COST note below). Do this BEFORE clearing `key`'s
+    // own map so a self-edge on `key` is handled by the own-key clear, not double-touched.
     this.removeIncoming(key);
-    // Parts 1 + 2: delete the whole child map — removes `exists`, every comp/tag, and every outgoing edge
-    // in one op. A lingering absent key is a no-op.
-    if (this.childMap(key) !== undefined) this.entitiesMap.delete(key);
+    // Parts 1 + 2: clear `exists`, every comp/tag, and every outgoing edge — but keep the container.
+    const m = this.childMap(key);
+    if (m !== undefined) for (const mk of m.keys()) m.delete(String(mk));
   }
 
   setComponent(key: EntityKey, c: Component, v: ComponentValue): void {
@@ -346,7 +548,7 @@ export class LoroSnapshot implements CRDTSnapshot {
       // Target-less: drop every edge of this relation from `key`.
       for (const rawKey of m.keys()) {
         const mk = String(rawKey);
-        if (mk.startsWith(REL_MANY) && parseRelManyKey(mk)[0] === r.name) m.delete(mk);
+        if (mk.startsWith(REL_MANY) && tryParseRelManyKey(mk)?.[0] === r.name) m.delete(mk);
       }
     } else {
       m.delete(relManyKey(r, target));
@@ -364,22 +566,29 @@ export class LoroSnapshot implements CRDTSnapshot {
   // --- CRDTSnapshot capabilities -------------------------------------------------------------------
 
   /**
-   * `commit(body)` is a SCOPE sealing ONE loro commit (005 §1.3): open, run body, `doc.commit(...)`.
-   * The commit is tagged with a monotonic message so it never coalesces with its neighbours (finding 3).
+   * `commit(body)` is a SCOPE sealing ONE loro commit (005 §1.3): open, run body, seal. The commit is
+   * tagged with a monotonic `strata:<n>` message so it never coalesces with its neighbours (finding 3).
    * The sealed batch (origin "local") is derived from the frontier diff and delivered to subscribers.
-   * Nested commit throws (the pinned choice). No-op body (no ops sealed) delivers nothing.
+   * Nested commit throws (the pinned choice). A no-op body (no ops staged) delivers nothing.
+   *
+   * A THROWING body still SEALS whatever it staged, in `finally`, with a message, and emits that partial
+   * batch to local subscribers BEFORE the error propagates — so the local echo and every receiver's stream
+   * always agree on what the doc contains (a bare loro export/frontier read would otherwise absorb the
+   * dangling staged ops into the NEXT batch locally while receivers already saw them: streams diverge).
+   * ATOMIC-ABORT (discard-on-throw) is NOT this layer's job — it is the M3 transaction recorder's, which
+   * buffers ops and only writes the doc after `fn` returns (design.md §12.2/§12.3); this adapter faithfully
+   * surfaces whatever reached the doc.
    */
   commit(body: () => void): void {
     if (this.committing) throw new Error("strata: nested commit() is not allowed.");
     this.committing = true;
-    const before = this.doc.frontiers();
     try {
       body();
-      this.doc.commit({ message: String(this.commitSeq++) });
     } finally {
+      this.doc.commit({ message: this.nextMsg() });
       this.committing = false;
+      this.flushLocal(); // diff from `sealedTo` (the last-emitted head) → everything this commit sealed
     }
-    this.emitLocalSince(before);
   }
 
   /**
@@ -392,11 +601,26 @@ export class LoroSnapshot implements CRDTSnapshot {
    * (both verified in the spike). Each batch is single-origin "remote" by construction. Batches are also
    * delivered to `subscribe` (the frozen interface says subscribe sees local AND remote); Part III
    * consumes remote from exactly one path (see the M0 report / the M1/M2 risk note).
+   *
+   * THROWS on an open commit scope (a nested applyRemote double-delivers facts with the wrong origins).
+   * QUARANTINE (finding: pending-import poison): if `import` leaves changes PENDING (`status.pending !==
+   * null` — a Map, test for null, not truthiness), the doc is one out-of-order mixed-mode import away from
+   * a wasm panic that poisons it permanently; the adapter quarantines itself and throws {@link
+   * PendingImportError} here and on every future call — the caller must resync via a fresh doc + snapshot.
+   * We quarantine BEFORE any panic, so `export()` still recovers local work. EMPTY-BATCH stance: a remote
+   * commit whose every fact LOST LWW yields NO batch (dropped) — so batch count ≤ commit count and a
+   * commitId must NOT be used for completeness accounting.
    */
   applyRemote(bytes: Uint8Array): ChangeBatch[] {
+    if (this.committing) throw new Error("strata: applyRemote() during commit() is not allowed.");
+    if (this.quarantined) throw new PendingImportError();
     const beforeVV = this.doc.version();
     const beforeFrontiers = this.doc.frontiers();
-    this.doc.import(bytes);
+    const status = this.doc.import(bytes);
+    if (status.pending !== null) {
+      this.quarantined = true;
+      throw new PendingImportError();
+    }
     // No new ops (empty or fully-duplicate buffer) → no batches.
     if (this.doc.cmpFrontiers(beforeFrontiers, this.doc.frontiers()) === 0) return [];
 
@@ -404,11 +628,23 @@ export class LoroSnapshot implements CRDTSnapshot {
     const batches: ChangeBatch[] = [];
     let prev: OpId[] = beforeFrontiers;
     for (const change of schema.changes) {
+      // A commit with no `strata:<n>` tag is a foreign writer whose commits may have COALESCED in their
+      // oplog — our per-commit boundaries are best-effort for them. Warn ONCE (per instance).
+      if (strataMsgSeq(change.msg) === undefined) {
+        this.warnOnce(
+          "untagged-writer",
+          "durable adapter saw a commit with no strata tag — untagged commits may coalesce; " +
+            "batch boundaries are best-effort for this peer (005 §1.3).",
+        );
+      }
       const cur = this.frontierAfter(prev, change);
       const batch = this.translatePairs(this.doc.diff(prev, cur, false), "remote", change.id);
       if (batch.events.length > 0) batches.push(batch);
       prev = cur;
     }
+    // Advance the last-emitted head to include the imported ops, so the NEXT local seal diffs from here
+    // (not re-emitting these remote ops as "local").
+    this.sealedTo = this.doc.frontiers();
     for (const b of batches) this.emit(b);
     return batches;
   }
@@ -433,7 +669,14 @@ export class LoroSnapshot implements CRDTSnapshot {
     return [lastOp, ...prevTips.filter(survives)];
   }
 
+  /**
+   * Full converged snapshot. SEALS any staged-but-uncommitted writes FIRST (as a tagged commit + local
+   * batch), rather than letting loro's `export` implicitly seal them — an implicit seal ships them to
+   * peers with NO local echo and NO `strata:<n>` message (so they'd coalesce on the receiver). After the
+   * explicit seal, export the snapshot.
+   */
   export(): Uint8Array {
+    this.sealStaged();
     return this.doc.export({ mode: "snapshot" });
   }
 
@@ -444,23 +687,55 @@ export class LoroSnapshot implements CRDTSnapshot {
     };
   }
 
-  /** LOCAL undo (finding 7): self-commits its inverse ops; the revert flows out as an ordinary batch. */
+  /**
+   * LOCAL undo (finding 7, LOCAL-ops-only): self-commits its inverse ops; the revert flows out as an
+   * ordinary "local" batch. `setNextCommitMessage` tags the undo's self-commit with the next `strata:<n>`
+   * so consecutive undos DON'T coalesce into one oplog change (finding 3 — without it two undos, or an
+   * undo+redo pair, merge and the receiver sees the wrong batch count). If `undo()` returns false no
+   * commit happens and the pending message lingers harmlessly — the next explicit `commit({message})`
+   * overrides it. THROWS inside a commit scope (its inverse ops would corrupt the open batch).
+   *
+   * SEMANTICS (corrected, finding 7 — the earlier "never touches a peer's edit" claim was FALSE): undo
+   * re-asserts the pre-op state as NEW lamport-latest ops. So undoing a cell CLOBBERS a causally-newer
+   * REMOTE overwrite of that same cell, and undoing a spawn commit despawns the entity — taking peers'
+   * later components with it (both probe-pinned in the tests). Whether to accept or gate that is the M3
+   * design decision (TODO(M3-design)); at this layer undo is faithful loro `UndoManager` behaviour.
+   */
   undo(): void {
-    const before = this.doc.frontiers();
-    if (this.undoManager.undo()) this.emitLocalSince(before);
+    if (this.committing) throw new Error("strata: undo() during commit() is not allowed.");
+    this.doc.setNextCommitMessage(this.nextMsg());
+    if (this.undoManager.undo()) this.flushLocal();
   }
 
   redo(): void {
-    const before = this.doc.frontiers();
-    if (this.undoManager.redo()) this.emitLocalSince(before);
+    if (this.committing) throw new Error("strata: redo() during commit() is not allowed.");
+    this.doc.setNextCommitMessage(this.nextMsg());
+    if (this.undoManager.redo()) this.flushLocal();
   }
 
   // --- internals -----------------------------------------------------------------------------------
 
-  /** Derive the local batch for whatever was sealed since `before` and deliver it (skip an empty seal). */
-  private emitLocalSince(before: OpId[]): void {
+  /**
+   * Seal staged-but-uncommitted writes as one tagged commit + local batch (the `export()` path). A no-op
+   * when nothing is staged (`getPendingTxnLength() === 0`) — so a bare `export()` neither commits nor
+   * burns a sequence number.
+   */
+  private sealStaged(): void {
+    if (this.doc.getPendingTxnLength() === 0) return;
+    this.doc.commit({ message: this.nextMsg() });
+    this.flushLocal();
+  }
+
+  /**
+   * Emit the local batch for everything COMMITTED since the last emit (`sealedTo`), then advance `sealedTo`
+   * to the new head. Skips an empty seal (no frontier movement) and a batch that translated to no events.
+   * `sealedTo` — not a freshly-read frontier — is the "from": a fresh read already counts staged ops.
+   */
+  private flushLocal(): void {
+    const before = this.sealedTo;
     const after = this.doc.frontiers();
     if (this.doc.cmpFrontiers(before, after) === 0) return;
+    this.sealedTo = after;
     const batch = this.translatePairs(this.doc.diff(before, after, false), "local", undefined);
     if (batch.events.length > 0) this.emit(batch);
   }
@@ -478,15 +753,16 @@ export class LoroSnapshot implements CRDTSnapshot {
   private removeIncoming(target: EntityKey): void {
     for (const rawKey of this.entitiesMap.keys()) {
       const source = String(rawKey);
-      if (source === target) continue; // the target's own outgoing edges go with the whole-map delete
+      if (source === target) continue; // the target's own outgoing edges go with despawn's own-key clear
       const m = this.childMap(entityKey(source));
       if (m === undefined) continue;
       for (const rawMapKey of m.keys()) {
         const mk = String(rawMapKey);
         if (mk.startsWith(REL_ONE)) {
-          if (String(m.get(mk)) === target) m.delete(mk);
+          const v = m.get(mk);
+          if (!isContainer(v) && String(v) === target) m.delete(mk);
         } else if (mk.startsWith(REL_MANY)) {
-          if (parseRelManyKey(mk)[1] === target) m.delete(mk);
+          if (tryParseRelManyKey(mk)?.[1] === target) m.delete(mk);
         }
       }
     }
@@ -515,7 +791,10 @@ export class LoroSnapshot implements CRDTSnapshot {
       const cidStr = String(cid);
 
       if (cidStr === this.entitiesRootId) {
-        // root "entities": a key→undefined is a DESPAWN; a key→container is a create (facts via child pair).
+        // root "entities": a key→undefined is a DESPAWN by a peer that DELETED the whole container (the
+        // legacy layout — this adapter no longer does that, but honours an old/foreign peer that still
+        // does). A key→container is a create (facts via the child pair). Our OWN despawns surface as an
+        // `exists`→undefined on the child pair instead (translateChildKey → despawn).
         for (const rawKey of Object.keys(updated)) {
           if (updated[rawKey] === undefined)
             despawns.push({ kind: "despawn", key: entityKey(rawKey), origin });
@@ -528,6 +807,10 @@ export class LoroSnapshot implements CRDTSnapshot {
             continue;
           }
           const val = updated[name];
+          if (isContainer(val)) {
+            this.warnUnknown("resource container", name); // a hostile setContainer at a resource key
+            continue;
+          }
           mutations.push(
             val === undefined
               ? { kind: "resource-remove", res, origin }
@@ -535,12 +818,13 @@ export class LoroSnapshot implements CRDTSnapshot {
           );
         }
       } else {
-        // A per-entity child map: path is ["entities", <EntityKey>].
+        // A per-entity child map: path is ["entities", <EntityKey>]. Containers are never deleted, so a
+        // child pair ALWAYS resolves (the deleted-container / path-resolution hole is gone with no-delete).
         const path = this.doc.getPathToContainer(cid);
         if (path === undefined || path.length !== 2 || path[0] !== "entities") continue;
         const key = entityKey(String(path[1]));
         for (const mapKey of Object.keys(updated)) {
-          this.translateChildKey(key, mapKey, updated[mapKey], origin, spawns, mutations);
+          this.translateChildKey(key, mapKey, updated[mapKey], origin, spawns, mutations, despawns);
         }
       }
     }
@@ -555,16 +839,24 @@ export class LoroSnapshot implements CRDTSnapshot {
     origin: Origin,
     spawns: ChangeEvent[],
     mutations: ChangeEvent[],
+    despawns: ChangeEvent[],
   ): void {
     if (mapKey === EXISTS) {
-      // exists→true is spawn. exists→undefined never occurs standalone (we only clear it via whole-map
-      // delete, which surfaces as a parent-level despawn), so nothing to emit for its removal.
-      if (val !== undefined) spawns.push({ kind: "spawn", key, origin });
+      // exists present → spawn. exists→undefined → DESPAWN: with the no-delete layout, despawn clears the
+      // KEYS inside the entity map (incl. `exists`) and keeps the empty container, so a despawn surfaces
+      // HERE as `exists`→undefined (plus each other key→undefined as its own remove — normalizeBatch's
+      // despawn-dominance folds those into the surviving despawn). Ordered last via the `despawns` bucket.
+      if (val === undefined) despawns.push({ kind: "despawn", key, origin });
+      else spawns.push({ kind: "spawn", key, origin });
       return;
     }
+    // A present value that is a CONTAINER (hostile setContainer at a cell key) is not decodable as a cell
+    // value — treat the name as unknown (skip + one-shot warn), never leak the wasm handle into an event.
+    const poisoned = val !== undefined && isContainer(val);
     if (mapKey.startsWith(COMP)) {
       const c = componentByName(mapKey.slice(COMP.length));
       if (c === undefined) return this.warnUnknown("component", mapKey.slice(COMP.length));
+      if (poisoned) return this.warnUnknown("component container", c.name);
       mutations.push(
         val === undefined
           ? { kind: "component-remove", key, comp: c, origin }
@@ -575,6 +867,7 @@ export class LoroSnapshot implements CRDTSnapshot {
     if (mapKey.startsWith(TAG)) {
       const t = tagByName(mapKey.slice(TAG.length));
       if (t === undefined) return this.warnUnknown("tag", mapKey.slice(TAG.length));
+      if (poisoned) return this.warnUnknown("tag container", t.name);
       mutations.push(
         val === undefined
           ? { kind: "tag-remove", key, tag: t, origin }
@@ -585,6 +878,7 @@ export class LoroSnapshot implements CRDTSnapshot {
     if (mapKey.startsWith(REL_ONE)) {
       const r = relationByName(mapKey.slice(REL_ONE.length));
       if (r === undefined) return this.warnUnknown("relation", mapKey.slice(REL_ONE.length));
+      if (poisoned) return this.warnUnknown("relation container", r.name);
       mutations.push(
         val === undefined
           ? { kind: "relation-remove", key, rel: r, target: undefined, origin }
@@ -593,9 +887,13 @@ export class LoroSnapshot implements CRDTSnapshot {
       return;
     }
     if (mapKey.startsWith(REL_MANY)) {
-      const [name, target] = parseRelManyKey(mapKey);
+      const parsed = tryParseRelManyKey(mapKey);
+      if (parsed === undefined) return this.warnUnknown("relation edge key", mapKey);
+      const [name, target] = parsed;
       const r = relationByName(name);
       if (r === undefined) return this.warnUnknown("relation", name);
+      // A relN: edge's value is the sentinel `true`; a container there is malformed — skip + warn.
+      if (poisoned) return this.warnUnknown("relation container", name);
       mutations.push(
         val === undefined
           ? { kind: "relation-remove", key, rel: r, target: entityKey(target), origin }
@@ -604,13 +902,22 @@ export class LoroSnapshot implements CRDTSnapshot {
     }
   }
 
-  /** One-shot DEV diagnostic per unresolved durable name (005 §1.4: detect, never misbind, never throw). */
+  /**
+   * One-shot DEV diagnostic per unresolved durable name OR poisoned cell/key (005 §1.4: detect, never
+   * misbind, never throw). Covers unregistered names, container values at cell keys, non-map entity-map
+   * values, and malformed `relN:` keys — all "the doc says something we can't decode as a cell, so skip it".
+   */
   private warnUnknown(kind: string, name: string): void {
-    const tag = `${kind}:${name}`;
+    this.warnOnce(
+      `${kind}:${name}`,
+      `durable ${kind} "${name}" is unresolved or malformed — skipping its changes (005 §1.4).`,
+    );
+  }
+
+  /** Emit `message` via `devWarn` at most once per `tag` for this instance's lifetime. */
+  private warnOnce(tag: string, message: string): void {
     if (this.warnedNames.has(tag)) return;
     this.warnedNames.add(tag);
-    devWarn(
-      `durable ${kind} "${name}" is not registered in this schema — skipping its changes (005 §1.4).`,
-    );
+    devWarn(message);
   }
 }
