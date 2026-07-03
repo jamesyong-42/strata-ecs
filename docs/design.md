@@ -1,5 +1,25 @@
 # strata-ecs: A Collaborative ECS Framework in TypeScript
 
+> **Amendments (non-normative front-matter — this document is the locked v0 baseline; its §
+> numbering never changes).** The following notes supersede or extend it; where they conflict,
+> the note wins. Read `docs/README.md` for the one-line map.
+>
+> - **001** system access declaration · **002** reactivity (`world.reactive`, stamps) · **003**
+>   resource reactivity + `strata-ecs/react` — Part I additions, all IMPLEMENTED.
+> - **review-part1** — the adversarially-verified Part I review (post-verification severities;
+>   includes the claims that were refuted, recorded so they are not relitigated).
+> - **004** — the Parts II–IV revision plan (adjudicates `design-comments.md`).
+> - **005** — the normative Part II spec; **supersedes §9–§10 + the Part II API reference**.
+> - **006** — normative Parts III–IV amendments (with two Part I addenda: the mid-tick guard
+>   and the 002 §0/§6 rewording). New sections it introduces relative to this baseline:
+>   §13.6 (text forward path), §13.7 (foreign schema), §14.4 (ordering), §15.7 (sync-status
+>   resources), §16.4 (frame reactive boundary), §21 (v1 scope table).
+> - Part I API drift vs this baseline (all deliberate, per review-part1): `defineComponent`
+>   infers from the schema literal; `readEid` is deleted (subsumed by typed `readField`);
+>   `defineRelation` has no `ordered` option (006 §B1's order-key pattern replaces it);
+>   `world.reset()` + `world.import(bytes, {replace: true})` exist; the published package is
+>   **`strata-ecs`** (the bare-`strata` name in code samples below reflects the baseline era).
+
 **strata-ecs** is an ECS substrate aimed at **editors and infinite-canvas apps** (think Figma/Google-Docs-like documents), not games. The name is the architecture: a stack of **strata** differentiated by how fast they change and how long they last — a volatile runtime on top, a collaborative document and live presence layered underneath it, with data projecting up and down between them across a precisely-specified seam.
 
 The framework is built in **four architectural parts** (below), followed by a fifth **reference section** (Part V — cross-cutting concerns, a worked example, build order, and the API at a glance). The four parts are meant to be read — and adopted — in order of increasing commitment:
