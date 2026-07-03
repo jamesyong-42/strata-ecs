@@ -71,6 +71,20 @@ export class Projector {
     return key;
   }
 
+  /**
+   * Read-only bijection peeks — NEITHER mints. `resolveByKey`/`requireKey` are the driving surface
+   * (mint-or-throw); these are the INSPECTION surface. The conformance suite (005 §8) needs to read a
+   * runtime cell back by key WITHOUT minting a phantom identity for an untouched key, and to map a
+   * relation TARGET handle the runtime returned back to its key. An unbound argument returns
+   * `undefined` (never throws, never mints) — safe to call on any key/handle at any time.
+   */
+  handleFor(key: EntityKey): Entity | undefined {
+    return this.keyToHandle.get(key);
+  }
+  keyFor(handle: Entity): EntityKey | undefined {
+    return this.handleToKey.get(handle);
+  }
+
   // --- cell application (§5.2) ----------------------------------------------
   // All apply IMMEDIATELY — projection only ever runs OUTSIDE iteration, so no column walk is in
   // progress and nothing routes through the command buffer. Each method resolves identity (minting
