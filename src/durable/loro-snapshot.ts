@@ -178,7 +178,7 @@
  */
 
 import { LoroDoc, LoroMap, UndoManager, isContainer } from "loro-crdt";
-import type { ContainerID, Diff, JsonChange, OpId } from "loro-crdt";
+import type { ContainerID, Diff, JsonChange, OpId, VersionVector } from "loro-crdt";
 import { devWarn } from "../core/dev";
 import { type EntityKey, entityKey } from "../core/field";
 import type { Component, Relation, Resource, Tag } from "../core/schema";
@@ -239,6 +239,15 @@ function parseJsonOpId(id: string): { peer: `${number}`; counter: number } {
   return { counter: Number(id.slice(0, at)), peer: id.slice(at + 1) as `${number}` };
 }
 
+/**
+ * The reserved commit ORIGIN for the durable layer's meta writes (docId etc. — the `meta` root map,
+ * TODO(005-§10-amendment)). It is passed to `commit({ origin })` on a meta write and matched by the
+ * UndoManager's `excludeOriginPrefixes`, so a meta write is NEVER an undo step (a user's undo must not
+ * roll back the document id). Distinct from the `strata:` MESSAGE channel (finding 3), which sequences
+ * commits; origin and message are independent loro commit fields.
+ */
+const META_ORIGIN = "strata-meta";
+
 /** The durable layer's reserved commit-message namespace (finding 3): `strata:<monotonic per-doc n>`. */
 const MSG_PREFIX = "strata:";
 const strataMsg = (n: number): string => MSG_PREFIX + n;
@@ -268,6 +277,15 @@ export class PendingImportError extends Error {
 }
 
 /**
+ * An opaque OUTBOUND cursor — a Loro `VersionVector` a caller round-trips through {@link
+ * LoroSnapshot.version} → {@link LoroSnapshot.exportUpdatesSince} without interpreting. Re-exported
+ * from the adapter (not `loro-crdt`) so `DurableStore` can hold a "last sent" cursor while keeping its
+ * only `loro-crdt` import the `LoroDoc` parameter type — Loro stays quarantined behind this file (§14.2).
+ * TODO(005-§10-amendment): the orchestrator amends 005 §10 for this adapter-level outbound surface.
+ */
+export type OutboundCursor = VersionVector;
+
+/**
  * `LoroSnapshot` — a `CRDTSnapshot` over one `LoroDoc`.
  *
  * The write methods (spawn/despawn/setComponent/…) STAGE ops directly on the doc (immediately readable,
@@ -281,6 +299,14 @@ export class LoroSnapshot implements CRDTSnapshot {
   private readonly entitiesMap: LoroMap;
   /** root "resources" map: ResourceName → canonical value object. */
   private readonly resourcesMap: LoroMap;
+  /**
+   * root "meta" map: the durable store's reserved out-of-band slots (docId, §14.1) — DISTINCT from
+   * "entities"/"resources" so it never collides with an entity key or resource name, and TRANSPARENT to
+   * batch translation: a `meta` diff resolves to the path `["meta"]` (length 1), which `translatePairs`'
+   * child-map guard (`path.length !== 2`) skips, so a meta write surfaces NO ChangeEvent. Owned here
+   * (not the store) to keep every loro handle inside this file. TODO(005-§10-amendment).
+   */
+  private readonly metaMap: LoroMap;
   private readonly entitiesRootId: string;
   private readonly resourcesRootId: string;
   private readonly undoManager: UndoManager;
@@ -322,6 +348,7 @@ export class LoroSnapshot implements CRDTSnapshot {
     this.doc = doc;
     this.entitiesMap = doc.getMap("entities");
     this.resourcesMap = doc.getMap("resources");
+    this.metaMap = doc.getMap("meta");
     this.entitiesRootId = String(this.entitiesMap.id);
     this.resourcesRootId = String(this.resourcesMap.id);
     // Seed the commit counter from THIS peer's persisted strata-tagged history BEFORE the first seal.
@@ -333,7 +360,12 @@ export class LoroSnapshot implements CRDTSnapshot {
     // default TIME-merges rapid commits into a single step, but the transaction model (M3) is
     // one-transaction = one-commit = one-undo-step, so we opt out of time grouping. Constructed here so
     // it tracks only this session's commits (pre-existing history is not undoable — "before our session").
-    this.undoManager = new UndoManager(doc, { mergeInterval: 0 });
+    // `excludeOriginPrefixes: [META_ORIGIN]` keeps out-of-band meta writes (docId, `ensureMeta`) OUT of
+    // the undo stack — a user's undo must never roll back the document id.
+    this.undoManager = new UndoManager(doc, {
+      mergeInterval: 0,
+      excludeOriginPrefixes: [META_ORIGIN],
+    });
   }
 
   /** Max existing `strata:<n>` message across this peer's own changes, + 1 (0 on a fresh doc). */
@@ -711,6 +743,62 @@ export class LoroSnapshot implements CRDTSnapshot {
     if (this.committing) throw new Error("strata: redo() during commit() is not allowed.");
     this.doc.setNextCommitMessage(this.nextMsg());
     if (this.undoManager.redo()) this.flushLocal();
+  }
+
+  // --- Part III M1 store-support surface (adapter-level; NOT on the frozen CRDTSnapshot) ------------
+  // These exist so `createDurableStore` (§14.2) can mint keys, hold a docId, and ship outbound
+  // increments while keeping EVERY loro call inside this file — the store speaks only these plus the
+  // frozen CRDTSnapshot. TODO(005-§10-amendment): the orchestrator amends 005 §10 for this surface.
+
+  /** This doc's peer id string — the `${peerIdStr}-<counter>` key prefix the store mints from (§14.1). */
+  peerIdStr(): string {
+    return this.doc.peerIdStr;
+  }
+
+  /**
+   * Every key in the "entities" root map — LIVE OR NOT. Despawned containers linger (finding 9), so this
+   * is deliberately the RAW key set, not the liveness-filtered {@link entities}: the store's counter
+   * resume (§14.2) must not re-mint a key this peer EVER used, including one whose entity was despawned.
+   */
+  entityKeysRaw(): string[] {
+    return this.entitiesMap.keys().map(String);
+  }
+
+  /** The current document version — the starting cursor for {@link exportUpdatesSince}. */
+  version(): OutboundCursor {
+    return this.doc.version();
+  }
+
+  /**
+   * The update increment from `from` (a prior {@link version}) to now — the bytes of the commits sealed
+   * since. A receiver that already holds `from`'s causal base imports this and converges; a receiver
+   * MISSING that base takes a pending import (finding 11), so outbound increments presuppose the base was
+   * shipped first (the app snapshots on join — 006 §A5.2). Equivalent in effect to a full-snapshot import.
+   */
+  exportUpdatesSince(from: OutboundCursor): Uint8Array {
+    return this.doc.export({ mode: "update", from });
+  }
+
+  /** Read a string slot from the reserved "meta" root map (docId, §14.1), or `undefined` if absent/non-string. */
+  readMeta(key: string): string | undefined {
+    const v = this.metaMap.get(key);
+    return typeof v === "string" ? v : undefined;
+  }
+
+  /**
+   * Write `key = value` into the "meta" root map ONCE (first-writer-wins) and return the resolved value —
+   * the existing one if already present, else `value` after sealing it. The write is ONE commit tagged
+   * `origin: META_ORIGIN` (kept out of undo, see the constructor) and a `strata:` message (so it never
+   * coalesces, finding 3); it surfaces NO ChangeEvent (meta is neither "entities" nor "resources").
+   * Construction-time only (the store's docId ensure) — not guarded against a nested commit scope.
+   */
+  ensureMeta(key: string, value: string): string {
+    const existing = this.readMeta(key);
+    if (existing !== undefined) return existing;
+    this.metaMap.set(key, value);
+    this.doc.commit({ message: this.nextMsg(), origin: META_ORIGIN });
+    this.flushLocal(); // advance sealedTo past the meta commit; emits nothing (no entities/resources facts)
+    return value;
   }
 
   // --- internals -----------------------------------------------------------------------------------
