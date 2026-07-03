@@ -21,6 +21,15 @@ import { applySnapshot, exportSnapshot, importSnapshot, parseSnapshot } from "./
 
 /** What the world knows about a layer's inbound rhythm — the entire coupling (§16.1). */
 export interface InboundSource {
+  /**
+   * Drain this source's pending inbound facts into the runtime (§16.1), once per `world.sync()` at the
+   * frame boundary. IMPLEMENTATIONS MUST DEV-assert the store is NOT inside an observer / reactive emit
+   * at drain() entry (read the `@internal` `RuntimeStore.inObserverEmitActive` hook, 005 §5.5): a drain
+   * mid-`notify()` would HALF-apply a `ChangeBatch` — the projection primitives are unguarded (they must
+   * run mid-drain) while the structural mutators reject in-emit, so adds/writes land and removes/despawns
+   * vanish. `world.sync()`'s own in-emit check below is the SYNC-PATH defense, not a substitute — a source
+   * drained by any other caller still owes this assert at entry.
+   */
   drain(): void;
 }
 
@@ -225,6 +234,32 @@ export class World {
    * telemetry; with none attached the only added cost is a branch-on-null per step.
    */
   tick(pipeline: Pipeline): void {
+    // Ticks are driven from the FRAME BOUNDARY (sync() → tick(s) → notify() → render, 006 §16.4) and
+    // never nest — inside iteration, inside another tick, or inside an emit. Guard all three at entry,
+    // BEFORE touching `tickCounter`/`ticking`, so a rejected tick leaves the counters untouched.
+    if (this.iterationDepth > 0) {
+      // ALL builds: a tick dispatched mid query-walk would run systems that migrate archetypes under
+      // the walk — memory corruption, not a style violation (rides the §A4 guard).
+      throw new Error(
+        "strata: world.tick() cannot run during query iteration — ticks are driven from the frame boundary (sync() → tick() → notify() → render) and never nest inside a query walk or a system body (006 §A4, §16.4).",
+      );
+    }
+    if (this.ticking) {
+      // ALL builds: a re-entrant tick (tick-from-within-tick). Also closes the latent bug where a
+      // nested tick's finally would clear `ticking` while the outer tick still runs, letting reset()
+      // slip its mid-tick guard.
+      throw new Error(
+        "strata: world.tick() cannot run inside another tick() — one tick per frame boundary; a system must not drive the frame (006 §16.4).",
+      );
+    }
+    if (DEV && this.store.inObserverEmitActive) {
+      // Mirrors sync()'s in-emit defense (§5.5): a tick from inside an observer / reactive callback
+      // would half-apply its phase flushes — the mixed in-emit guards swallow structural commands
+      // while value writes land — so it is forbidden. Schedule it for the next frame boundary.
+      throw new Error(
+        "strata: world.tick() cannot run from inside an observer or reactive callback — schedule it for the next frame boundary (005 §5.5, 006 §C2).",
+      );
+    }
     const tick = ++this.tickCounter;
     this.ticking = true; // reset() is rejected while this holds; the finally clears it even on a throw
     try {
@@ -332,7 +367,13 @@ export class World {
         "strata: world.sync() cannot run from inside an observer or reactive callback — a drain there would half-apply a ChangeBatch (adds land, removes are swallowed); schedule it for the next frame boundary (005 §5.5, 006 §C2).",
       );
     }
-    for (const source of this.inbound) source.drain();
+    // Iterate a SNAPSHOT and re-check registration: a source may unregister itself (or a peer) from
+    // inside its own drain() — teardown step 0, §5.6. A live for..of over `this.inbound` would splice
+    // under the iterator and skip the NEXT source; snapshot + a still-registered guard drains each
+    // surviving source exactly once and never a torn-down one (§16.1).
+    for (const source of [...this.inbound]) {
+      if (this.inbound.includes(source)) source.drain();
+    }
   }
 
   /** Register an inbound source (a durable/ephemeral binding registers here on attach, §16). */
@@ -364,6 +405,15 @@ export class World {
    */
   import(bytes: Uint8Array, opts?: { replace?: boolean }): void {
     this.assertNotIterating("import"); // wholesale structural load — never mid-iteration (006 §A4)
+    if (DEV && this.store.inObserverEmitActive) {
+      // Mirrors sync()'s in-emit defense (§5.5): a wholesale load from inside an observer / reactive
+      // callback lands entities/components through the unguarded projection primitives but SILENTLY
+      // SWALLOWS the structural relation-edge writes (the mixed in-emit guards reject them) — a
+      // half-applied document. Reject before parsing, both arms; schedule for the next frame boundary.
+      throw new Error(
+        "strata: world.import() cannot run from inside an observer or reactive callback — a wholesale load there lands entities but silently swallows relation edges; schedule it for the next frame boundary (005 §5.5, 006 §C2).",
+      );
+    }
     if (opts?.replace) {
       // Validate BEFORE resetting: an incompatible snapshot (schema drift) throws here with the
       // world untouched, so a failed document-open never wipes the live board (§8.2 boot-safety).

@@ -29,7 +29,9 @@ import {
   CRef,
   CTile,
   CUid,
+  RCam,
   RChild,
+  RGrid,
   RParent,
   TLock,
   TSel,
@@ -80,11 +82,17 @@ function randomWorld(rng: Rng, n: number): World {
   for (let i = 0; i < n; i++) {
     if (rng() < 0.25) w.destroy(handles[i]);
   }
+  // Phase 4 — world resources (object-backed, §7). They round-trip through the snapshot too (exportSnapshot
+  // serializes resourceValues; import replays setResource). Values are the full field set (the resource
+  // value type requires every field, defaulted or not); the default-fill nuance is covered by P1/canon.
+  if (rng() < 0.7) w.setResource(RCam, { zoom: pick(rng, JSON_FLOATS), mode: pick(rng, JSON_INTS) });
+  if (rng() < 0.6) w.setResource(RGrid, { size: pick(rng, JSON_INTS) });
   return w;
 }
 
-/** A uid-keyed topology model: eid → target uid or null (dangling); relations → target uids. */
-function snapshotModel(w: World): Map<number, unknown> {
+/** A uid-keyed topology model: eid → target uid or null (dangling); relations → target uids; plus the
+ *  world resources (object-backed, compared raw — they round-trip through the snapshot, §7). */
+function snapshotModel(w: World): unknown {
   const rt = w.runtime;
   const uidOf = new Map<Entity, number>();
   for (const e of rt.placedEntities()) uidOf.set(e, (w.read(e, CUid) as { n: number }).n);
@@ -115,7 +123,12 @@ function snapshotModel(w: World): Map<number, unknown> {
     if (kids.length > 0) relations[RChild.name] = kids;
     out.set(uidOf.get(e) as number, { components, tags, relations });
   }
-  return out;
+  const resources: Record<string, unknown> = {};
+  const cam = w.getResource(RCam);
+  if (cam !== undefined) resources[RCam.name] = cam;
+  const grid = w.getResource(RGrid);
+  if (grid !== undefined) resources[RGrid.name] = grid;
+  return { entities: out, resources };
 }
 
 describe("P4 — export→import identity, incl. dangling eid/key (§8)", () => {

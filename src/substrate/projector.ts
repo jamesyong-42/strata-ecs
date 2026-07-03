@@ -89,6 +89,9 @@ export class Projector {
   // All apply IMMEDIATELY — projection only ever runs OUTSIDE iteration, so no column walk is in
   // progress and nothing routes through the command buffer. Each method resolves identity (minting
   // it for a not-yet-seen key/target) and writes through a shipped, stamped RuntimeStore primitive.
+  // NB: RESOURCE facts have NO kernel path — a resource carries no entity key, so the durable seam
+  // lands `resource-set`/`resource-remove` DIRECTLY on `RuntimeStore.setResource`/`removeResource`
+  // (§5.2, §6.1), bypassing the projector entirely.
 
   applyComponent<S>(key: EntityKey, c: Component<S>, v: S): void {
     this.runtime.projectComponent(this.resolveByKey(key), c, v); // add-if-absent(→place)-else-write (:824)

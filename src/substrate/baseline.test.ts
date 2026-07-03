@@ -157,11 +157,12 @@ describe("BaselineSnapshot — respawn-fresh (§4.2)", () => {
     expect(bs.readEntity(A)).toEqual({ key: A, components: {}, tags: [], relations: {} });
   });
 
-  it("spawn on an existing key also clears its own record (fresh)", () => {
+  it("spawn on an existing key is EXISTENCE-ONLY — it touches no cells (§4.1)", () => {
     const bs = new BaselineSnapshot();
     bs.setComponent(A, Pos, { x: 1, y: 2 });
-    bs.spawn(A);
-    expect(bs.getComponent(A, Pos)).toBeUndefined();
+    bs.spawn(A); // records existence; erasure belongs to despawn alone — the component survives
+    expect(bs.getComponent(A, Pos)).toEqual({ x: 1, y: 2 });
+    expect(bs.hasEntity(A)).toBe(true);
   });
 });
 

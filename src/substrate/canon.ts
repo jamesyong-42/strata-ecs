@@ -150,6 +150,63 @@ export function tryCanon(C: Component, v: ComponentValue): TryCanonResult {
   return { ok: true, value: out };
 }
 
+/**
+ * Inbound-safe canonicalization of a RESOURCE value (§2.3, §7) — the reconcile gate for `resource-set`
+ * facts, the object-backed sibling of {@link tryCanon}. Mirrors tryCanon's per-field shape (default-fill
+ * a missing declared-default field; validate the JS type per field; NEVER throws) but with NO column
+ * coercion: a resource is object-backed (`setResource` stores the value wholesale with no typed-array
+ * round-trip — the {@link canonResource} parity rule), so a validated value is stored RAW (no `fround`,
+ * no modular wrap). A field that fails validation rejects the single fact (per-cell quarantine, §2.3);
+ * the trusted, throwing writer stays {@link canonResource}.
+ *
+ * Per-field validation: a numeric field (int / eid / f32 / f64) requires a FINITE number — a resource
+ * has no column to absorb a non-finite value, so it is malformed inbound (unlike a component FLOAT
+ * column, §2.4); `bool` requires a boolean; `string`/`key` a string or null; an enum a known label.
+ */
+export function tryCanonResource(res: Resource, v: ComponentValue): TryCanonResult {
+  const value = v as Record<string, unknown>;
+  const out: ComponentValue = {};
+  for (const f of res.fields) {
+    let raw: unknown;
+    if (value !== undefined && Object.prototype.hasOwnProperty.call(value, f.name)) {
+      raw = value[f.name];
+    } else if (f.spec.hasDefault) {
+      out[f.name] = f.spec.default; // default-fill — identical to setResource's local-write behavior
+      continue;
+    } else {
+      return { ok: false, field: f.name, reason: "missing required field with no declared default" };
+    }
+    const field = tryCanonResourceField(f, raw);
+    if (!field.ok) return { ok: false, field: f.name, reason: field.reason };
+    out[f.name] = field.value;
+  }
+  return { ok: true, value: out };
+}
+
+/** Validate one inbound RESOURCE field by its type, storing the RAW value — NO coercion (§2, object-backed). */
+function tryCanonResourceField(f: FieldMeta, raw: unknown): { ok: true; value: unknown } | { ok: false; reason: string } {
+  const type = f.spec.type;
+  if (isEnumType(type)) {
+    if (typeof raw !== "string") return { ok: false, reason: "expected an enum label string" };
+    if (!type.labelToDisc.has(raw)) return { ok: false, reason: `unknown enum label "${raw}"` };
+    return { ok: true, value: raw }; // raw label — no discriminant conversion (object-backed)
+  }
+  switch (type) {
+    case "bool":
+      if (typeof raw !== "boolean") return { ok: false, reason: "expected a boolean" };
+      return { ok: true, value: raw };
+    case "string":
+    case "key":
+      if (raw !== null && typeof raw !== "string") return { ok: false, reason: "expected a string or null" };
+      return { ok: true, value: raw };
+    default:
+      // Numeric (i8…u32 / eid / f32 / f64): a FINITE number, stored raw — no fround / wrap.
+      if (typeof raw !== "number") return { ok: false, reason: "expected a number" };
+      if (!Number.isFinite(raw)) return { ok: false, reason: "expected a finite number" };
+      return { ok: true, value: raw };
+  }
+}
+
 /** Validate one inbound field value by its type, then coerce+decode it as {@link canon} would. */
 function tryCanonField(f: FieldMeta, raw: unknown): { ok: true; value: unknown } | { ok: false; reason: string } {
   const type = f.spec.type;

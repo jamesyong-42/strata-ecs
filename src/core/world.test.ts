@@ -352,6 +352,22 @@ describe("the iterationDepth guard (006 §A4)", () => {
     expect(w.getResource(Config)).toBeUndefined();
   });
 
+  it("read-only ops are exempt mid-iteration: export(), reactive access, isAlive/read/has succeed", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Position, { x: 1, y: 2 }], [Health, { hp: 5 }]] });
+    let bytes: Uint8Array | undefined;
+    w.query(posQ).each(() => {
+      // export() is a read-only serialization pass — no structural change, so NOT guarded (the §8 exemption).
+      expect(() => (bytes = w.export())).not.toThrow();
+      // world.reactive access + reads (isAlive/read/has) reorder no columns → exempt like value writes.
+      expect(() => void w.reactive).not.toThrow();
+      expect(w.isAlive(e)).toBe(true);
+      expect(w.read(e, Position)).toEqual({ x: 1, y: 2 });
+      expect(w.has(e, Health)).toBe(true);
+    });
+    expect(bytes).toBeInstanceOf(Uint8Array);
+  });
+
   it("a nested query keeps the guard armed at every depth, and depth unwinds to 0 after", () => {
     const w = createWorld();
     w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
@@ -393,6 +409,53 @@ describe("the iterationDepth guard (006 §A4)", () => {
     expect(() => {
       w.query(posQ).each(() => w.addComponent(w.firstOf(posQ) as Entity, Velocity, { x: 0, y: 0 }));
     }).toThrow(/query iteration/);
+  });
+});
+
+describe("tick() re-entrancy guards (005 §5.5 / 006 §16.4)", () => {
+  const posQ = defineQuery([Position]);
+
+  it("tick inside a world.query().each body throws (iteration guard), and depth unwinds", () => {
+    const w = createWorld();
+    w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+    expect(() => w.query(posQ).each(() => w.tick([phase("x", [])]))).toThrow(
+      /world\.tick\(\) cannot run during query iteration/,
+    );
+    expect(() => w.spawn()).not.toThrow(); // eachGuarded's finally restored the depth
+  });
+
+  it("tick from inside a system body throws, and depth/ticking unwind", () => {
+    const w = createWorld();
+    w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+    const Bad = defineSystem(posQ, () => w.tick([phase("inner", [])])); // world.tick mid-walk
+    expect(() => w.tick([phase("x", [Bad])])).toThrow(/cannot run during query iteration/);
+    expect(() => w.spawn()).not.toThrow(); // depth unwound
+    expect(() => w.tick([phase("y", [])])).not.toThrow(); // ticking unwound — a later tick still runs
+  });
+
+  it("re-entrant tick from a phase runIf throws (the ticking guard), and ticking unwinds", () => {
+    const w = createWorld();
+    w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+    const S = defineSystem(posQ, () => {});
+    const runIf = () => {
+      w.tick([phase("inner", [])]); // ticking already true, but depth is 0 → the ticking guard fires
+      return true;
+    };
+    expect(() => w.tick([phase("outer", [S], { runIf })])).toThrow(/cannot run inside another tick/);
+    expect(() => w.tick([phase("ok", [S])])).not.toThrow(); // the outer tick's finally cleared ticking
+  });
+
+  it("DEV-throws from inside a reactive callback (swallowed by notify, then reported)", () => {
+    const w = createWorld();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    w.setResource(Config, { enabled: true });
+    w.reactive.observeResource(Config, () => w.tick([phase("x", [])]));
+    w.setResource(Config, { enabled: false }); // a real change → fires the callback at notify
+    w.reactive.notify();
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("world.tick() cannot run from inside an observer or reactive callback"),
+    );
+    spy.mockRestore();
   });
 });
 
@@ -466,6 +529,27 @@ describe("unregisterInboundSource (005 §6.2)", () => {
     expect(drained).toBe(1); // never drained after removal (teardown step 0, §5.6)
   });
 
+  it("a source that unregisters itself mid-drain does not skip the next source (snapshot iterate, §5.6)", () => {
+    const w = createWorld();
+    const drained: string[] = [];
+    const first: InboundSource = {
+      drain: () => {
+        drained.push("first");
+        w.unregisterInboundSource(first); // teardown-from-within-drain: splices this.inbound live
+      },
+    };
+    const second: InboundSource = { drain: () => void drained.push("second") };
+    w.registerInboundSource(first);
+    w.registerInboundSource(second);
+
+    w.sync();
+    expect(drained).toEqual(["first", "second"]); // the second still drained this same sync
+
+    drained.length = 0;
+    w.sync();
+    expect(drained).toEqual(["second"]); // first stayed unregistered
+  });
+
   it("unregistering an unknown source is a no-op and leaves registered sources draining", () => {
     const w = createWorld();
     let drained = 0;
@@ -475,5 +559,30 @@ describe("unregisterInboundSource (005 §6.2)", () => {
     expect(() => w.unregisterInboundSource({ drain: () => {} })).not.toThrow(); // never registered
     w.sync();
     expect(drained).toBe(1); // the known source still drains
+  });
+});
+
+describe("import() in-emit guard (005 §5.5 / 006 §C2)", () => {
+  it("DEV-throws from inside a reactive callback (swallowed by notify, then reported)", () => {
+    const w = createWorld();
+    const bytes = w.export(); // a valid empty-world snapshot to import
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    w.setResource(Config, { enabled: true });
+    w.reactive.observeResource(Config, () => w.import(bytes, { replace: true }));
+    w.setResource(Config, { enabled: false }); // a real change → fires the callback at notify
+    w.reactive.notify();
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("world.import() cannot run from inside an observer or reactive callback"),
+    );
+    spy.mockRestore();
+  });
+
+  it("a normal import outside any callback is unaffected", () => {
+    const w = createWorld();
+    w.spawn({ components: [[Position, { x: 1, y: 2 }]] });
+    const bytes = w.export();
+    const w2 = createWorld();
+    expect(() => w2.import(bytes)).not.toThrow();
+    expect(count(w2, defineQuery([Position]))).toBe(1); // the entity round-tripped
   });
 });

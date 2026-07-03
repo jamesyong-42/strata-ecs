@@ -109,14 +109,13 @@ export class BaselineSnapshot implements MutableSnapshot {
   // --- writes (MutableSnapshot) ---------------------------------------------
 
   /**
-   * The existence cell → present, as a FRESH record (§4.2 respawn-fresh): clear this key's OWN cells
-   * — components, tags, and OUTGOING edges (with their reverse entries). INCOMING edges are NOT
-   * touched (only `despawn` severs those); a spawn does not sever references pointing at the key.
+   * EXISTENCE-ONLY (§4.1): record the key in the existence cell, touch NOTHING else — no clearing of
+   * components, tags, or edges. Existence is its own cell; erasure power belongs to `despawn` alone
+   * (§4.1 cell independence). A spawn is therefore idempotent on a live key and never severs an
+   * incoming reference. A despawn→respawn still yields a fresh record because the DESPAWN did the
+   * erasing; a bare spawn over live cells leaves them intact (they are their own cells).
    */
   spawn(key: EntityKey): void {
-    this.clearOutgoing(key);
-    this.components.delete(key);
-    this.tags.delete(key);
     this.spawned.add(key);
   }
 

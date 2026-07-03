@@ -8,15 +8,18 @@
  * `normalizeBatch(events)` to a `MutableSnapshot` yields the IDENTICAL state as applying the raw
  * `events` in order.
  *
- * The four rules (§4.2):
- * - DESPAWN DOMINANCE: `despawn(k)` erases all earlier facts for `k` in the batch (its existence,
- *   components, tags, outgoing edges). The incoming-edge removals of the three-part contract are
- *   their OWN cells on other keys — not synthesized here; a well-formed producer emits them, or the
- *   surviving `despawn` cleans them at apply time (baseline.ts `despawn`).
- * - RESPAWN-FRESH: a `spawn(k)` AFTER a `despawn(k)` starts a fresh record — earlier facts stay
- *   erased, the despawn SURVIVES (it must still run its incoming-edge cleanup before the respawn),
- *   later facts accumulate. A `spawn(k)` while `k` is already spawned likewise clears its own prior
- *   facts (a fresh record).
+ * The rules (§4.2):
+ * - DESPAWN DOMINANCE: `despawn(k)` erases all earlier facts for `k` in the batch (its existence
+ *   spawn, components, tags, outgoing edges). The incoming-edge removals of the three-part contract
+ *   are their OWN cells on other keys — not synthesized here; a well-formed producer emits them, or
+ *   the surviving `despawn` cleans them at apply time (baseline.ts `despawn`).
+ * - DUPLICATE-SPAWN DEDUPE, FIRST-SPAWN-WINS per despawn-segment: existence is idempotent — the
+ *   baseline's `spawn` is EXISTENCE-ONLY (it clears nothing, §4.1) — so a `spawn(k)` is DROPPED when a
+ *   `spawn(k)` already survives in the current segment; a surviving `despawn(k)` resets the segment,
+ *   so a later `spawn` (a respawn) survives. FIRST-wins, not last, is deliberate: last-wins would turn
+ *   [spawn, setC, spawn] into [setC, spawn] and violate §4.2's spawn-first invariant — first-wins
+ *   keeps [spawn, setC]. The respawn's despawn barrier SURVIVES (it must still run its incoming-edge
+ *   cleanup before the respawn); post-despawn facts accumulate onto the fresh record.
  * - LAST-FACT-WINS per cell: for a non-dominated cell, the final fact survives (remove-then-set → set).
  * - ORDER PRESERVED: survivors keep their batch order — this function MUST NOT reorder (§4.2). The
  *   spawn-first / despawn-last invariants then follow for a well-formed batch (spawn emitted before,
@@ -27,36 +30,39 @@
 import type { ChangeEvent } from "./types";
 import type { EntityKey } from "../core/field";
 
-/** Rare delimiter for the cell-key strings (unlikely in a component name or peer-prefixed key). */
-const SEP = "\u001f";
-
 /**
- * The cell a fact addresses (§4.1). Entity existence, `(key, comp)`, `(key, tag)`, a relation edge
- * `(key, rel, target)` for arity "many", `(key, rel, all)` for arity "one" / target-less removes,
- * and `(res)`. Two facts collide (last-fact-wins) iff they produce the same string.
+ * The cell a fact addresses (§4.1), as a COLLISION-PROOF string — two facts collide (last-fact-wins)
+ * iff they produce the same string. Encoded as a JSON tuple so a peer-controlled EntityKey or name
+ * containing ANY delimiter cannot forge a collision (verified: a naive separator-join let
+ * key='a'/target='b<SEP>rel<SEP>c' collide with key='a<SEP>rel<SEP>b'/target='c', §E3). The arity-"one"
+ * slot and a target-less remove use a 3-tuple (the whole slot); an arity-"many" edge and a TARGETED
+ * remove use a 4-tuple (that one edge) — different tuple LENGTHS, so a real target key (even the
+ * literal "*") is never conflated with the whole-slot cell.
  */
 function cellKeyOf(e: ChangeEvent): string {
   switch (e.kind) {
     case "spawn":
     case "despawn":
-      return `E${SEP}${e.key}`;
+      return JSON.stringify(["E", e.key]);
     case "component-set":
     case "component-remove":
-      return `C${SEP}${e.key}${SEP}${e.comp.name}`;
+      return JSON.stringify(["C", e.key, e.comp.name]);
     case "tag-add":
     case "tag-remove":
-      return `T${SEP}${e.key}${SEP}${e.tag.name}`;
+      return JSON.stringify(["T", e.key, e.tag.name]);
     case "relation-set":
-      // arity "one": the whole single-valued slot — collides with a target-less remove of the same rel.
-      return `R${SEP}${e.key}${SEP}${e.rel.name}${SEP}*`;
+      return JSON.stringify(["R", e.key, e.rel.name]); // arity "one": the whole single-valued slot
     case "relation-add":
-      return `R${SEP}${e.key}${SEP}${e.rel.name}${SEP}${e.target}`;
+      return JSON.stringify(["R", e.key, e.rel.name, e.target]); // one specific edge
     case "relation-remove":
-      // target given → that one edge's cell; target-less → the whole relation slot (§4.1).
-      return `R${SEP}${e.key}${SEP}${e.rel.name}${SEP}${e.target ?? "*"}`;
+      // target given → that one edge (4-tuple); target-less → the whole slot (3-tuple, §4.1). The slot
+      // form COLLIDES with relation-set (both 3-tuple) — correct: a set and a target-less clear share it.
+      return e.target === undefined
+        ? JSON.stringify(["R", e.key, e.rel.name])
+        : JSON.stringify(["R", e.key, e.rel.name, e.target]);
     case "resource-set":
     case "resource-remove":
-      return `S${SEP}${e.res.name}`;
+      return JSON.stringify(["S", e.res.name]);
   }
 }
 
@@ -83,10 +89,13 @@ export function normalizeBatch(events: readonly ChangeEvent[]): ChangeEvent[] {
   // handled by the spawn/despawn owners below, because spawn↔despawn is not a plain last-fact-wins.
   const cellOwner = new Map<string, number>();
   // Per key: surviving ERASABLE own facts (spawn + components + tags + outgoing relations). A despawn
-  // OR a fresh spawn erases every member. A despawn is NOT a member — it is a barrier that survives a
-  // respawn so its incoming-edge cleanup still runs.
+  // erases every member. A despawn is NOT a member — it is a barrier that survives a respawn so its
+  // incoming-edge cleanup still runs.
   const ownFacts = new Map<EntityKey, Set<number>>();
   const despawnOwner = new Map<EntityKey, number>(); // surviving despawn per key — a later despawn supersedes it
+  // Per key: the surviving `spawn` in the CURRENT despawn-segment (first-spawn-wins). A despawn resets
+  // it; while set, a further spawn(k) is a redundant duplicate and is dropped.
+  const spawnOwner = new Map<EntityKey, number>();
 
   const eraseOwn = (k: EntityKey): void => {
     const own = ownFacts.get(k);
@@ -103,12 +112,18 @@ export function normalizeBatch(events: readonly ChangeEvent[]): ChangeEvent[] {
   for (let i = 0; i < n; i++) {
     const e = events[i];
     if (e.kind === "spawn") {
-      // Fresh record: clear this key's prior erasable facts (a prior life this spawn overwrites). A
-      // prior despawn (barrier) is NOT erased — it stays to clean incoming edges before this respawn.
-      eraseOwn(e.key);
-      addOwn(e.key, i);
+      // Existence-only + FIRST-spawn-wins (§4.2): a spawn survives only if none already survives since
+      // the last despawn; a redundant spawn is dropped (keeps spawn-first — last-wins would emit
+      // [setC, spawn]). It clears NOTHING (existence is idempotent) — the despawn is the only eraser.
+      if (spawnOwner.has(e.key)) {
+        alive[i] = false;
+      } else {
+        spawnOwner.set(e.key, i);
+        addOwn(e.key, i);
+      }
     } else if (e.kind === "despawn") {
-      eraseOwn(e.key); // erase the record + components + tags + outgoing edges accumulated so far
+      eraseOwn(e.key); // erase the spawn + components + tags + outgoing edges accumulated so far
+      spawnOwner.delete(e.key); // reset the segment: a later spawn (respawn) survives
       const prior = despawnOwner.get(e.key);
       if (prior !== undefined) alive[prior] = false; // a second despawn supersedes the first
       despawnOwner.set(e.key, i);

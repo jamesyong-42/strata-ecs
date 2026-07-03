@@ -23,6 +23,16 @@
  * `canonResource` semantics (raw), NOT column-coerced `canon`; the baseline stores `canonResource`
  * too, so both sides hold the same raw object and {@link cellEquals} agrees. Components use full
  * `canon` (they DO round-trip a column).
+ *
+ * EXISTENCE MODEL (E5, §4.1): {@link diffViews} asserts `hasEntity` equivalence after every op. The
+ * shared definition is the baseline's DERIVED liveness — a key exists iff it was spawned-and-not-
+ * despawned OR it currently holds any cell ("a component/tag/relation write implies existence"). With
+ * spawn now existence-only (§4.1), the baseline's spawned-until-despawn matches the runtime's
+ * alive-until-destroy. ONE residual asymmetry is unprobeable on the runtime: a spawned-but-empty
+ * entity and a cell-emptied one BOTH sit placed in the empty archetype, indistinguishable by any
+ * runtime read. So {@link RuntimeOracle} tracks an explicit `spawnedKeys` mirror for exactly that bit
+ * and computes `hasEntity` under the same derived model; everything else (cells, placement) is probed
+ * from the real runtime.
  */
 
 import { type EntityKey, entityKey, field, enumOf, isEnumType } from "../../core/field";
@@ -38,6 +48,7 @@ import {
   defineTag,
 } from "../../core/schema";
 import { RuntimeStore } from "../../core/runtime-store";
+import type { Entity } from "../../core/entity";
 import { createWorld, type World } from "../../core/world";
 import { Projector } from "../projector";
 import { cellEquals } from "../canon";
@@ -121,6 +132,10 @@ export function pick<T>(rng: Rng, xs: readonly T[]): T {
 export function keyPool(n: number): EntityKey[] {
   const out: EntityKey[] = [];
   for (let i = 0; i < n; i++) out.push(entityKey(`cfm${i}`));
+  // Hostile keys (§E3): a peer-controlled EntityKey may embed the OLD cell-key separator (U+001F) or the
+  // literal '*' slot sentinel. Fold a couple in so the whole suite proves the collision-proof cell-key
+  // encoding (normalize.ts) never conflates them with a real cell.
+  out.push(entityKey(`cfm${String.fromCharCode(31)}x`), entityKey("*"));
   return out;
 }
 
@@ -222,36 +237,28 @@ function pickKind(rng: Rng): Op["t"] {
 }
 
 /**
- * A WELL-FORMED op sequence for the dual interpreter (P1/P2). Well-formed matters for exactly ONE op:
- * `spawn`. `BaselineSnapshot.spawn` is respawn-FRESH — it wipes the key's own cells — whereas the
- * projector's `applySpawn` is `ensurePlaced` (non-clearing). They agree on an ABSENT-or-empty key but
- * NOT on a key that currently holds cells, so `spawn` is emitted only for a key not currently `live`.
- * Every OTHER op agrees on both sides for any input (despawn/removes are no-ops on absent cells on
- * both), so respawn, remove-then-set, dangling relation targets, and target-less removes all flow
- * freely. `live` = spawned-or-mutated-and-not-despawned (a relation TARGET is not `live` — it may be
- * an identity-only handle with no cells, which `spawn` then places consistently on both sides).
+ * A random op sequence for the dual interpreter (P1/P2) — NO liveness guard. Since `BaselineSnapshot.spawn`
+ * is now EXISTENCE-ONLY (it clears nothing, §4.1), it agrees with the projector's `applySpawn`
+ * (`ensurePlaced`, also non-clearing) on EVERY key — live or not. So `spawn` is emitted freely and the
+ * previously-fenced spawn-on-live window IS exercised (respawn, spawn-over-cells, remove-then-set,
+ * dangling relation targets, target-less removes all flow with no special-casing). The old guard
+ * existed only because the pre-fix `spawn` wiped cells; that divergence is gone.
  */
 export function genOps(rng: Rng, cfg: GenConfig): Op[] {
   const keys = cfg.keys;
-  const live = new Set<EntityKey>();
   const ops: Op[] = [];
   for (let i = 0; i < cfg.opCount; i++) {
     const k = pick(rng, keys);
     switch (pickKind(rng)) {
       case "spawn":
-        if (!live.has(k)) {
-          ops.push({ t: "spawn", k });
-          live.add(k);
-        }
+        ops.push({ t: "spawn", k });
         break;
       case "despawn":
         ops.push({ t: "despawn", k });
-        live.delete(k);
         break;
       case "setC": {
         const c = pick(rng, SCHEMA.components);
         ops.push({ t: "setC", k, c, v: genComponentValue(rng, c, keys) });
-        live.add(k);
         break;
       }
       case "rmC":
@@ -259,18 +266,15 @@ export function genOps(rng: Rng, cfg: GenConfig): Op[] {
         break;
       case "addTag":
         ops.push({ t: "addTag", k, tag: pick(rng, SCHEMA.tags) });
-        live.add(k);
         break;
       case "rmTag":
         ops.push({ t: "rmTag", k, tag: pick(rng, SCHEMA.tags) });
         break;
       case "setRel":
         ops.push({ t: "setRel", k, r: pick(rng, SCHEMA.relOne), tk: pick(rng, keys) });
-        live.add(k);
         break;
       case "addRel":
         ops.push({ t: "addRel", k, r: pick(rng, SCHEMA.relMany), tk: pick(rng, keys) });
-        live.add(k);
         break;
       case "rmRel": {
         const r = pick(rng, rng() < 0.5 ? SCHEMA.relOne : SCHEMA.relMany);
@@ -322,6 +326,14 @@ export class RuntimeOracle {
   readonly rt: RuntimeStore;
   readonly proj: Projector;
   private counter = 0;
+  /**
+   * Explicit-spawn mirror (§4.1, E5). The runtime CANNOT distinguish a spawned-but-empty entity
+   * (`applySpawn` → placed in the empty archetype) from a cell-emptied one (all components removed →
+   * also placed in the empty archetype). The baseline's derived liveness DOES (`spawned` OR holds a
+   * cell). So the oracle tracks the spawn intent here to compute `hasEntity` under the SAME derived
+   * model — the only part of existence a runtime probe can't recover.
+   */
+  private readonly spawnedKeys = new Set<EntityKey>();
 
   constructor() {
     this.rt = this.world.runtime;
@@ -332,8 +344,8 @@ export class RuntimeOracle {
   apply(op: Op): void {
     const p = this.proj;
     switch (op.t) {
-      case "spawn": return p.applySpawn(op.k);
-      case "despawn": return p.remove(op.k);
+      case "spawn": this.spawnedKeys.add(op.k); return p.applySpawn(op.k);
+      case "despawn": this.spawnedKeys.delete(op.k); return p.remove(op.k);
       case "setC": return p.applyComponent(op.k, op.c, op.v);
       case "rmC": return p.removeComponent(op.k, op.c);
       case "addTag": return p.applyTag(op.k, op.tag);
@@ -347,6 +359,28 @@ export class RuntimeOracle {
   }
 
   // The SnapshotView (read subset) — mapped from handles back to keys via the bijection peeks.
+
+  /**
+   * Existence under the baseline's derived-liveness model (E5): the key exists iff its handle is bound
+   * and alive AND (it was explicitly spawned-and-not-despawned OR it holds any cell). This is
+   * "a component/tag/relation write implies existence" applied to BOTH sides — a cell write makes the
+   * entity exist while the cell is held; a spawn makes it exist until despawn. `isPlaced` is implicit:
+   * an identity-only relation TARGET holds no cell here and is not in `spawnedKeys`, so it reads absent,
+   * matching the baseline (a reverse-only key is not live).
+   */
+  hasEntity(k: EntityKey): boolean {
+    const h = this.proj.handleFor(k);
+    if (h === undefined || !this.rt.isAlive(h)) return false;
+    return this.spawnedKeys.has(k) || this.hasAnyRuntimeCell(h);
+  }
+
+  private hasAnyRuntimeCell(h: Entity): boolean {
+    for (const c of SCHEMA.components) if (this.rt.has(h, c)) return true;
+    for (const t of SCHEMA.tags) if (this.rt.hasTag(h, t)) return true;
+    for (const r of SCHEMA.relOne) if (this.rt.getRelation(h, r) !== undefined) return true;
+    for (const r of SCHEMA.relMany) if (this.rt.getRelations(h, r).length > 0) return true;
+    return false;
+  }
 
   getComponent(k: EntityKey, c: Component): ComponentValue | undefined {
     const h = this.proj.handleFor(k);
@@ -383,6 +417,7 @@ export class RuntimeOracle {
 
 /** The read subset both the ladder and the oracle satisfy — the surface the comparators compare. */
 export interface SnapshotView {
+  hasEntity(k: EntityKey): boolean;
   getComponent(k: EntityKey, c: Component): ComponentValue | undefined;
   hasTag(k: EntityKey, t: Tag): boolean;
   getRelationOne(k: EntityKey, r: Relation): EntityKey | undefined;
@@ -405,6 +440,9 @@ function sameKeySet(a: readonly EntityKey[], b: readonly EntityKey[]): boolean {
  */
 export function diffViews(a: SnapshotView, b: SnapshotView, keys: readonly EntityKey[], schema: Schema): string | null {
   for (const k of keys) {
+    if (a.hasEntity(k) !== b.hasEntity(k)) {
+      return `existence of ${k}: ${a.hasEntity(k)} vs ${b.hasEntity(k)}`; // the E5 existence-equivalence law
+    }
     for (const c of schema.components) {
       const av = a.getComponent(k, c);
       const bv = b.getComponent(k, c);
@@ -510,10 +548,8 @@ export function applyEvent(store: MutableSnapshot, e: ChangeEvent): void {
   }
 }
 
-/** Full-state diff between two `MutableSnapshot`s (P5 compares normalized-apply vs raw-apply). */
+/** Full-state diff between two `MutableSnapshot`s (P5 compares normalized-apply vs raw-apply). Existence
+ *  is compared inside {@link diffViews} (the E5 law), so this is just the cell-level delegate. */
 export function diffStores(a: MutableSnapshot, b: MutableSnapshot, keys: readonly EntityKey[], schema: Schema): string | null {
-  for (const k of keys) {
-    if (a.hasEntity(k) !== b.hasEntity(k)) return `existence of ${k}: ${a.hasEntity(k)} vs ${b.hasEntity(k)}`;
-  }
   return diffViews(a, b, keys, schema);
 }

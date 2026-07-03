@@ -7,8 +7,8 @@
 import { describe, expect, it } from "vitest";
 import { createWorld } from "../core/world";
 import { enumOf, field } from "../core/field";
-import { type Component, defineComponent } from "../core/schema";
-import { canon, cellEquals, scalarEquals, tryCanon } from "./canon";
+import { type Component, defineComponent, defineResource } from "../core/schema";
+import { canon, cellEquals, scalarEquals, tryCanon, tryCanonResource } from "./canon";
 import type { ComponentValue } from "./types";
 
 // Own component names (schema is process-global) — the awkward-value battery covers every column kind.
@@ -25,6 +25,17 @@ const Battery = defineComponent("CANONBattery", {
 const Defaulted = defineComponent("CANONDefaulted", {
   hp: "u8",
   max: field("u8", { default: 100 }),
+});
+const ResBattery = defineResource("CANONResBattery", {
+  zoom: "f32",
+  count: "u16",
+  team: enumOf({ Red: 1, Blue: 2 }),
+  flag: "bool",
+  label: "string",
+});
+const ResDefaulted = defineResource("CANONResDefaulted", {
+  size: "u16",
+  mode: field("u8", { default: 1 }),
 });
 
 const w = createWorld();
@@ -140,5 +151,45 @@ describe("tryCanon — inbound-safe, never throws (§2.3)", () => {
     const r = tryCanon(Battery, { f32v: 0, f64v: 0, u8v: 300, i8v: 0, u16v: 0, team: "Red", flag: false, label: null });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value.u8v).toBe(44);
+  });
+});
+
+describe("tryCanonResource — inbound-safe, object-backed, never throws (§2.3, §7)", () => {
+  it("default-fills a missing declared-default field", () => {
+    expect(tryCanonResource(ResDefaulted, { size: 7 })).toEqual({ ok: true, value: { size: 7, mode: 1 } });
+  });
+
+  it("stores the RAW value — NO column coercion (0.1 stays 0.1, 300 does NOT wrap)", () => {
+    const r = tryCanonResource(ResBattery, { zoom: 0.1, count: 300, team: "Blue", flag: true, label: "hi" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.zoom).toBe(0.1); // object-backed: no fround (contrast tryCanon's f32 column)
+      expect(r.value.count).toBe(300); // no modular wrap either
+    }
+  });
+
+  it("rejects each malformation with ok:false — WITHOUT throwing", () => {
+    const cases: Array<[string, ComponentValue]> = [
+      ["wrong JS type (string into u16)", { zoom: 0, count: "x", team: "Red", flag: false, label: null }],
+      ["non-finite into a numeric field (NaN into f32)", { zoom: NaN, count: 0, team: "Red", flag: false, label: null }],
+      ["non-finite into a numeric field (Infinity into u16)", { zoom: 0, count: Infinity, team: "Red", flag: false, label: null }],
+      ["unknown enum label", { zoom: 0, count: 0, team: "Green", flag: false, label: null }],
+      ["null into a non-string field (null into u16)", { zoom: 0, count: null, team: "Red", flag: false, label: null }],
+    ];
+    for (const [, v] of cases) {
+      let result!: ReturnType<typeof tryCanonResource>;
+      expect(() => (result = tryCanonResource(ResBattery, v))).not.toThrow();
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(typeof result.field).toBe("string");
+    }
+    // Missing a no-default field also rejects (does not throw).
+    const miss = tryCanonResource(ResBattery, {} as ComponentValue);
+    expect(miss.ok).toBe(false);
+  });
+
+  it("allows null into a string/key field (a nullable object-backed field)", () => {
+    const r = tryCanonResource(ResBattery, { zoom: 1.5, count: 2, team: "Red", flag: false, label: null });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.label).toBeNull();
   });
 });

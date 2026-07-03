@@ -233,6 +233,25 @@ describe("P7 — projection idempotence fires no watch (§2.5, §6.1)", () => {
     expect(rt.get(h, CTile)).toEqual({ u: 1, i: 2 }); // untouched
   });
 
+  it("duplicate applySpawn on an already-placed key: state-idempotent AND stampless (no fire)", () => {
+    // A FIRST applySpawn fires an empty-query watch (P6). A duplicate is existence-only — `ensurePlaced`
+    // no-ops on an already-placed handle, so it bumps no structural stamp and notifies no one (§4.1).
+    const { reactive, proj, rt } = setup();
+    const k = entityKey("e");
+    proj.applySpawn(k); // first placement into the empty archetype
+    const h = proj.resolveByKey(k);
+    let fired = 0;
+    reactive.observeQuery(defineQuery([]), [], () => fired++); // matches every archetype incl. empty
+    reactive.notify(); // settle the initial placement (post-registration → no retro-fire)
+    fired = 0;
+
+    proj.applySpawn(k); // duplicate — no-op
+    reactive.notify();
+
+    expect(fired).toBe(0); // stampless: no placement bump
+    expect(rt.isPlaced(h)).toBe(true); // still placed, unchanged
+  });
+
   it("duplicate applyTag / applyRelationAdd: state idempotent (runtime AND baseline unchanged)", () => {
     // The value channels have nothing to suppress for tags/edges; the STATE claim is what holds
     // (Tier-1 membership re-stamps by design — see the file header). Assert both stores are unmoved.

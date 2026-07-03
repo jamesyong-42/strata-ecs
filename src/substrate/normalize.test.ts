@@ -101,6 +101,9 @@ const cases: Case[] = [
   { name: "relation arity-many distinct edges both survive", events: [addR(A, A, RMany), addR(A, B, RMany)], survivors: [0, 1] },
   { name: "relation-add then remove same edge → remove", events: [addR(A, B, RMany), remR(A, RMany, B)], survivors: [1] },
   { name: "relation-set then target-less remove collide on the slot → remove", events: [setR(A, B, ROne), remR(A, ROne)], survivors: [1] },
+  // Arity-ONE TARGETED remove is a DISTINCT cell from the set (the remove is conditional per-edge, §4.1
+  // amendment) — both survive in order; the impl is correct as-is (§E4).
+  { name: "arity-one set then TARGETED remove → both survive in order", events: [setR(A, B, ROne), remR(A, ROne, B)], survivors: [0, 1] },
   { name: "resource last-fact-wins", events: [setRes(1), setRes(2)], survivors: [1] },
   { name: "resource set then remove → remove", events: [setRes(1), remRes()], survivors: [1] },
   { name: "order preserved across independent survivors", events: [spawn(A), spawn(B), setC(A), setC(B)], survivors: [0, 1, 2, 3] },
@@ -109,6 +112,10 @@ const cases: Case[] = [
   { name: "incoming edge: despawn target erases the spawn but keeps the edge fact for despawn to clean", events: [spawn(A), spawn(B), setR(B, A, ROne), despawn(A)], survivors: [1, 2, 3] },
   { name: "respawn keeps the despawn barrier (incoming cleanup runs before respawn)", events: [spawn(A), spawn(B), setR(B, A, ROne), despawn(A), spawn(A)], survivors: [1, 2, 3, 4] },
   { name: "second despawn supersedes the first", events: [despawn(A), spawn(A), despawn(A)], survivors: [2] },
+  // Duplicate-spawn dedupe, FIRST-spawn-wins per segment (§4.2): a redundant spawn drops, keeping spawn-first.
+  { name: "duplicate spawn drops (first-wins): [spawn, setC, spawn] → [spawn, setC]", events: [spawn(A), setC(A), spawn(A)], survivors: [0, 1] },
+  { name: "a despawn resets the segment so the respawn survives: [spawn, setC, despawn, spawn] → [despawn, spawn]", events: [spawn(A), setC(A), despawn(A), spawn(A)], survivors: [2, 3] },
+  { name: "ill-formed [setC, spawn] — existence-only spawn does not erase, both survive in order", events: [setC(A), spawn(A)], survivors: [0, 1] },
 ];
 
 describe("normalizeBatch — §4.2 dominance, last-fact-wins, order", () => {
@@ -122,6 +129,32 @@ describe("normalizeBatch — §4.2 dominance, last-fact-wins, order", () => {
       expect(dump(applyAll(out), keys)).toEqual(dump(applyAll(c.events), keys));
     });
   }
+});
+
+describe("normalizeBatch — collision-proof cell keys (§E3)", () => {
+  it("separator-laden EntityKeys cannot forge a cell-key collision", () => {
+    const SEP = String.fromCharCode(31); // U+001F — the old naive cell-key delimiter
+    const a = entityKey("a");
+    const t1 = entityKey(`b${SEP}${RMany.name}${SEP}c`); // edge a → 'b<SEP>rel<SEP>c'
+    const a2 = entityKey(`a${SEP}${RMany.name}${SEP}b`); // edge 'a<SEP>rel<SEP>b' → 'c'
+    const t2 = entityKey("c");
+    // A naive `R SEP key SEP rel SEP target` join maps BOTH edges to the same string; the JSON-tuple
+    // encoding keeps them separate, so both survive as distinct cells.
+    const out = normalizeBatch([addR(a, t1, RMany), addR(a2, t2, RMany)]);
+    expect(out.length).toBe(2);
+    const bs = applyAll(out);
+    expect(bs.getRelationMany(a, RMany)).toEqual([t1]);
+    expect(bs.getRelationMany(a2, RMany)).toEqual([t2]);
+  });
+
+  it("the literal '*' as a target key does not collide with the whole-slot cell", () => {
+    const star = entityKey("*");
+    // add edge A→'*', then a target-LESS remove (whole slot) — distinct cells (4-tuple vs 3-tuple), so
+    // the target-less clear does NOT drop the specific-'*' add; both survive and the raw apply matches.
+    const evs = [addR(A, star, RMany), addR(A, B, RMany), remR(A, RMany)];
+    const out = normalizeBatch(evs);
+    expect(dump(applyAll(out), keysOf(evs))).toEqual(dump(applyAll(evs), keysOf(evs)));
+  });
 });
 
 describe("normalizeBatch — invariants", () => {
