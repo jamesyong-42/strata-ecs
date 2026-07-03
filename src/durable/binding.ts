@@ -1,5 +1,6 @@
 /**
- * The durable binding — Part III **M2** (docs/plan-part3.md; design.md §12.4, §13.1–§13.3).
+ * The durable binding — Part III **M2** (attach/detach/drain skeleton) + **M4** (the reconcile matrix)
+ * (docs/plan-part3.md; design.md §12.4, §13.1–§13.5; 006 B3, C5).
  *
  * `attachDurable(world, store)` creates the **binding**: the one object in the durable layer that holds
  * BOTH a runtime reference (through the {@link Projector}) and the {@link BaselineSnapshot}, because the
@@ -18,11 +19,34 @@
  *     only concession to the layers is `registerInboundSource(InboundSource)` (§12.1). So attach lives in
  *     the durable package and reaches the world through that single seam. (M5 doc pass: amend §14.2's
  *     sketch to the function form.)
- *  B. **The drain applies VALUE facts unconditionally in M2** — a provisional stand-in for M4's
- *     drag-protected `(own|remote, value)` matrix + held-cell ledger. Structural facts already apply
- *     unconditionally for good (own is the runtime's only path to the change; remote has no in-flight
- *     divergence to protect, §13.3). The value branch is isolated in {@link DurableBinding.applyInboundValue}
- *     behind one `TODO(M4)` so M4 swaps exactly that one branch.
+ *  B. **The reconcile matrix (M4) — the origin×kind value semantics that make collaboration correct.**
+ *     Structural facts (spawn / despawn / component add-or-remove / tag / relation) ALWAYS apply and
+ *     advance the baseline — own is the runtime's only path to the change; remote has no in-flight
+ *     divergence to protect (§13.3 row 1). VALUE facts are drag-protected against the pre-batch baseline:
+ *     - **(own, value):** `cellEquals(runtime, baseline)` ⇒ apply the CONVERGED doc value + advance
+ *       baseline; else (a local re-drag is in flight) advance the **baseline only**, runtime untouched
+ *       (§13.3's one asymmetry — the echo is a value we authored, so it is banked truth).
+ *     - **(remote, value):** `cellEquals` ⇒ apply converged + advance baseline (agreement); else DROP
+ *       from the runtime, baseline UNTOUCHED, and record the converged value in the {@link held} ledger.
+ *     Resources run the identical matrix at cardinality one (§13.4); `resource-remove` is structural.
+ *  F. **CONVERGED-VALUE RE-READ, never the batch payload (§13.3; the M3 stale-echo finding).** An
+ *     own-echo batch carries the value AS OF COMMIT TIME; if a concurrent remote won LWW between the
+ *     commit and this sync, applying the payload would CLOBBER the converged value. So every value
+ *     APPLY re-reads the doc's converged truth at drain time ({@link convergedComponent} /
+ *     {@link convergedResource}, `tryCanon`-gated), and the batch payload drives only CLASSIFICATION
+ *     (add-vs-value, malformed-reject). The re-read is R4-stripped to local schema, so all compares
+ *     stay well-defined over local fields (006 B3 R4).
+ *  G. **The held-cell ledger + end-of-drain sweep (006 C5).** The latest DROPPED remote value per cell.
+ *     An entry is CLEARED by (a) any APPLIED value fact for the cell, (b) the local commit's synchronous
+ *     agreement (the {@link txRuntime} `clearHeld` seam the executor calls — the held value LOST
+ *     committer-wins), or (c) any STRUCTURAL fact on the cell (else the sweep resurrects a removed
+ *     component). The {@link sweep} runs at the END of EVERY drain — including empty ones, because a
+ *     drag reconverges BETWEEN drains — and applies a held value ONLY on the silent-reconverge case
+ *     (`cellEquals(runtime, baseline)` NOW). Holds never stamp; sweep-applies stamp (they are projector
+ *     writes), so reactivity observes a recovered value at the applying frame (006 C2).
+ *  H. **The stranded-cell DEV counter (§13.5).** Per-cell consecutive-remote-drop count; one warning
+ *     past the threshold, reset on agreement. DEV-only; rides the already-deferred drop path, off the
+ *     hot path.
  *  C. **The eid-field ban is validated LAZILY, memoized per `ComponentId`** (005 §7; plan locked decision):
  *     a replicated component MUST NOT carry `eid` fields (a packed runtime handle is meaningless across
  *     sessions; references travel as `key` fields). Checked at a component's FIRST durable appearance —
@@ -47,6 +71,7 @@ import type { Component, ComponentId, Entity, EntityKey, InboundSource, Resource
 import {
   BaselineSnapshot,
   Projector,
+  cellEquals,
   componentByName,
   normalizeBatch,
   relationByName,
@@ -80,6 +105,26 @@ export interface Attachment {
  * not of any one binding.
  */
 const ATTACHED = new WeakSet<DurableStore>();
+
+/**
+ * The stranded-cell DEV warning threshold (§13.5): after this many CONSECUTIVE remote-value drops on one
+ * cell with no agreement, the binding warns once that the cell looks stranded (a runtime edit diverged it
+ * and never committed). Tunable; compiled out of production with the rest of the DEV counter.
+ */
+const STRANDED_WARN_THRESHOLD = 100;
+
+/** One held-off remote COMPONENT value (006 C5): the cell + the converged value banked at drop time. */
+interface HeldComponent {
+  readonly key: EntityKey;
+  readonly comp: Component;
+  readonly value: ComponentValue;
+}
+
+/** One held-off remote RESOURCE value — the cardinality-one sibling of {@link HeldComponent}. */
+interface HeldResource {
+  readonly res: Resource;
+  readonly value: ComponentValue;
+}
 
 /**
  * Attach `store` to `world`: project the document in (two-phase, seeding the baseline — the founding
@@ -139,6 +184,18 @@ class DurableBinding implements InboundSource {
   private readonly validatedComponents = new Set<ComponentId>();
   /** One-shot DEV-diagnostic dedupe: `key|comp` canon rejects, `res:<name>` resource rejects, `name`s. */
   private readonly warned = new Set<string>();
+  /**
+   * The held-cell ledger (006 C5, decision G): the latest DROPPED remote COMPONENT value per cell, keyed
+   * by the injection-proof {@link cellKey} tuple (005 §10.4). The end-of-drain {@link sweep} applies a
+   * held value once the cell reconverges to baseline without a commit (the silent-reconverge case).
+   */
+  private readonly held = new Map<string, HeldComponent>();
+  /** The RESOURCE held-cell ledger, keyed by `res.name` (a registered, non-peer-controlled name). */
+  private readonly heldRes = new Map<string, HeldResource>();
+  /** DEV stranded counter (§13.5, decision H): cellKey/`res:<name>` → consecutive remote-value drops. */
+  private readonly dropCount = new Map<string, number>();
+  /** DEV: cells already warned as stranded — cleared on agreement so a later re-strand warns again. */
+  private readonly strandedWarned = new Set<string>();
   /** True after teardown — makes `detach()` idempotent and a late `drain()` a no-op. */
   private detached = false;
 
@@ -170,7 +227,21 @@ class DurableBinding implements InboundSource {
    * `snapshot`. The binding never exposes `transaction` itself — only the pieces the store's call needs.
    */
   get txRuntime(): TxRuntime {
-    return { runtime: this.world.runtime, projector: this.projector, baseline: this.baseline };
+    return {
+      runtime: this.world.runtime,
+      projector: this.projector,
+      baseline: this.baseline,
+      // 006 C5 (b): a synchronous committed value wins committer-wins, so its held remote value LOST —
+      // drop it (and reset the cell's stranded counter: the commit restored agreement, §13.5).
+      clearHeld: (key, comp) => {
+        this.clearHeldComponent(key, comp);
+        this.resetStranded(this.cellKey(key, comp));
+      },
+      clearHeldResource: (res) => {
+        this.heldRes.delete(res.name);
+        this.resetStranded(`res:${res.name}`);
+      },
+    };
   }
 
   // --- attach: two-phase projection seeding the baseline (§13.1) ------------------------------------
@@ -270,6 +341,10 @@ class DurableBinding implements InboundSource {
     this.pendingLocal = [];
     for (const batch of remote) this.reconcileBatch(batch);
     for (const batch of local) this.reconcileBatch(batch);
+    // The held-cell sweep runs at the END of EVERY drain — including drains with empty queues, because a
+    // drag reconverges to baseline BETWEEN drains (during ticks), and `world.sync()` drains us every frame
+    // (006 C5, decision G). It is the only path that catches the silent-reconverge case.
+    this.sweep();
   }
 
   /**
@@ -279,16 +354,20 @@ class DurableBinding implements InboundSource {
    * transient states (a spawn placed empty before its components migrate it) are never observable.
    */
   private reconcileBatch(batch: ChangeBatch): void {
-    // M4 will branch the value path on `batch.origin`; M2 applies own and remote identically (decision B).
+    // Each normalized fact carries its origin (the batch is single-origin); the value matrix branches on
+    // `ev.origin` (§13.3, decision B). Structure applies identically for own and remote.
     for (const ev of normalizeBatch(batch.events)) this.reconcile(ev);
   }
 
   /**
-   * Apply one normalized doc-fact. Structural facts (spawn / despawn / component add / remove / tag /
-   * relation) always apply and advance the baseline. `component-set` is classified against the baseline:
-   * baseline-absent ⇒ structural ADD, baseline-present ⇒ VALUE write (§13.3 table). `component-remove`
-   * on a baseline-absent cell is a no-op (never existed). Inbound values pass the `tryCanon` gate BEFORE
-   * any apply or baseline write (005 §2.3) — a reject touches neither side.
+   * Apply one normalized doc-fact — the reconcile matrix (§13.3, decision B). Structural facts (spawn /
+   * despawn / component add-or-remove / tag / relation) always apply and advance the baseline (own is the
+   * runtime's only path to the change; remote has no in-flight divergence to protect). `component-set` is
+   * CLASSIFIED against the pre-batch baseline: baseline-absent ⇒ structural ADD, baseline-present ⇒ the
+   * drag-protected VALUE matrix (§13.3 table). Every value APPLY re-reads the doc's CONVERGED value
+   * (decision F); the batch payload drives only classification and the malformed reject. A held-cell
+   * entry is CLEARED by any structural fact on its cell (supersession (c)) and by any applied value fact
+   * (supersession (a)); the local commit's agreement clears it via the `clearHeld` seam (rule (b)).
    */
   private reconcile(ev: ChangeEvent): void {
     switch (ev.kind) {
@@ -297,6 +376,9 @@ class DurableBinding implements InboundSource {
         this.baseline.spawn(ev.key);
         break;
       case "despawn":
+        // Structural on EVERY cell of the entity (§13.3 (c)): drop the entity's held entries FIRST, so the
+        // sweep can't resolve `key` to a fresh handle and resurrect a despawned component (006 C5 (c)).
+        this.clearHeldForEntity(ev.key);
         this.projector.remove(ev.key); // both-directions relation cleanup + unbind
         this.baseline.despawn(ev.key); // baseline analogue of the runtime's both-directions cleanup
         break;
@@ -308,12 +390,16 @@ class DurableBinding implements InboundSource {
           break; // reject touches NEITHER runtime nor baseline (§2.3) — the prior cell stands
         }
         if (this.baseline.getComponent(ev.key, ev.comp) === undefined) {
-          // baseline absent → structural ADD (own or remote): always apply, advance baseline (§13.3).
+          // baseline absent → structural ADD (own or remote): always apply, advance baseline (§13.3 row 1),
+          // UNCHANGED from the pre-matrix path. No converged re-read is needed here: a concurrent add of
+          // the SAME component on another peer arrives with the cell baseline-PRESENT, so it classifies as
+          // a value write and re-reads the converged (LWW) value on that path — convergence still holds.
           this.projector.applyComponent(ev.key, ev.comp, gate.value);
           this.baseline.setComponent(ev.key, ev.comp, gate.value);
+          this.onStructuralCell(ev.key, ev.comp); // (c) clear a stale hold + reset the stranded counter
         } else {
-          // baseline present → VALUE write. The one branch M4 swaps.
-          this.applyInboundValue(ev.key, ev.comp, gate.value);
+          // baseline present → the drag-protected VALUE matrix (§13.3, decision B/F).
+          this.reconcileComponentValue(ev);
         }
         break;
       }
@@ -322,6 +408,7 @@ class DurableBinding implements InboundSource {
         if (this.baseline.getComponent(ev.key, ev.comp) === undefined) break; // baseline absent → no-op
         this.projector.removeComponent(ev.key, ev.comp);
         this.baseline.removeComponent(ev.key, ev.comp);
+        this.onStructuralCell(ev.key, ev.comp); // (c): else the sweep's add-if-absent resurrects the component
         break;
       case "tag-add":
         this.projector.applyTag(ev.key, ev.tag);
@@ -349,32 +436,201 @@ class DurableBinding implements InboundSource {
           this.warnCanonReject(`res:${ev.res.name}`, ev.res.name, gate.field, gate.reason);
           break;
         }
-        // Resource value — the value-path sibling of applyInboundValue; M4 drag-protects it too.
-        this.setResourceValue(ev.res, gate.value);
+        // Every resource-set is a VALUE reconcile (§13.4: resources have no structure) — the cardinality-
+        // one sibling of the component value matrix, including the drag-in-flight drop + hold.
+        this.reconcileResourceValue(ev);
         break;
       }
       case "resource-remove":
+        // §13.4's "one exception" — the structural-ish resource fact. Always apply; clear the hold (c).
         this.world.runtime.removeResource(ev.res); // resources bypass the kernel (§10.8 sibling note)
         this.baseline.removeResource(ev.res);
+        this.heldRes.delete(ev.res.name);
+        this.resetStranded(`res:${ev.res.name}`);
         break;
     }
   }
 
+  // --- the value matrix: drag-protection, converged re-read, the held-cell ledger (§13.3, 006 C5) ----
+
   /**
-   * TODO(M4): drag-protected (own,value)/(remote,value) matrix + held-cell ledger replaces this
-   * unconditional apply. M2 applies EVERY inbound value to runtime + baseline regardless of origin or an
-   * in-flight local drag (§13.3's guard is not built yet). The value is already canonical (past the
-   * `tryCanon` gate), so `applyComponent` (add-if-absent-else-write) writes it and the baseline banks it.
+   * The `(own|remote, value)` matrix for a component cell whose baseline is present (§13.3, decision B/F).
+   * The drag-in-flight detector is `cellEquals(runtime, baseline)` (005 §2.2) — no gesture flag, the
+   * divergence IS the signal. The APPLIED value is always the doc's CONVERGED re-read (decision F), never
+   * the batch payload:
+   * - **(own, value):** agreed ⇒ apply converged + advance baseline (a no-op unless a concurrent remote
+   *   won LWW between commit and this sync — then it corrects the runtime, the stale-echo fix); a local
+   *   re-drag in flight ⇒ advance the **baseline only**, runtime left to the drag (the §13.3 asymmetry:
+   *   an own echo is a value we authored, so it is banked baseline truth even mid-drag).
+   * - **(remote, value):** agreed ⇒ apply converged + advance baseline (AGREEMENT); a local drag in
+   *   flight ⇒ DROP from the runtime, baseline UNTOUCHED, and bank the converged value in the held-cell
+   *   ledger (006 C5) so the silent-reconverge case can recover it. DROP is a real remote-change reject —
+   *   it feeds the stranded counter.
    */
-  private applyInboundValue(key: EntityKey, comp: Component, value: ComponentValue): void {
-    this.projector.applyComponent(key, comp, value);
-    this.baseline.setComponent(key, comp, value);
+  private reconcileComponentValue(ev: Extract<ChangeEvent, { kind: "component-set" }>): void {
+    const { key, comp, origin } = ev;
+    const agreed = cellEquals(this.runtimeComponent(key, comp), this.baseline.getComponent(key, comp));
+    const converged = this.convergedComponent(key, comp);
+
+    if (agreed) {
+      // No local drag in flight (own OR remote): apply the converged truth + advance the baseline. An
+      // applied value fact supersedes any hold (006 C5 (a)) and reconverges the cell (stranded reset).
+      if (converged !== undefined) {
+        this.projector.applyComponent(key, comp, converged);
+        this.baseline.setComponent(key, comp, converged);
+      }
+      this.clearHeldComponent(key, comp);
+      this.resetStranded(this.cellKey(key, comp));
+    } else if (origin === "local") {
+      // A local re-drag is in flight — do NOT stomp it; advance the baseline to converged truth ONLY, so
+      // the next remote compare is against the right value. Do NOT clear a hold: a newer remote value
+      // banked during the re-drag must survive to be swept when the re-drag ends (§13.3).
+      if (converged !== undefined) this.baseline.setComponent(key, comp, converged);
+    } else {
+      // (remote, value) with a local drag in flight → the one DROP. Runtime + baseline untouched; bank the
+      // converged value so a drag that reconverges to baseline WITHOUT committing still recovers it (C5).
+      const ck = this.cellKey(key, comp);
+      if (converged !== undefined) this.held.set(ck, { key, comp, value: converged });
+      if (DEV) this.countDrop(ck, `${key}|${comp.name}`, this.held.has(ck));
+    }
   }
 
-  /** The resource sibling of {@link applyInboundValue} — bypasses the kernel (§10.8). Same M4 TODO. */
-  private setResourceValue(res: Resource, value: ComponentValue): void {
-    this.world.runtime.setResource(res, value);
-    this.baseline.setResource(res, value);
+  /** The resource value matrix — the cardinality-one sibling of {@link reconcileComponentValue} (§13.4). */
+  private reconcileResourceValue(ev: Extract<ChangeEvent, { kind: "resource-set" }>): void {
+    const { res, origin } = ev;
+    const agreed = cellEquals(
+      this.world.runtime.getResource(res) as ComponentValue | undefined,
+      this.baseline.getResource(res),
+    );
+    const converged = this.convergedResource(res);
+
+    if (agreed) {
+      if (converged !== undefined) {
+        this.world.runtime.setResource(res, converged); // resources bypass the kernel (§10.8)
+        this.baseline.setResource(res, converged);
+      }
+      this.heldRes.delete(res.name);
+      this.resetStranded(`res:${res.name}`);
+    } else if (origin === "local") {
+      if (converged !== undefined) this.baseline.setResource(res, converged); // baseline-only (own asymmetry)
+    } else {
+      if (converged !== undefined) this.heldRes.set(res.name, { res, value: converged });
+      if (DEV) this.countDrop(`res:${res.name}`, `resource "${res.name}"`, this.heldRes.has(res.name));
+    }
+  }
+
+  /**
+   * The end-of-drain sweep (006 C5, decision G). For each surviving held cell, apply the banked value the
+   * moment it reconverges (`cellEquals(runtime, baseline)` NOW holds — the drag ended without a commit).
+   * The applied value is the banked converged truth from drop time; nothing changed the cell since (any
+   * applied fact, commit, or structural fact would have cleared the entry — supersession (a)/(b)/(c)), so
+   * the bank IS the current converged value. Sweep-applies STAMP (projector writes), so reactivity
+   * observes the recovered value this frame (006 C2). A held cell whose baseline vanished is dropped, not
+   * resurrected (defensive; structural facts already clear such entries).
+   */
+  private sweep(): void {
+    for (const [ck, e] of this.held) {
+      const baselineVal = this.baseline.getComponent(e.key, e.comp);
+      if (baselineVal === undefined) {
+        this.held.delete(ck); // the component is gone — nothing to reconverge onto (never resurrect)
+        continue;
+      }
+      if (!cellEquals(this.runtimeComponent(e.key, e.comp), baselineVal)) continue; // still mid-drag → hold
+      this.projector.applyComponent(e.key, e.comp, e.value);
+      this.baseline.setComponent(e.key, e.comp, e.value);
+      this.held.delete(ck);
+      this.resetStranded(ck);
+    }
+    for (const [name, e] of this.heldRes) {
+      const baselineVal = this.baseline.getResource(e.res);
+      if (baselineVal === undefined) {
+        this.heldRes.delete(name);
+        continue;
+      }
+      if (!cellEquals(this.world.runtime.getResource(e.res) as ComponentValue | undefined, baselineVal)) continue;
+      this.world.runtime.setResource(e.res, e.value);
+      this.baseline.setResource(e.res, e.value);
+      this.heldRes.delete(name);
+      this.resetStranded(`res:${name}`);
+    }
+  }
+
+  // --- value-matrix helpers (§13.3, decision F) -----------------------------------------------------
+
+  /** The runtime's current value for a component cell, or undefined (unbound key / absent) — the compare LHS. */
+  private runtimeComponent(key: EntityKey, comp: Component): ComponentValue | undefined {
+    const h = this.projector.handleFor(key);
+    return h === undefined ? undefined : (this.world.runtime.get(h, comp) as ComponentValue | undefined);
+  }
+
+  /**
+   * The document's CONVERGED component value, canonicalized to LOCAL schema (R4-stripped), or undefined if
+   * absent-or-unreadable. Re-read at DRAIN time (decision F): NEVER the batch payload, so a concurrent
+   * remote that won LWW between an own commit and this sync is honored, not clobbered. A hostile/malformed
+   * converged value reads as undefined (skip the apply) — it cannot strand, matching the inbound gate (§2.3).
+   */
+  private convergedComponent(key: EntityKey, comp: Component): ComponentValue | undefined {
+    const raw = this.store.snapshot.getComponent(key, comp);
+    if (raw === undefined) return undefined;
+    const gate = tryCanon(comp, raw);
+    return gate.ok ? gate.value : undefined;
+  }
+
+  /** The resource sibling of {@link convergedComponent} — object-backed, canonicalized via `tryCanonResource`. */
+  private convergedResource(res: Resource): ComponentValue | undefined {
+    const raw = this.store.snapshot.getResource(res);
+    if (raw === undefined) return undefined;
+    const gate = tryCanonResource(res, raw);
+    return gate.ok ? gate.value : undefined;
+  }
+
+  // --- the held-cell ledger + stranded counter (006 C5, §13.5) --------------------------------------
+
+  /** Injection-proof per-cell key (005 §10.4): a JSON tuple a hostile `EntityKey` cannot collide. */
+  private cellKey(key: EntityKey, comp: Component): string {
+    return JSON.stringify([key, comp.name]);
+  }
+
+  /** A structural fact on a cell (add/remove) clears any hold (006 C5 (c)) and resets its stranded counter. */
+  private onStructuralCell(key: EntityKey, comp: Component): void {
+    this.clearHeldComponent(key, comp);
+    this.resetStranded(this.cellKey(key, comp));
+  }
+
+  private clearHeldComponent(key: EntityKey, comp: Component): void {
+    this.held.delete(this.cellKey(key, comp));
+  }
+
+  /** Drop every held entry for `key` — the despawn case of supersession (c) (both-directions, like the runtime). */
+  private clearHeldForEntity(key: EntityKey): void {
+    for (const [ck, e] of this.held) if (e.key === key) this.held.delete(ck);
+  }
+
+  /**
+   * The stranded-cell DEV counter (§13.5, decision H): count consecutive remote-value drops per cell, warn
+   * ONCE past {@link STRANDED_WARN_THRESHOLD} with the spec's message shape (name the cell, explain
+   * commit-or-write-back, note the held count and no-abort). Reset on agreement ({@link resetStranded}).
+   * DEV-only — the whole counter compiles out of production.
+   */
+  private countDrop(ck: string, display: string, held: boolean): void {
+    const n = (this.dropCount.get(ck) ?? 0) + 1;
+    this.dropCount.set(ck, n);
+    if (n >= STRANDED_WARN_THRESHOLD && !this.strandedWarned.has(ck)) {
+      this.strandedWarned.add(ck);
+      devWarn(
+        `cell ${display} has dropped ${n} remote changes in a row — it looks stranded (${held ? 1 : 0} held ` +
+          `value outstanding). A runtime edit diverged this cell from its baseline and never committed, so ` +
+          `remote changes keep being skipped. Commit the edit, or if you meant to discard it, write the ` +
+          `converged value back yourself (read it from the document, then commit). The framework does not ` +
+          `abort/roll back (§13.5).`,
+      );
+    }
+  }
+
+  /** Reset a cell's stranded counter on agreement — and re-arm its one-shot warning (§13.5). */
+  private resetStranded(ck: string): void {
+    this.dropCount.delete(ck);
+    this.strandedWarned.delete(ck);
   }
 
   // --- teardown: the four steps, IN ORDER (005 §5.6) ------------------------------------------------
@@ -392,6 +648,10 @@ class DurableBinding implements InboundSource {
     this.unsubscribe?.(); // 1. stop new local echoes arriving
     this.pendingLocal = []; // 2. discard queued-but-undrained echoes ...
     this.store.drainPending(); // ... and any queued-but-undrained remote batches on the store
+    this.held.clear(); // drop the held-cell ledger + counters — a re-attach is a fresh founding agreement
+    this.heldRes.clear();
+    this.dropCount.clear();
+    this.strandedWarned.clear();
     this.projector.teardown(); // 3. despawn every projected entity + clear the bijection
     this.store.setBijection(null); // handle-addressed reads return undefined between attachments (§14.3)
     this.store.setTxRuntime(null); // doc.transaction throws again once detached (no projector to mint)

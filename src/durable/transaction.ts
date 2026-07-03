@@ -120,6 +120,16 @@ export interface TxRuntime {
   readonly runtime: RuntimeStore;
   readonly projector: Projector;
   readonly baseline: BaselineSnapshot;
+  /**
+   * Clear a held-cell ledger entry (006 C5 supersession rule **(b)**, M4). The executor calls this for
+   * each SYNCHRONOUS pre-existing value write it applies (the §13.2 agreement point): our commit is the
+   * later Loro op and WINS committer-wins, so any remote value the drag-in-flight guard had held off for
+   * this cell **lost** and MUST be dropped — otherwise the end-of-drain sweep would resurrect a
+   * conflict-losing value once the cell reconverges. A no-op on the binding when no entry is held.
+   */
+  clearHeld(key: EntityKey, comp: Component): void;
+  /** The resource sibling of {@link clearHeld} — a committed (or removed) resource value supersedes a held one. */
+  clearHeldResource(res: Resource): void;
 }
 
 // --- recorded ops (decision A: the buffered batch the executor seals) --------------------------------
@@ -335,6 +345,7 @@ class Transaction implements Mutator {
       if (op.kind === "write") {
         this.tr.runtime.writeComponent(op.handle, op.comp, op.value); // 006 C4 chokepoint if in-system
         this.tr.baseline.setComponent(op.key, op.comp, op.value);
+        this.tr.clearHeld(op.key, op.comp); // 006 C5 (b): our commit wins — a held remote value for this cell lost
       }
     }
 
@@ -376,11 +387,13 @@ class Transaction implements Mutator {
           case "setResource": // value-like: runtime + baseline now, document here (§12.3)
             this.tr.runtime.setResource(op.res, op.value);
             this.tr.baseline.setResource(op.res, op.value);
+            this.tr.clearHeldResource(op.res); // 006 C5 (b): our committed resource value supersedes a held one
             this.snapshot.setResource(op.res, op.value);
             break;
           case "removeResource":
             this.tr.runtime.removeResource(op.res);
             this.tr.baseline.removeResource(op.res);
+            this.tr.clearHeldResource(op.res); // the structural-ish resource remove supersedes a held value too
             this.snapshot.removeResource(op.res);
             break;
           case "despawn":

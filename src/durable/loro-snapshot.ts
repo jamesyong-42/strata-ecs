@@ -535,7 +535,21 @@ export class LoroSnapshot implements CRDTSnapshot {
   }
 
   setComponent(key: EntityKey, c: Component, v: ComponentValue): void {
-    this.ensureChild(key).set(compKey(c), canon(c, v)); // 005 §2: store the canonical value
+    const child = this.ensureChild(key);
+    const canonical = canon(c, v); // 005 §2: canonical known-field values
+    // 006 B3 R4 — OVERLAY the known-field canonical values onto the register's CURRENT raw value, so a
+    // NEWER peer's unknown field (a `Position.z` this build lacks) SURVIVES this write instead of being
+    // stripped by a wholesale assignment. Without this, an older-schema peer committing a known-field
+    // change silently destroys the newer peer's extra field across the wire (cross-version data loss).
+    // A fresh / absent / poisoned (container) register writes the canonical value as-is. All local-schema
+    // compares stay well-defined because the baseline + surfaced ChangeEvent path strips extras via
+    // canon/tryCanon (R4: "the raw value with the extra field lives in Loro, not the baseline").
+    const cur = child.get(compKey(c));
+    if (cur !== undefined && !isContainer(cur) && typeof cur === "object" && cur !== null) {
+      child.set(compKey(c), { ...(cur as Record<string, unknown>), ...canonical });
+    } else {
+      child.set(compKey(c), canonical);
+    }
   }
 
   removeComponent(key: EntityKey, c: Component): void {
