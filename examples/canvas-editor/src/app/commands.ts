@@ -1,15 +1,23 @@
 /**
- * THE mutation funnel. Every document mutation in the app goes through `mutate()` — this is
- * load-bearing, not ceremony: strata Part I has no change events, so the funnel IS the
- * change detector (it raises the dirty flag the content layer repaints on). It is also the
- * documented seam where E-later features land without a rewrite: undo checkpoints wrap
- * `mutate()`, and Part III's `doc.transaction(...)` eventually replaces its body.
+ * THE mutation funnel. Every document mutation in the app goes through `mutate()` — still
+ * load-bearing, but no longer as the change detector: CHANGE DETECTION now belongs to the
+ * framework (one Tier-1 `world.reactive.observeQuery` in app/reactivity.ts drives repaint).
+ * `mutate()` remains the seam it always was — the autosave hook fires here, and undo
+ * checkpoints / Part III's `doc.transaction(...)` land here without a rewrite. It keeps the
+ * `onMutate` hook specifically because SELECTION is a tag: tag churn moves no watched column
+ * and `renderable` has no row filter, so it deliberately does NOT wake the Tier-1 observer —
+ * yet `Selected` rides the snapshot and must still schedule an autosave. This hook is that
+ * channel.
  */
 
 export const dirty = {
-  /** Document content changed (a mutate() ran) — repaint the content layer. */
+  /** MANUAL force-repaint channel for app-state the world cannot see — cull-test / LOD /
+   *  pipeline toggles (main.ts) and the first frame after a restore. NOT set by mutate()
+   *  anymore: document content changes are detected by the reactive observer instead. */
   doc: true,
-  /** Camera moved/zoomed/resized — repaint + re-sync the Camera resource before the tick. */
+  /** Camera moved/zoomed/resized — repaint + re-sync the Camera resource before the tick.
+   *  (Still manual: Camera is a resource, and resource reactivity is a deferred fast-follow,
+   *  002 §6.) */
   camera: true,
 };
 
@@ -23,10 +31,9 @@ export function setOnMutate(fn: () => void): void {
   onMutate = fn;
 }
 
-/** `repaint: false` is for overlay-only mutations (selection tags): the overlay repaints
- *  every frame anyway, and forcing a full content repaint + z-sort for them is waste. */
-export function mutate(_label: string, fn: () => void, opts?: { repaint?: boolean }): void {
+/** Run a document mutation, then fire the autosave hook. No repaint flag: the reactive
+ *  observer sees the column stamps / membership change and repaints on its own. */
+export function mutate(_label: string, fn: () => void): void {
   fn();
-  if (opts?.repaint !== false) dirty.doc = true;
   onMutate?.();
 }

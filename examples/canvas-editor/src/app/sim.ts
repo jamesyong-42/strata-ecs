@@ -43,6 +43,12 @@ export function setSimulate(on: boolean): void {
         vy[r] = Math.sin(angle) * speed;
       }
     });
+    // The randomizer poked the Velocity columns directly — a raw out-of-tick column walk, not a
+    // system (a system cannot clear the SimMode trigger this reads) and not edit(). Per 002 §2.2
+    // such writes are deliberately "not a stamp source": no chokepoint sees them. invalidate()
+    // is the documented escape hatch — a manual whole-component stamp keeping the write visible
+    // to any future Velocity observer (there is none today; this models the sanctioned pattern).
+    w.reactive.invalidate(Velocity);
   }
   w.setResource(SimMode, { on, bound });
   scheduleAutosave(); // velocities + SimMode are document state — they ride in the snapshot

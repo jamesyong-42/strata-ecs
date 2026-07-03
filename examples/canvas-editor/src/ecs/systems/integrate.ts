@@ -25,7 +25,9 @@ export const IntegrateSystem = defineSystem(
       py[r] += vy[r] * DT;
     }
   },
-  { name: "Integrate" },
+  // Reads Velocity, writes Position — blanket-stamps Position every sim frame, which is what
+  // drives repaint while simulating (the frame loop no longer keys paint off isSimOn()).
+  { name: "Integrate", access: { write: [Position], read: [Velocity] } },
 );
 
 export const BounceSystem = defineSystem(
@@ -54,5 +56,6 @@ export const BounceSystem = defineSystem(
       }
     }
   },
-  { name: "Bounce" },
+  // Writes both columns (reflects Velocity, clamps Position at the walls).
+  { name: "Bounce", access: { write: [Position, Velocity] } },
 );

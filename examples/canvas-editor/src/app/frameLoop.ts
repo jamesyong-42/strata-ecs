@@ -13,8 +13,8 @@ import type { Pipeline } from "strata";
 import { drawBuffer } from "../render/drawBuffer";
 import { syncCameraResource } from "./camera";
 import { dirty } from "./commands";
-import { isSimOn } from "./sim";
-import { gestureActive, syncGestureResource } from "./tools";
+import { repaint } from "./reactivity";
+import { syncGestureResource } from "./tools";
 import { worldRef } from "./worldRef";
 
 export interface FrameStats {
@@ -47,14 +47,22 @@ export function startFrameLoop(
     world.tick(pipeline());
     const ecsMs = performance.now() - t0;
 
-    // Content paint is dirty-gated (no change events exist — the commands.ts funnel, the
-    // camera, and an active gesture are the only writers, so their flags ARE the change
-    // detection). The overlay repaints every frame; it never forces a content repaint.
-    const painted = dirty.doc || dirty.camera || gestureActive() || isSimOn();
+    // THE settled point (002 §4.1): after all ticks, compare stamps and fire dirty observers.
+    // The renderable Tier-1 observer (app/reactivity.ts) sets repaint.doc here when any drawn
+    // column stamped this frame. Re-read worldRef so a mid-input restore's fresh world is the
+    // one we notify. Must run BEFORE the paint gate below.
+    worldRef.current.reactive.notify();
+
+    // Content paint gate. The reactive observer (repaint.doc) IS the change detector now — a
+    // drag/draw/duplicate/delete/running-sim all reach it through column stamps + rows-version;
+    // dirty.doc/camera stay only for app-state the world can't see (toggles, restore, camera).
+    // The overlay repaints every frame; it never forces a content repaint.
+    const painted = repaint.doc || dirty.doc || dirty.camera;
     const p0 = performance.now();
     if (painted) {
       drawBuffer.sortByZ(); // app-side prep, honestly billed to paint, not to the ECS
       paintContent();
+      repaint.doc = false;
       dirty.doc = false;
       dirty.camera = false;
     }

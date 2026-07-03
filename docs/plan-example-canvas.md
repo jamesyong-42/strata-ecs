@@ -3,7 +3,11 @@
 **Status: IMPLEMENTED** (MVP: T0 `e14a1bc` · E0 `aeae407` · E1 `3c0d03b` + review sweep
 `08f69af` · T1 `c6b35f4` · E2 `707cff1` · E3 — each milestone adversarially reviewed and
 headless-Chrome verified. §11 extensions remain open; the separate app inspector was
-dropped as redundant — the `strata/tools` observer's detail pane covers it.)
+dropped as redundant — the `strata/tools` observer's detail pane covers it.
+**Reactivity refactor** (Patch Notes 001+002, commit pending): change detection moved from the
+hand-raised `dirty.doc` flag to one Tier-1 `world.reactive.observeQuery` (`app/reactivity.ts`);
+the writing systems now declare `access`, and a per-frame `world.reactive.notify()` sits in the
+frame loop — the world is the change detector.)
 
 An infinite-canvas whiteboard built on strata Part I, in **vanilla TypeScript** (no UI
 framework), rendered with **Canvas2D**, at **MVP scope first**. It exists to answer one

@@ -29,5 +29,12 @@ export const DragMoveSystem = defineSystem(
       py[r] += dy;
     }
   },
-  { name: "DragMove", runIf: (ctx) => ctx.getResource(Gesture)?.mode === "drag" },
+  {
+    name: "DragMove",
+    // The runIf gate is load-bearing under reactivity (001 §3.4): a gated-off system doesn't
+    // run, so its blanket `write: [Position]` stamp is never laid down — idle frames stay
+    // stamp-free and the Tier-1 renderable observer (app/reactivity.ts) never fires at rest.
+    runIf: (ctx) => ctx.getResource(Gesture)?.mode === "drag",
+    access: { write: [Position] },
+  },
 );

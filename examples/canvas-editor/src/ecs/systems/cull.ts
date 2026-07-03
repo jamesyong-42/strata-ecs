@@ -58,5 +58,8 @@ export const CullSystem = defineSystem(
       db.push(cx, cy, sw[r], sh[r], color, kk[r], zz[r], b.entity(r));
     }
   },
+  // Pure reader — no `access` declaration needed (001 §2.3): with `access` omitted the read
+  // set defaults to the query's components, exactly what `b.col()` touches here, and `write`
+  // is empty so Cull lays down no stamps. A render/extract system is correct declaring nothing.
   { name: "Cull" },
 );

@@ -7,7 +7,7 @@
 
 import type { Entity, World } from "strata";
 import { ConnectedTo, Fill, Kind, Label, Position, Size, Velocity, ZIndex } from "../ecs/schema";
-import { dirty, stats } from "./commands";
+import { stats } from "./commands";
 
 /** mulberry32 — tiny deterministic PRNG. */
 function rng(seed: number): () => number {
@@ -120,6 +120,8 @@ export function seedBoard(world: World, count: number, seed = 42): SeedResult {
 
   stats.entities += count;
   stats.zTop = Math.max(stats.zTop, count);
-  dirty.doc = true;
+  // No manual repaint flag: post-boot stress spawns bump the matched archetypes' rows-version,
+  // so the Tier-1 observer fires; the boot seed (before wireReactivity arms stamping) paints
+  // from commands.ts's initial `dirty.doc` instead.
   return { count, arrows, ms: performance.now() - t0 };
 }

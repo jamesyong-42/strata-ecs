@@ -30,6 +30,7 @@ exercises the built dist through the real exports map instead.
 | Refresh the tab | `world.export()`/`import()` — built-in whole-world serialization no rival JS ECS ships (autosave + ⤓/⤒ file round-trip; the viewport rides in the `Camera` resource) |
 | Click a shape in the observer's entities tab | live component/tag/relation reflection; watch `Selected` blink as you click |
 | Untick `Cull` (or `cull test`) in the HUD | the schedule is a plain array — and self-inflicted jank shows what the sweep saves |
+| Open the console and watch nothing repaint at idle — then drag | the repaint is driven by `world.reactive.observeQuery`, not hand-set dirty flags |
 
 The **observer panel** (top right) is not app code — it's `strata/tools`, the framework's
 own dev tool, mounted with one call and an app-supplied labeling callback
@@ -53,8 +54,10 @@ src/
   app/                          the editor around the world
     worldRef.ts                   THE single World reference (restore swaps it)
     frameLoop.ts                  sync() → tick() → paint, ecs/paint split measured     §16.2
-    commands.ts                   the mutation funnel = the change detector (no events
-                                  in Part I) + the autosave hook + future undo seam
+    commands.ts                   the mutation funnel: autosave hook + future undo/tx seam
+                                  (change detection moved out — see reactivity.ts)
+    reactivity.ts                 the ONE Tier-1 observeQuery that drives repaint + autosave;
+                                  the world is the change detector (§002 reactivity)
     tools.ts                      tools as state machines; preview per-frame, COMMIT
                                   once at gesture end (the future doc.transaction spot) §18.5
     input.ts                      DOM events → world-space → active tool, between frames §18.4
@@ -75,9 +78,10 @@ src/
 
 Three rules hold the boundaries (violating any of them is how ECS apps rot):
 
-1. **All document mutation goes through `commands.ts`**, immediately, outside the tick —
-   its dirty flag is the change detection and its hook is the autosave; undo checkpoints
-   and Part III's `doc.transaction` land there without a rewrite.
+1. **Document mutation still flows through `commands.ts`** (the autosave / undo /
+   `doc.transaction` seam), but **change detection is now the framework's**: one Tier-1
+   `world.reactive.observeQuery` in `app/reactivity.ts` drives both repaint and autosave —
+   the world is the change detector, not a hand-raised dirty flag. (See `docs/002-reactivity.md`.)
 2. **Systems are the only users of `ctx`**; per-frame math lives in systems; `Batch`
    rows/columns are consumed inside `each()` and never retained.
 3. **Rendering is imperative, after `tick()` returns**, from the draw buffer — never a

@@ -17,6 +17,7 @@ import { startFrameLoop } from "./app/frameLoop";
 import { hitTestPoint, hitTestRegion } from "./app/hitTest";
 import { attachInput } from "./app/input";
 import { hasAutosave, loadAutosave, onRestore, saveToLocalStorage, scheduleAutosave } from "./app/persistence";
+import { wireReactivity } from "./app/reactivity";
 import { seedBoard } from "./app/seed";
 import { isSimOn, setSimBound, setSimulate } from "./app/sim";
 import { clearBoard, stressSpawn } from "./app/stress";
@@ -112,6 +113,10 @@ if (!booted) {
   zoomToFit();
 }
 setOnMutate(scheduleAutosave); // every document mutation debounces an idle-time export
+// Wire the single Tier-1 renderable observer that drives repaint + autosave. Called AFTER the
+// boot seed so the (unarmed) seed pays no stamping tax — the seeded board's first paint comes
+// from commands.ts's initial dirty.doc, not from the observer (registration never back-fires).
+wireReactivity();
 
 buildToolbar(document.getElementById("toolbar") as HTMLElement, notify);
 attachInput(overlay, notify);
@@ -129,6 +134,8 @@ let observer = attachObserver(worldRef.current, obsOpts);
 onRestore(() => {
   observer.dispose();
   observer = attachObserver(worldRef.current, obsOpts);
+  wireReactivity(); // fresh world = fresh reactive registry — re-subscribe (002 §6); restore()
+  // already set dirty.doc so the first post-restore frame paints (registration never back-fires)
   hud.setSimState(isSimOn()); // SimMode rides in the snapshot — a restored storm resumes
 });
 startFrameLoop(

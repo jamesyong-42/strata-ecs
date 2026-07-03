@@ -29,9 +29,12 @@ import { worldRef } from "./worldRef";
 const LS_KEY = "strata-canvas:autosave";
 const LS_QUARANTINE = "strata-canvas:autosave-incompatible";
 const AUTOSAVE_DEBOUNCE_MS = 800;
+// Ceiling on how long the trailing debounce may be pushed out before a save is forced.
+const AUTOSAVE_MAX_WAIT_MS = 10_000;
 
 let saveTimer: number | undefined;
 let idlePending = false;
+let lastSaveAt = performance.now();
 const restoreListeners: (() => void)[] = [];
 
 export function onRestore(fn: () => void): void {
@@ -39,6 +42,12 @@ export function onRestore(fn: () => void): void {
 }
 
 export function scheduleAutosave(): void {
+  // Max-wait ceiling on the trailing debounce. Under reactivity the autosave hook fires far
+  // more often than before: while the sim runs, Integrate stamps Position every frame, the
+  // Tier-1 renderable observer fires every notify(), and this is called every frame — a pure
+  // trailing debounce would be pushed out forever and never save. Once >MAX_WAIT has elapsed
+  // since the last successful save, stop resetting and let the already-pending timer fire.
+  if (saveTimer !== undefined && performance.now() - lastSaveAt > AUTOSAVE_MAX_WAIT_MS) return;
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
     saveTimer = undefined;
@@ -79,6 +88,7 @@ export function saveToLocalStorage(): boolean {
   try {
     const bytes = worldRef.current.export();
     localStorage.setItem(LS_KEY, new TextDecoder().decode(bytes));
+    lastSaveAt = performance.now(); // resets the max-wait clock for every real save path
     return true;
   } catch {
     return false; // quota — a 100k-shape board is a multi-MB JSON string

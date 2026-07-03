@@ -35,26 +35,18 @@ export function selectedCount(): number {
 export function setSelection(entities: readonly Entity[], additive = false): void {
   const w = worldRef.current;
   const prev = additive ? [] : selectedEntities();
-  mutate(
-    "select",
-    () => {
-      for (const e of prev) w.removeTag(e, Selected);
-      for (const e of entities) if (w.isAlive(e) && !w.hasTag(e, Selected)) w.addTag(e, Selected);
-    },
-    { repaint: false },
-  );
+  mutate("select", () => {
+    for (const e of prev) w.removeTag(e, Selected);
+    for (const e of entities) if (w.isAlive(e) && !w.hasTag(e, Selected)) w.addTag(e, Selected);
+  });
 }
 
 export function toggleSelection(e: Entity): void {
   const w = worldRef.current;
-  mutate(
-    "toggle-select",
-    () => {
-      if (w.hasTag(e, Selected)) w.removeTag(e, Selected);
-      else w.addTag(e, Selected);
-    },
-    { repaint: false },
-  );
+  mutate("toggle-select", () => {
+    if (w.hasTag(e, Selected)) w.removeTag(e, Selected);
+    else w.addTag(e, Selected);
+  });
 }
 
 export function clearSelection(): void {

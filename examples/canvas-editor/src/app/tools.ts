@@ -10,7 +10,6 @@
 import type { Entity } from "strata";
 import { Gesture, Selected } from "../ecs/schema";
 import { cam, panBy } from "./camera";
-import { dirty } from "./commands";
 import {
   createShape,
   destroyShape,
@@ -186,14 +185,15 @@ export function pointerUp(p: PointerInfo): void {
         setSelection([d]);
         setTool("select");
       }
-      dirty.doc = true;
+      // No manual repaint flag: the spawn + resize during the draw already stamped
+      // Position/Size (and bumped the rows-version), so the reactive observer has fired.
       return;
     }
     case "drag":
       // gesture end = the future one-commit point (undo checkpoint / doc.transaction);
-      // dragEnd flushes the residual pointer delta through one more tick first
+      // dragEnd flushes the residual pointer delta through one more tick first — DragMove's
+      // Position stamps drove the repaints, so no manual flag is needed here either.
       interaction.mode = "dragEnd";
-      dirty.doc = true;
       return;
     default:
       interaction.mode = "idle";
