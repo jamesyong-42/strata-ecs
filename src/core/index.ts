@@ -68,7 +68,7 @@ export type { InboundSource } from "./world";
 export { Reactive } from "./reactive";
 export type { Unsubscribe } from "./reactive";
 
-// --- dev-tool observability (the `strata/tools` data feed) ---
+// --- dev-tool observability (the `strata-ecs/tools` data feed) ---
 export type { WorldObserver } from "./observe";
 
 // --- the store contract + implementation + command types (the seam Parts II–IV build on) ---

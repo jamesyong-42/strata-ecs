@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    // .tsx covers the strata/react binding tests (src/react/react.test.tsx).
+    // .tsx covers the strata-ecs/react binding tests (src/react/react.test.tsx).
     include: ["src/**/*.{test,spec}.{ts,tsx}", "test/**/*.{test,spec}.{ts,tsx}"],
     benchmark: {
       include: ["src/**/*.bench.ts", "bench/**/*.bench.ts"],

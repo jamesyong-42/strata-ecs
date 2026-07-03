@@ -3,7 +3,7 @@
 **Status: IMPLEMENTED** (MVP: T0 `e14a1bc` · E0 `aeae407` · E1 `3c0d03b` + review sweep
 `08f69af` · T1 `c6b35f4` · E2 `707cff1` · E3 — each milestone adversarially reviewed and
 headless-Chrome verified. §11 extensions remain open; the separate app inspector was
-dropped as redundant — the `strata/tools` observer's detail pane covers it.
+dropped as redundant — the `strata-ecs/tools` observer's detail pane covers it.
 **Reactivity refactor** (Patch Notes 001+002, commit pending): change detection moved from the
 hand-raised `dirty.doc` flag to one Tier-1 `world.reactive.observeQuery` (`app/reactivity.ts`);
 the writing systems now declare `access`, and a per-frame `world.reactive.notify()` sits in the
@@ -170,7 +170,7 @@ The HUD is the credibility centerpiece and the marketing asset (designed to look
 screenshot crop). **Per James's direction, the profiler half is a first-party framework
 tool, not app code** — see `plan-tools-observer.md`: the per-system µs table, per-phase
 flush rows, entity/component inspection, and the lifecycle timeline come from
-**`strata/tools`** (`attachObserver(world, { describe })`). What stays app-side in the
+**`strata-ecs/tools`** (`attachObserver(world, { describe })`). What stays app-side in the
 example's own HUD:
 
 - Frame-time sparkline with the **ECS-vs-paint split** (ms history — a wandering line is
@@ -192,7 +192,7 @@ never cache an `Entity` handle across a restore.
 
 ## 8. Workspace integration (bench/compare precedent, hand-written — no scaffolder)
 
-- `examples/canvas-editor/` as a pnpm workspace member `@strata/example-canvas-editor`
+- `examples/canvas-editor/` as a pnpm workspace member `@strata-ecs/example-canvas-editor`
   (private, `type: module`). Deps: `strata: workspace:*` only. DevDeps: `vite`,
   `typescript`. **No other runtime dependency.**
 - Vite consumes strata via **live source** (exact-match regex alias `/^strata$/` →
@@ -206,7 +206,7 @@ never cache an `Entity` handle across a restore.
   `"examples/"` to eslint ignores, add `examples/canvas-editor` to `pnpm-workspace.yaml`,
   add `pnpm.onlyBuiltDependencies: ["esbuild"]` (pnpm 10 blocks postinstall).
 - Example gets its own `typecheck` script; root `ci` untouched. Convenience root script
-  `example:canvas` → `pnpm --filter @strata/example-canvas-editor dev`.
+  `example:canvas` → `pnpm --filter @strata-ecs/example-canvas-editor dev`.
 
 Folder layout (~20 small files, each one lesson):
 
@@ -266,7 +266,7 @@ per-shape DOM nodes, a second state library, uniform-grid benchmark boards.
 - **E1 — it's an editor**: hit-test, click/shift/marquee selection + overlay layer ·
   `DragMove` gesture · create tools (R/O/N drag-to-size) · delete · Cmd-D duplicate (with
   timing toast) · toolbar + shortcuts.
-- **T1 — `strata/tools` observer** (framework, developed against the example): panel shell ·
+- **T1 — `strata-ecs/tools` observer** (framework, developed against the example): panel shell ·
   entities tab · loop readout · lifecycle recorder + timeline.
 - **E2 — it shows its receipts**: simulate mode (`Integrate`/`Bounce`, `runIf`) · stress
   controls + `?count=` · mounts the observer (`attachObserver`) · app HUD sparkline with

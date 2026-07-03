@@ -4,7 +4,7 @@
  * timing feeds the toast (entity lifecycle is strata's measured benchmark win).
  */
 
-import type { Entity } from "strata";
+import type { Entity } from "strata-ecs";
 import { renderable } from "../ecs/queries";
 import { mutate, stats } from "./commands";
 import { scheduleAutosave } from "./persistence";

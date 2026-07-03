@@ -1,9 +1,9 @@
 {
   "context": { "cpu": "Apple M1 Max", "arch": "arm64-darwin", "node": "24.14.1" },
-  "libs": ["strata", "bitecs", "becsy", "miniplex", "koota"],
-  "versions": { "strata": "0.0.0", "bitecs": "0.4.0", "becsy": "0.16.0", "miniplex": "2.0.0", "koota": "0.6.6" },
+  "libs": ["strata-ecs", "bitecs", "becsy", "miniplex", "koota"],
+  "versions": { "strata-ecs": "0.0.0", "bitecs": "0.4.0", "becsy": "0.16.0", "miniplex": "2.0.0", "koota": "0.6.6" },
   "byLib": {
-    "strata": {
+    "strata-ecs": {
       "packed_5": { "avg_ns": 8990 },
       "simple_iter": { "avg_ns": 12640 },
       "frag_iter": { "avg_ns": 7430 },

@@ -2,7 +2,7 @@
 
 **Baseline:** `design.md` (locked) Parts II–IV, adjudicated against `design-comments.md` and the
 as-built Part I (which now includes T0 observability, 001 access declaration, 002 reactivity, 003
-resource reactivity + strata/react — none of which existed when Parts II–IV were specced).
+resource reactivity + strata-ecs/react — none of which existed when Parts II–IV were specced).
 
 **Method:** 4 design dimensions (comments-correctness, comments-domain, reactivity×II–IV,
 substrate-fit), each red-teamed by an independent skeptic; every amendment below is
@@ -201,7 +201,7 @@ incl. migrate carry-forward; place/unplace bump lastStructuralFrame; tag/rel ops
 destroy at :656; setResource at :924). Make it a MUST: projection MUST route through the stamped
 primitives; raw-column projection is forbidden (a future bulk-attach fast path may exist only if it
 stamps equivalently). Consequence stated as a guarantee: remote edits/echoes/attach/undo are visible
-to `world.reactive` and `strata/react` with no additional feed. Amend 002's "local-runtime only /
+to `world.reactive` and `strata-ecs/react` with no additional feed. Amend 002's "local-runtime only /
 remote feeds deferred" language — obsoleted by construction. Attaching a store does NOT flip
 `reactiveOn` (a collaborative world with no observers pays zero stamp stores).
 
@@ -273,7 +273,7 @@ compares against the last-set value and skips `setResource` when equal. Peer LIS
 (`[PresenceInfo, Not(Local)]`), never a resource. Connection state stays app-owned (the binding
 never sees the transport) — bless the app-defined ConnectionState-resource pattern.
 
-### C8 (could, sound) — strata/tools sync tab + SyncObserver → tools section
+### C8 (could, sound) — strata-ecs/tools sync tab + SyncObserver → tools section
 
 `binding.observeSync(obs)` under exactly the T0 contract (branch-on-null, read-only, must-not-throw,
 fires mid-drain so callbacks must not mutate): onEnqueue/onDrainStart/onFactApplied/onHold/

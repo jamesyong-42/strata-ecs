@@ -1,7 +1,7 @@
 /**
  * The app HUD: fps + the ECS-vs-paint frame split, a frame-time sparkline (a wandering line
  * is more credible than a pinned 60), stress controls, SIMULATE, and the self-inflicted-
- * jank toggles. The per-system µs table lives in the strata/tools observer panel — this HUD
+ * jank toggles. The per-system µs table lives in the strata-ecs/tools observer panel — this HUD
  * is the app's own cockpit. Text updates at 10 Hz; only the tiny sparkline draws per frame.
  */
 

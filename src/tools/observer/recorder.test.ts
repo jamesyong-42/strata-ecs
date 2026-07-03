@@ -3,7 +3,7 @@ import { createWorld, defineComponent } from "../../core/index";
 import { createLifecycleRecorder } from "./recorder";
 import type { DescribeFn } from "./describe";
 
-// Node-safe slice of strata/tools (no DOM): the recorder is pure hook plumbing.
+// Node-safe slice of strata-ecs/tools (no DOM): the recorder is pure hook plumbing.
 const RPos = defineComponent("TOOLSRecPos", { x: "f32" });
 
 const describeFn: DescribeFn = (world, e) => ({
@@ -12,7 +12,7 @@ const describeFn: DescribeFn = (world, e) => ({
   phase: null,
 });
 
-describe("strata/tools lifecycle recorder", () => {
+describe("strata-ecs/tools lifecycle recorder", () => {
   it("records births and freezes the final description at death (pre-teardown)", () => {
     const w = createWorld();
     const rec = createLifecycleRecorder(w, describeFn);

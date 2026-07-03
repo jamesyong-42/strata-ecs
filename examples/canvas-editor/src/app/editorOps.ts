@@ -6,7 +6,7 @@
  * marquee's live preview is an app-side array until pointer-up.
  */
 
-import type { Entity } from "strata";
+import type { Entity } from "strata-ecs";
 import { selectedBoxes } from "../ecs/queries";
 import { Fill, Kind, Label, Position, Selected, Size, Velocity, ZIndex } from "../ecs/schema";
 import { mutate, stats } from "./commands";

@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const COLORS = {
-  strata: "#a371f7",
+  "strata-ecs": "#a371f7",
   bitecs: "#58a6ff",
   becsy: "#f778ba",
   miniplex: "#ffa657",
@@ -45,7 +45,7 @@ const GROUPS = [
     blurb: "Editor-centric workloads beyond the canonical suite.",
     ids: ["serialize", "random_access"],
     labels: {
-      serialize: "serialize · whole-world save + load (strata built-in)",
+      serialize: "serialize · whole-world save + load (strata-ecs built-in)",
       random_access: "random_access · read one field for 10k random entities",
     },
   },
@@ -103,7 +103,7 @@ export function renderReport({ context, libs, versions, byLib }) {
       const times = libs.map((l) => byLib[l]?.[id]?.avg_ns).filter((x) => x != null);
       if (!times.length) return false;
       const best = Math.min(...times);
-      return byLib.strata?.[id]?.avg_ns === best;
+      return byLib["strata-ecs"]?.[id]?.avg_ns === best;
     });
 
   const sections = GROUPS.map((g) => {
@@ -121,7 +121,7 @@ export function renderReport({ context, libs, versions, byLib }) {
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>strata — ECS benchmarks</title>
+<title>strata-ecs — ECS benchmarks</title>
 <style>
   :root{
     --bg:#0b0e14; --panel:#111725; --panel2:#0e1420; --line:#1e2637; --ink:#e6edf3;
@@ -182,14 +182,14 @@ export function renderReport({ context, libs, versions, byLib }) {
 <body><div class="wrap">
   <header class="top">
     <p class="eyebrow">Comparative benchmark</p>
-    <h1><span class="g">strata</span> vs the TypeScript ECS field</h1>
-    <p class="lede">strata (archetype-SoA, built for editor / collaboration workloads) measured against bitecs, becsy, miniplex, and koota. Each scenario runs in every library's idiomatic fastest form; all libraries agree on a per-scenario checksum, so the work is provably identical.</p>
+    <h1><span class="g">strata-ecs</span> vs the TypeScript ECS field</h1>
+    <p class="lede">strata-ecs (archetype-SoA, built for editor / collaboration workloads) measured against bitecs, becsy, miniplex, and koota. Each scenario runs in every library's idiomatic fastest form; all libraries agree on a per-scenario checksum, so the work is provably identical.</p>
     <div class="chips">${legend}</div>
     <div class="meta">${esc(context.cpu)} · ${esc(context.arch)} · Node ${esc(context.node)} · mitata · one process per library · lower µs/op is better</div>
   </header>
 
   <div class="highlight">
-    <b>strata is fastest in ${wins.length} of ${GROUPS.flatMap((g) => g.ids).length} scenarios</b> — top-tier on dense iteration and fastest on entity-lifecycle / in-system churn (its target workload). It carries honest, structural cost on component add/remove and random-access-by-handle, and uniquely ships serialization.
+    <b>strata-ecs is fastest in ${wins.length} of ${GROUPS.flatMap((g) => g.ids).length} scenarios</b> — top-tier on dense iteration and fastest on entity-lifecycle / in-system churn (its target workload). It carries honest, structural cost on component add/remove and random-access-by-handle, and uniquely ships serialization.
     <div class="wins">${winChips}</div>
   </div>
 
@@ -199,7 +199,7 @@ export function renderReport({ context, libs, versions, byLib }) {
     <h4>How to read this</h4>
     <ul>
       <li>Each bar's length is <b>relative speed</b> within that scenario — the fastest library gets a full bar; a library 2× slower gets a half bar. The label shows the actual µs/op and the ×-multiple vs the fastest.</li>
-      <li>Lower µs/op is better. <b>strata</b>'s row is outlined.</li>
+      <li>Lower µs/op is better. <b>strata-ecs</b>'s row is outlined.</li>
     </ul>
     <h4>Method</h4>
     <ul>

@@ -16,7 +16,7 @@
  * the observer at `frame − 1`, so a change made in the SAME frame as registration is observed at the
  * very next `notify()` while nothing stamped before the subscription ever fires — no priming needed.
  *
- * The core stays framework-agnostic — it is built over a {@link RuntimeStore} alone; `@strata/react`
+ * The core stays framework-agnostic — it is built over a {@link RuntimeStore} alone; `strata-ecs/react`
  * is a thin `useSyncExternalStore` adapter over Tier 3 + {@link Reactive.peek} (002 §5).
  */
 
@@ -369,7 +369,7 @@ export class Reactive {
    * for each watch's own eq decision; serving one from peek made the snapshot depend on which
    * watch registered first (a coexisting coarse-eq watch starved React re-renders — an
    * adversarially-confirmed heisenbug). `get` decodes a fresh object per call, so a
-   * `useSyncExternalStore` consumer must ref-cache its snapshot (strata/react does).
+   * `useSyncExternalStore` consumer must ref-cache its snapshot (strata-ecs/react does).
    */
   peek<S>(e: Entity, c: Component<S>): S | undefined {
     return this.store.get(e, c);

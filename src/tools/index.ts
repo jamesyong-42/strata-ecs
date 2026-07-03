@@ -1,9 +1,9 @@
 /**
- * `strata/tools` — first-party dev tools (docs/plan-tools-observer.md).
+ * `strata-ecs/tools` — first-party dev tools (docs/plan-tools-observer.md).
  *
  * The Observer is a zero-dependency vanilla-DOM panel usable from ANY host app:
  *
- *   import { attachObserver } from "strata/tools";
+ *   import { attachObserver } from "strata-ecs/tools";
  *   const obs = attachObserver(world, { describe });   // …later: obs.dispose()
  *
  * Three tabs: **entities** (virtualized live list + component/tag/relation detail pane),

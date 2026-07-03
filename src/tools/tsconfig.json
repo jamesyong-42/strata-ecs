@@ -1,5 +1,5 @@
 {
-  // strata/tools is a browser panel — same strictness as the root config plus DOM libs.
+  // strata-ecs/tools is a browser panel — same strictness as the root config plus DOM libs.
   // The ROOT tsconfig excludes src/tools precisely so the core keeps typechecking without
   // DOM (that absence is the "core never touches the browser" guarantee); this project is
   // the tools' half of `pnpm typecheck`.

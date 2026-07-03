@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * `strata/react` binding tests (003 §2.3). Drives REAL `react-dom/client` roots under happy-dom,
+ * `strata-ecs/react` binding tests (003 §2.3). Drives REAL `react-dom/client` roots under happy-dom,
  * inside `act()`, with `reactive.notify()` called by the test as the frame loop (002 §4.1 — notify is
  * user-called). Render counts are read from a probe that bumps a counter each render; useSyncExternalStore
  * bails out (no render) when `getSnapshot` returns the same boxed reference, which is exactly what the

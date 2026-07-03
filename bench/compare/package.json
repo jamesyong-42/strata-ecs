@@ -1,14 +1,14 @@
 {
-  "name": "@strata/bench-compare",
+  "name": "@strata-ecs/bench-compare",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Isolated cross-library ECS benchmark: strata vs bitecs, becsy, miniplex, koota.",
+  "description": "Isolated cross-library ECS benchmark: strata-ecs vs bitecs, becsy, miniplex, koota.",
   "scripts": {
     "bench": "node run.mjs"
   },
   "dependencies": {
-    "strata": "workspace:*"
+    "strata-ecs": "workspace:*"
   },
   "devDependencies": {
     "@lastolivegames/becsy": "0.16.0",

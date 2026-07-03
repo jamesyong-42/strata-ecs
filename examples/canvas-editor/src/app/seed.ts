@@ -5,7 +5,7 @@
  * product). Same seed + same ?count= → identical board, byte for byte.
  */
 
-import type { Entity, World } from "strata";
+import type { Entity, World } from "strata-ecs";
 import { ConnectedTo, Fill, Kind, Label, Position, Size, Velocity, ZIndex } from "../ecs/schema";
 import { stats } from "./commands";
 

@@ -1,5 +1,5 @@
 {
-  // strata/react is a React binding — same strictness as the root config plus DOM libs and the
+  // strata-ecs/react is a React binding — same strictness as the root config plus DOM libs and the
   // automatic JSX runtime (for the .tsx tests). The ROOT tsconfig excludes src/react precisely so
   // the core keeps typechecking without DOM/React (that absence is the "core never touches React"
   // guarantee); this project is the react half of `pnpm typecheck`.

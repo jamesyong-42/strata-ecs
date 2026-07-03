@@ -53,7 +53,7 @@ importers:
 
   bench/compare:
     dependencies:
-      strata:
+      strata-ecs:
         specifier: workspace:*
         version: link:../..
     devDependencies:
@@ -75,7 +75,7 @@ importers:
 
   examples/canvas-editor:
     dependencies:
-      strata:
+      strata-ecs:
         specifier: workspace:*
         version: link:../..
     devDependencies:

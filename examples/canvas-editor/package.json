@@ -1,8 +1,8 @@
 {
-  "name": "@strata/example-canvas-editor",
+  "name": "@strata-ecs/example-canvas-editor",
   "version": "0.0.0",
   "private": true,
-  "description": "Flagship strata example: an infinite-canvas whiteboard in vanilla TS + Canvas2D. The only runtime dependency is strata itself.",
+  "description": "Flagship strata-ecs example: an infinite-canvas whiteboard in vanilla TS + Canvas2D. The only runtime dependency is strata-ecs itself.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "strata": "workspace:*"
+    "strata-ecs": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

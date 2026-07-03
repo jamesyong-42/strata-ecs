@@ -1,12 +1,12 @@
-# Plan — `strata/tools`: first-party dev tools, starting with the Observer
+# Plan — `strata-ecs/tools`: first-party dev tools, starting with the Observer
 
 **Status: IMPLEMENTED** (T0 core observability `e14a1bc` — bench-gated within noise; T1
 panel `c6b35f4` — 15 adversarial-review findings fixed pre-commit. Companion to
 `plan-example-canvas.md`.)
 
 James's direction: profilers/inspectors are **out-of-the-box framework tools**, not app code.
-They live in a `src/tools/` folder shipped as the **`strata/tools`** subpath export
-(mirroring the planned `strata/durable` / `strata/ephemeral` entries). First tool: a port of
+They live in a `src/tools/` folder shipped as the **`strata-ecs/tools`** subpath export
+(mirroring the planned `strata-ecs/durable` / `strata-ecs/ephemeral` entries). First tool: a port of
 the ECS Observer he built for `@jamesyong42/reactive-ecs`
 (`infinite-canvas/apps/playground/src/prototype/ObserverPanel.tsx` + `EntityTimeline.tsx` +
 `lifecycle.ts` + `engine.ts` stats).
@@ -83,7 +83,7 @@ Rules:
   and `sim_frame` must be unchanged within noise (they are our measured wins — the observer
   branch must be invisible).
 
-## 4. The tool itself — `src/tools/` → `strata/tools`
+## 4. The tool itself — `src/tools/` → `strata-ecs/tools`
 
 **Zero-dependency vanilla DOM + canvas** (no React — usable from any host app, including the
 vanilla canvas-editor example; a React wrapper is a 10-line `useEffect` if ever wanted).
@@ -136,7 +136,7 @@ Port adaptations (beyond React→vanilla):
 
 `plan-example-canvas.md` §6's HUD splits in two:
 
-- **From the framework** (`strata/tools`): the Observer panel — per-system µs table, flush
+- **From the framework** (`strata-ecs/tools`): the Observer panel — per-system µs table, flush
   rows, entity/tag inspection, lifecycle timeline. The example just calls
   `attachObserver(world, { describe })`.
 - **Stays app-side**: stress controls (`+10k`, `?count=`), simulate/culling/LOD toggles,
@@ -151,7 +151,7 @@ belongs to the **framework**, Flecs-Explorer style — no JS ECS ships anything 
 1. **T0 — core observability**: `WorldObserver` + `world.observe` + `tickCount` + system
    `name` opt; unit tests; **bench/compare re-run gate**.
 2. **E0–E1** (example skeleton + editor verbs) — the host app the tool is developed against.
-3. **T1 — `strata/tools` observer**: panel shell + entities tab + loop readout (recorder +
+3. **T1 — `strata-ecs/tools` observer**: panel shell + entities tab + loop readout (recorder +
    timeline included; developed live against the example).
 4. **E2–E3** as planned, with the example mounting the observer instead of hand-rolling a
    per-system HUD table.

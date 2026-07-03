@@ -10,7 +10,7 @@
 
 ## 0. What this note does
 
-004's headline discovery is that Part I already overbuilt into the collaborative layers: every projector primitive stamps behind the `reactiveOn` gate, so remote edits, own-echoes, attach, and undo already light up `world.reactive`/`strata/react`. Most of the work below is therefore **making implicit truths normative** and correcting three concrete falsehoods in the locked text (§17's gesture-safety claim, §15.2's `isIterating` guard, §17's tombstone/GC language). The amendments are grouped as in 004: **A** (correctness + Part I addenda), **B** (domain gaps), **C** (reactivity × the layers). Priorities are marked **(must / should / could)** per 004.
+004's headline discovery is that Part I already overbuilt into the collaborative layers: every projector primitive stamps behind the `reactiveOn` gate, so remote edits, own-echoes, attach, and undo already light up `world.reactive`/`strata-ecs/react`. Most of the work below is therefore **making implicit truths normative** and correcting three concrete falsehoods in the locked text (§17's gesture-safety claim, §15.2's `isIterating` guard, §17's tombstone/GC language). The amendments are grouped as in 004: **A** (correctness + Part I addenda), **B** (domain gaps), **C** (reactivity × the layers). Priorities are marked **(must / should / could)** per 004.
 
 Every code citation was re-verified against the tree before enshrining; the verification log is §V at the end. No citation failed.
 
@@ -299,7 +299,7 @@ const eph = createEphemeralStore(myLoroEphemeralStore, {
 | Text = whole-component committer-wins (B2, §13.4) | Character-level merge → `"text"` field + `LoroText` with **baseline-delta** adapter (§13.6) |
 | Held-cell ledger (C5) | v1-simpler fallback (pure drop + loud staleness paragraph) recorded as the cut option |
 | Diagnostics: stranded-cell warn (§13.5), inbound quarantine counter (B4), one-shot unknown-name log (B3 R5) | Inbound-burst hitch → time-budgeted **batch-granular** drain, never splitting a batch (A5.2) |
-| `SyncStatus` runtime resources (C7, §15.7) + `useResource` panel | `strata/tools` sync tab (C8) — the `SyncObserver` interface is normative now; the tab is fast-follow |
+| `SyncStatus` runtime resources (C7, §15.7) + `useResource` panel | `strata-ecs/tools` sync tab (C8) — the `SyncObserver` interface is normative now; the tab is fast-follow |
 | Projection visible to reactivity by construction (C1); one settled boundary per frame (C2) | `ctx.ephemeral(eph)` mutator for structural ephemeral writes from systems (§15.2); `colW` lazy stamp (002); `useQuery` React hook (003) |
 | `trySet` write-guard | `trySet` itself is could-level (A3) — the `get`-then-`set` pattern is the shipped answer |
 
@@ -309,13 +309,13 @@ const eph = createEphemeralStore(myLoroEphemeralStore, {
 
 ### C1 (must) — Projection lands through the stamped primitives → §10.3, §13.1, §13.3; amends 002 §0/§6 (Part I addendum)
 
-**Motivation.** Verified as-built: `projectComponent` stamps in **all three branches** (place, overwrite, migrate — runtime-store.ts:742–759); `place`/`unplace` bump the rows-version (:491); tag/relation ops bump `tagRelFrame`; `destroy` and `setResource` stamp — all behind the `reactiveOn` gate (:120–131). So remote edits, own-echoes, attach, and undo **already** light up `world.reactive`/`strata/react`. The only risk is a future fast path that bypasses the primitives.
+**Motivation.** Verified as-built: `projectComponent` stamps in **all three branches** (place, overwrite, migrate — runtime-store.ts:742–759); `place`/`unplace` bump the rows-version (:491); tag/relation ops bump `tagRelFrame`; `destroy` and `setResource` stamp — all behind the `reactiveOn` gate (:120–131). So remote edits, own-echoes, attach, and undo **already** light up `world.reactive`/`strata-ecs/react`. The only risk is a future fast path that bypasses the primitives.
 
 **Normative — the rule and the guarantee.**
 
 > **Projection MUST route through the stamped runtime primitives** — `projectComponent`, `ensurePlaced`/`place`, `projectRemoveComponent`, `destroy`, `applyTag`/`removeTag`, the relation ops, `setResource`, `removeResource`. **Raw-column projection is forbidden.** A future bulk-attach fast path is legal **only if it stamps equivalently** (bumps the same per-archetype/rows/tagRel/resource stamps a per-primitive apply would).
 >
-> **Guarantee (stated as a consequence):** a remote edit, an own-echo, attach, and undo become visible to `world.reactive` (all three tiers) and `strata/react` (`useComponent`/`useResource`) with **zero additional feed** — by construction, because they stamp exactly as a local write does.
+> **Guarantee (stated as a consequence):** a remote edit, an own-echo, attach, and undo become visible to `world.reactive` (all three tiers) and `strata-ecs/react` (`useComponent`/`useResource`) with **zero additional feed** — by construction, because they stamp exactly as a local write does.
 >
 > Attaching a store does **not** flip `reactiveOn`. The gate arms on first `world.reactive` access (:128–131), so a **collaborative world with no observers pays zero stamp stores** — the tax stays tied to the feature.
 
@@ -466,7 +466,7 @@ One-line callout to add beneath it: *without the `access.write` declaration this
 
 ---
 
-### C8 (could) — SyncObserver + the strata/tools sync tab → tools section
+### C8 (could) — SyncObserver + the strata-ecs/tools sync tab → tools section
 
 **Motivation.** The sync tab needs emit sites inside the drain. Those sites are **cheap to build in now, expensive to retrofit** — so the interface shape is normative now even though the tab is fast-follow.
 
@@ -485,7 +485,7 @@ One-line callout to add beneath it: *without the `access.write` declaration this
 > }
 > ```
 >
-> The `strata/tools` **sync tab** that consumes this is **fast-follow** — only the emit sites and interface are specified now.
+> The `strata-ecs/tools` **sync tab** that consumes this is **fast-follow** — only the emit sites and interface are specified now.
 
 ---
 

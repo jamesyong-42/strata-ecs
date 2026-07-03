@@ -34,9 +34,9 @@
   // from strata's own typecheck. strata's own bench (bench/ecs.bench.ts) stays covered.
   // examples/* are separate workspace members with their own tsconfigs (DOM lib, vite types) —
   // the "**/*.config.ts" include above would otherwise pull their vite.config.ts into this program.
-  // src/tools is the browser dev-tools entry (strata/tools): it typechecks under its own
+  // src/tools is the browser dev-tools entry (strata-ecs/tools): it typechecks under its own
   // tsconfig WITH the DOM lib; excluding it here is what keeps the core provably DOM-free.
-  // src/react is the React binding (strata/react): same story — its own tsconfig adds DOM + JSX +
+  // src/react is the React binding (strata-ecs/react): same story — its own tsconfig adds DOM + JSX +
   // React types, and excluding it here keeps the core provably React-free (and JSX out of the core program).
   "exclude": ["dist", "node_modules", "bench/compare", "examples", "src/tools", "src/react"]
 }

@@ -6,7 +6,7 @@
  * mid-walk corrupts the iteration, §16).
  */
 
-import type { Entity } from "strata";
+import type { Entity } from "strata-ecs";
 import { renderable } from "../ecs/queries";
 import { Position, Size, ZIndex } from "../ecs/schema";
 import { world } from "./worldRef";

@@ -7,7 +7,7 @@
  * doc.transaction land.
  */
 
-import type { Entity } from "strata";
+import type { Entity } from "strata-ecs";
 import { Gesture, Selected } from "../ecs/schema";
 import { cam, panBy } from "./camera";
 import {

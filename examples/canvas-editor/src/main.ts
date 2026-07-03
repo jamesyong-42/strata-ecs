@@ -8,7 +8,7 @@
  * verification screenshots; also a handy smoke test after refactors).
  */
 
-import { attachObserver, type ObserverOptions } from "strata/tools";
+import { attachObserver, type ObserverOptions } from "strata-ecs/tools";
 import { cam, panBy, setViewportSize, zoomToFit } from "./app/camera";
 import { dirty, setOnMutate, stats } from "./app/commands";
 import { duplicateSelection, setSelection } from "./app/editorOps";
@@ -124,7 +124,7 @@ wireReactivity();
 
 buildToolbar(document.getElementById("toolbar") as HTMLElement, notify);
 attachInput(overlay, notify);
-// The framework's own observer panel (strata/tools): entity inspector, per-system µs,
+// The framework's own observer panel (strata-ecs/tools): entity inspector, per-system µs,
 // lifecycle timeline — the app only supplies the labeling. ?obs=systems|timeline picks the
 // starting tab for shareable links.
 const obsTab = params.get("obs");

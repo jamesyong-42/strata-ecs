@@ -6,7 +6,7 @@
  * app-wide swap to reason about, and nothing needs an indirection cell.
  */
 
-import { createWorld } from "strata";
+import { createWorld } from "strata-ecs";
 import { Camera, Gesture, SimMode } from "../ecs/schema";
 
 export const world = createWorld({ name: "canvas" });

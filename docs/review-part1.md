@@ -35,7 +35,7 @@ clean; with no explicit `S`, reads are `unknown`; wrong-typed spawn values silen
 design.md **already specs the inferred form** (`col<S>: ColumnsOf<S>`, "each value is checked
 against its component's field type") — this is spec-conformance, not redesign.
 
-**Fix (one coordinated pass, before Part II so `strata/durable`'s define surface inherits it):**
+**Fix (one coordinated pass, before Part II so `strata-ecs/durable`'s define surface inherits it):**
 - `defineComponent<const Sch>(name, schema: Sch): Component<ValueOf<Sch>>` — Component must carry
   the **schema literal** (the value type alone cannot distinguish f32/f64/string columns);
 - `ColumnsOf<Sch>` so `col()` needs zero casts; `enumOf`/`field()` become generic over their
@@ -108,12 +108,12 @@ ARE single stamp-owning primitives. Zero perf cost (gates live inside the bump f
   assertions). Extend the op alphabet with {notify, observeValue, observeQuery, unobserve} + an
   armed-from-op-0 variant; oracle = recompute watched values from the reference model
   (reuse the layer's own shallowEqual, compare against last-FIRED value).
-- **strata/tools is ~90% untested** (only recorder.ts). dispose() looks leak-free on inspection but
+- **strata-ecs/tools is ~90% untested** (only recorder.ts). dispose() looks leak-free on inspection but
   nothing pins the 5-part teardown. happy-dom smoke suite: attach → tick → render → dispose →
   assert interval cleared + BOTH roster entries detached + DOM removed → re-attach to second world.
 - Also worth adding: 001 enforcement matrix (accessor × declared × armed × in-system — pins the
   read-path exemption as intended), StrictMode double-mount + removeComponent-non-death for
-  strata/react, `STRESS_SCALE=0.1` smoke in ci so the fuzz tier can't rot unrun.
+  strata-ecs/react, `STRESS_SCALE=0.1` smoke in ci so the fuzz tier can't rot unrun.
 
 ### R8. Docs/packaging coherence
 
@@ -126,7 +126,7 @@ ARE single stamp-owning primitives. Zero perf cost (gates live inside the bump f
   files vanish; any tripwire must assert own-directory files.)
 - Publish hygiene: no LICENSE file despite MIT declaration; no repository/keywords; drop
   `engines.node>=24` from the published manifest (dev-only requirement — .nvmrc covers it); make the
-  empty `strata/durable`/`strata/ephemeral` placeholders throw a loud "ships in Part III" instead of
+  empty `strata-ecs/durable`/`strata-ecs/ephemeral` placeholders throw a loud "ships in Part III" instead of
   silently exporting nothing; README drift pass (147→256 tests, missing reactivity/react/tools from
   quick start); CI workflow running `ci && build && attw && publint` + `prepublishOnly`.
 

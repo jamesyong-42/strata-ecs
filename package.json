@@ -1,13 +1,26 @@
 {
-  "name": "strata",
+  "name": "strata-ecs",
   "version": "0.0.0",
   "description": "A collaborative ECS framework for editors and infinite-canvas apps, in TypeScript.",
   "type": "module",
   "license": "MIT",
-  "packageManager": "pnpm@10.33.0",
-  "engines": {
-    "node": ">=24"
+  "author": "James Yong",
+  "homepage": "https://github.com/jamesyong/strata-ecs#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jamesyong/strata-ecs.git"
   },
+  "keywords": [
+    "ecs",
+    "entity-component-system",
+    "typescript",
+    "editor",
+    "canvas",
+    "crdt",
+    "local-first",
+    "reactivity"
+  ],
+  "packageManager": "pnpm@10.33.0",
   "sideEffects": false,
   "files": [
     "dist"
@@ -50,7 +63,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "ci": "pnpm typecheck && pnpm lint && pnpm test",
-    "example:canvas": "pnpm --filter @strata/example-canvas-editor dev"
+    "example:canvas": "pnpm --filter @strata-ecs/example-canvas-editor dev",
+    "prepublishOnly": "pnpm run ci && pnpm build"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

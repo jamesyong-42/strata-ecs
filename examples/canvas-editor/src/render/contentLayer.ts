@@ -8,7 +8,7 @@
  * and strokes are dropped — what keeps 10k+ mixed shapes honest on a 2D canvas.
  */
 
-import type { Entity } from "strata";
+import type { Entity } from "strata-ecs";
 import { cam } from "../app/camera";
 import { world } from "../app/worldRef";
 import { connected } from "../ecs/queries";

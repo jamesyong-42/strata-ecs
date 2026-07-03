@@ -1,7 +1,7 @@
 # strata canvas — the flagship example
 
-An infinite-canvas whiteboard built on [strata](../../README.md)'s Part I runtime core, in
-**vanilla TypeScript + Canvas2D**. The only runtime dependency is `strata` itself — no UI
+An infinite-canvas whiteboard built on [strata-ecs](../../README.md)'s Part I runtime core, in
+**vanilla TypeScript + Canvas2D**. The only runtime dependency is `strata-ecs` itself — no UI
 framework, no renderer library, no state manager. The ECS *is* the state manager; the frame
 is the subscription.
 
@@ -13,9 +13,9 @@ pnpm example:canvas          # → http://localhost:5173
 Useful links: `?count=50000` (seed size, ≤100k) · `?sim=1` (boot into simulate) ·
 `?obs=systems|timeline` (open the observer on a tab) · `?fresh=1` (skip the autosave).
 
-The example consumes strata **live from `../../src`** (exact-match vite aliases + tsconfig
+The example consumes strata-ecs **live from `../../src`** (exact-match vite aliases + tsconfig
 paths), so editing the framework hot-reloads the app — this example exists to drive
-strata's development. `STRATA_DIST=1 pnpm --filter @strata/example-canvas-editor build`
+strata-ecs's development. `STRATA_DIST=1 pnpm --filter @strata-ecs/example-canvas-editor build`
 exercises the built dist through the real exports map instead.
 
 ## What to try (each maps to a measured framework strength)
@@ -23,7 +23,7 @@ exercises the built dist through the real exports map instead.
 | Do this | What it proves |
 |---|---|
 | Marquee thousands of shapes, drag them | tag-filtered dense column writes (`DragMove`) — top-tier iteration, flat cost |
-| `+10k` in the HUD | entity lifecycle — strata's measured benchmark **win** (see the ms toast) |
+| `+10k` in the HUD | entity lifecycle — strata-ecs's measured benchmark **win** (see the ms toast) |
 | Zoom way out | brute-force full-world culling with **no spatial index**, sub-ms (observer → systems) |
 | ▶ simulate, then keep editing | a `runIf`-gated phase: zero cost off, dense integration on — zero migrations either way (`Velocity` lives on every shape from birth) |
 | Delete a note with arrows | relation cascade — edges die with either endpoint, zero app cleanup |
@@ -32,7 +32,7 @@ exercises the built dist through the real exports map instead.
 | Untick `Cull` (or `cull test`) in the HUD | the schedule is a plain array — and self-inflicted jank shows what the sweep saves |
 | Open the console and watch nothing repaint at idle — then drag | the repaint is driven by `world.reactive.observeQuery`, not hand-set dirty flags |
 
-The **observer panel** (top right) is not app code — it's `strata/tools`, the framework's
+The **observer panel** (top right) is not app code — it's `strata-ecs/tools`, the framework's
 own dev tool, mounted with one call and an app-supplied labeling callback
 (`attachObserver(world, { describe })`).
 

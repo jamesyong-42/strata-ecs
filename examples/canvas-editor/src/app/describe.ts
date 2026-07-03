@@ -1,9 +1,9 @@
 /**
- * The app's identity-off-composition labeling for the strata/tools observer — the observer
+ * The app's identity-off-composition labeling for the strata-ecs/tools observer — the observer
  * knows HOW to display entities; only the app knows what they mean (design.md §18).
  */
 
-import type { DescribeFn } from "strata/tools";
+import type { DescribeFn } from "strata-ecs/tools";
 import { Kind, Label, Selected } from "../ecs/schema";
 
 const KIND_COLORS: Record<string, string> = {

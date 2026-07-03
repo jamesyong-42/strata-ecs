@@ -1,5 +1,5 @@
 /**
- * End-to-end integration test against the PUBLIC `strata` entry (src/index.ts) — a mini
+ * End-to-end integration test against the PUBLIC `strata-ecs` entry (src/index.ts) — a mini
  * infinite-canvas scene. Doubles as a usage example: schema → systems → tick → queries →
  * snapshot, using only the exported surface (no reaching into internals).
  */

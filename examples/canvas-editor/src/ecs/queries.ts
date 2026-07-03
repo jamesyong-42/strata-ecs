@@ -3,7 +3,7 @@
  * store, so queries are constants you import, not something you build per frame (§6).
  */
 
-import { defineQuery, Related } from "strata";
+import { defineQuery, Related } from "strata-ecs";
 import { ConnectedTo, Fill, Kind, Label, Position, Selected, Size, Velocity, ZIndex } from "./schema";
 
 /** Everything CullSystem sweeps: the drawable document. */

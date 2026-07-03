@@ -4,7 +4,7 @@
 **Scope:** Part I (runtime core) — a reactive *read* layer over runtime column changes. Local-runtime only.
 **Baseline:** `design.md` (locked). This note is an *amendment*; it does not modify the baseline. §N references point into the locked doc.
 **Depends on:** **Patch Note 001** (System Access Declaration) — lands together with this note (001's enforcement only arms here).
-**Companion binding:** `@strata/react` (a thin adapter package; see §5). The core layer is framework-agnostic.
+**Companion binding:** `strata-ecs/react` (a thin adapter package; see §5). The core layer is framework-agnostic.
 **Naming:** `world.reactive.*` is deliberately disjoint from the shipped `world.observe(WorldObserver)` (T0): the telemetry hooks fire mid-flush under a must-not-mutate/never-throw contract for dev tools; reactive observers fire at the settled boundary and may *schedule* work. Two different contracts, two different names — nothing here touches `world.observe`.
 
 ---
@@ -159,7 +159,7 @@ Tier 1 is dirty if a watched column stamped, **or** any matching archetype's `ro
 
 ---
 
-## 5. The React binding (`@strata/react`)
+## 5. The React binding (`strata-ecs/react`)
 
 Thin, over React 18's `useSyncExternalStore`, which wants exactly `subscribe(cb)` + `getSnapshot()` and re-renders when the snapshot would differ:
 
@@ -180,7 +180,7 @@ Three properties make this correct:
 - **Frame cadence.** Observers fire once per tick at the reactive phase. React reconciles at most once per frame per changed subscription. Tier 3's equality check keeps incidental UI (a properties panel) from re-rendering on frames where the watched value didn't actually change, while a canvas view (Tier 1) re-renders whenever anything moved — the right behavior for each.
 - **Unmount / death.** Entity despawn → `peek` returns `undefined` and the observer fires (§3.4) → the component renders its `undefined` branch (fallback / unmount). Congruent with the `get`-not-`read` rule; no stale render.
 
-The binding is a **separate package** so the core reactive layer stays framework-agnostic (a Vue/Svelte/vanilla binding is the same three primitives over a different adapter). The core ships `Reactive`; `@strata/react` ships the hooks.
+The binding is a **separate package** so the core reactive layer stays framework-agnostic (a Vue/Svelte/vanilla binding is the same three primitives over a different adapter). The core ships `Reactive`; `strata-ecs/react` ships the hooks.
 
 ---
 
@@ -209,7 +209,7 @@ Nothing below is applied to the locked baseline; this maps where a future editio
 | A new subsection (e.g. §7.4 "Reactivity") or a short Part I addendum | The conceptual home: the three tiers, poll-at-boundary, the reactive phase, cost ladder. |
 | §0 (timing table / overview) | **No change** — reactivity adds no timing rule. |
 | Patch Note 001 §6 | Mark open decision #1 (blanket vs lazy) **resolved: blanket default, lazy opt-in** (§2.3), and #2 (tiers/membership/React) **resolved** by this note. |
-| `@strata/react` | New companion package (§5); not part of the core doc, referenced from the reactivity subsection. |
+| `strata-ecs/react` | New companion package (§5); not part of the core doc, referenced from the reactivity subsection. |
 
 ---
 

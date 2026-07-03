@@ -1,4 +1,4 @@
-# Patch Note 003 — Resource Reactivity + the `strata/react` binding
+# Patch Note 003 — Resource Reactivity + the `strata-ecs/react` binding
 
 **Status:** Proposed
 **Scope:** Part I — extends the shipped reactivity layer (002, commit `bbaf9f3`) to resources, and ships the React binding 002 §5 specified.
@@ -39,11 +39,11 @@ peekResource<S>(r: Resource<S>): S | undefined;
 
 `dirty.camera` is deleted. Camera mutations (`panBy`/`zoomAt`/`setViewportSize`/`zoomToFit`/restore) call `syncCameraResource()` immediately instead of raising a flag — `setResource` per input event is a validated small-object write, the same order of cost the flag machinery had. `reactivity.ts` adds `observeResource(Camera, () => { repaint.doc = true; })` (camera changes are view-only — NOT wired to autosave; the viewport rides snapshots but per-pan autosave churn is noise, and any doc edit saves it anyway). The frame loop's painted condition becomes `repaint.doc || dirty.doc` and the pre-tick camera-sync-on-dirty step disappears (the resource is always current).
 
-## 2. `strata/react`
+## 2. `strata-ecs/react`
 
 ### 2.1 Packaging (deviation from 002 §5's "separate package", deliberately)
 
-Shipped as the **`strata/react` subpath export** (like `strata/tools`): entry `src/react/index.ts` → `dist/react/`. The core still never imports React — the separation 002 wanted is the *dependency direction*, and a subpath preserves it while keeping one repo, one version, one publish. `react >= 18` becomes an **optional peerDependency**. Root devDeps gain `react`, `react-dom`, `@types/react`, `happy-dom` (tests only; none enter the publish graph).
+Shipped as the **`strata-ecs/react` subpath export** (like `strata-ecs/tools`): entry `src/react/index.ts` → `dist/react/`. The core still never imports React — the separation 002 wanted is the *dependency direction*, and a subpath preserves it while keeping one repo, one version, one publish. `react >= 18` becomes an **optional peerDependency**. Root devDeps gain `react`, `react-dom`, `@types/react`, `happy-dom` (tests only; none enter the publish graph).
 
 ### 2.2 The hooks (v1: exactly two)
 

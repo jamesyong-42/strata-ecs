@@ -13,12 +13,12 @@
  * This is the reference pattern for any strata + Vite app.
  *
  * The schema is split DOCUMENT CONTENT vs INTERACTION STATE on purpose. Document content is
- * what Part III (`strata/durable`) will make collaborative later; interaction state stays
+ * what Part III (`strata-ecs/durable`) will make collaborative later; interaction state stays
  * runtime-only forever. Durability is a creation path, not a flag (design.md §11.1) — this
  * file draws that line on day one so collaboration attaches without a rewrite.
  */
 
-import { defineComponent, defineRelation, defineResource, defineTag, enumOf, field } from "strata";
+import { defineComponent, defineRelation, defineResource, defineTag, enumOf, field } from "strata-ecs";
 
 function defineSchema() {
   return {

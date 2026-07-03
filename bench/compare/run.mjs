@@ -19,7 +19,7 @@ const SCENARIOS = ["packed_5", "simple_iter", "frag_iter", "entity_cycle", "add_
 const FRAMES = ["sim_frame", "spawn_reap_frame", "toggle_frame"]; // realistic system-pipeline flows
 const EXTENSIONS = ["serialize", "random_access"]; // beyond the canonical suite; libs may omit
 // Preferred display order; any other scenario files present are appended.
-const ORDER = ["strata", "bitecs", "becsy", "miniplex", "koota"];
+const ORDER = ["strata-ecs", "bitecs", "becsy", "miniplex", "koota"];
 
 const present = readdirSync(join(HERE, "scenarios"))
   .filter((f) => f.endsWith(".ts"))
@@ -146,7 +146,7 @@ for (const fr of FRAMES) {
 
 // extensions (beyond canonical; N/A where a library doesn't implement one)
 L.push("\n## Extension scenarios — µs/op (beyond the canonical suite)\n");
-L.push("`serialize` = whole-world save+load round-trip (strata built-in; rivals have no equivalent). `random_access` = read a component for 10k random entities by handle.\n");
+L.push("`serialize` = whole-world save+load round-trip (strata-ecs built-in; rivals have no equivalent). `random_access` = read a component for 10k random entities by handle.\n");
 L.push(`| scenario | ${okLibs.join(" | ")} |`);
 L.push(`|---|${okLibs.map(() => "---:").join("|")}|`);
 for (const ex of EXTENSIONS) {

@@ -1,7 +1,7 @@
 /**
  * Dev-tool observability hooks (docs/plan-tools-observer.md).
  *
- * A `WorldObserver` is the data feed for first-party tools (`strata/tools` — inspector,
+ * A `WorldObserver` is the data feed for first-party tools (`strata-ecs/tools` — inspector,
  * lifecycle timeline, per-system profiler). Attach with `world.observe(obs)`; the returned
  * function detaches. The design contract:
  *
