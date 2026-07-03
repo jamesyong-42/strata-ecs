@@ -1,6 +1,6 @@
 # Patch Note 005 — Part II, The Storage Substrate (normative)
 
-**Status:** Normative. This note **supersedes** `design.md` §9 (the snapshot ladder), §10 (the projector kernel), and the Part II API reference. Where this note and the locked baseline disagree, this note governs Part II; the baseline's Part II prose is retained only as rationale that this note re-states in the shipped currency.
+**Status:** Normative — **IMPLEMENTED** (2026-07-03; commits 9aae91b M3a-runtime, a71e104 M1/M2, 81863bc M4, 3b665af review fixes; 414 ci + 140 stress tests green). §10 records the as-built amendments — read it before coding Part III against §2/§4/§5/§8. This note **supersedes** `design.md` §9 (the snapshot ladder), §10 (the projector kernel), and the Part II API reference. Where this note and the locked baseline disagree, this note governs Part II; the baseline's Part II prose is retained only as rationale that this note re-states in the shipped currency.
 **Scope:** Part II (the storage substrate) — the snapshot ladder, canonical values, the layout contract, `normalizeBatch`, the projector kernel, two runtime additions, the wire form, and the conformance suite. No Loro dependency lands in this part (see §9, build plan).
 **Baseline:** `design.md` (locked). **Sources folded in:** `004-part2-4-revision.md` §§A1–A2, B4, C1–C4, D1–D7, E (all post-red-team, settled); the as-built Part I (`src/core/*`); `002-reactivity.md` (the stamp model this part rides).
 **Depends on:** Part I as shipped — `RuntimeStore` (identity/placement seams, projection primitives), `field.ts` (the `EntityKey` brand, the `"key"` field type), `schema.ts` (name lookups, `encodeComponentValue`), `world.ts` (`registerInboundSource`, `sync()`), and 001/002/003 reactivity (the stamps every projection primitive already carries).
@@ -581,4 +581,40 @@ M0 (spec revision) **is this note** together with 006. The remaining milestones:
 
 ---
 
-*Sources: `004-part2-4-revision.md` (post-red-team, settled) §§A1–A2, B4, C1–C4, D1–D7, E; as-built `src/core/{field,schema,ecs-store,runtime-store,world,snapshot}.ts`; `002-reactivity.md`; `design-comments.md` (the external review driving issues 1–2). This note is the normative Part II; `design.md` §9–§10 + the Part II API reference are superseded per §0.*
+---
+
+## 10. As-built amendments (2026-07-03, normative)
+
+The implementation (M1–M4 + the adversarial review pass, commits a71e104/9aae91b/81863bc/3b665af) settled seven points this note either left open or got wrong. Each is normative and supersedes the section it names.
+
+### 10.1 Resources are object-backed: `canonResource`, not `canon` (amends §2, §8 P1)
+
+`RuntimeStore.setResource` stores the defaults-filled **raw value object** wholesale — there is **no typed-array round-trip** for resources, so a resource's canonical form (§2.2's "as it reads back") is **defaults-filled raw, with NO fround/wrap**. Applying column coercion to a resource would strand every float resource cell against the raw runtime value — the §2.1 bug inverted. Shipped as `canonResource` (trusted writes, throws on malformation) and **`tryCanonResource`** (the §2.3 inbound gate for `resource-set` facts: default-fills, per-field JS-type-validates, rejects — never throws, never coerces). **§8 P1's row is amended:** components compare under `canon`; resources under `canonResource`; the existence cell is asserted too.
+
+### 10.2 Spawn is existence-only; fresh-record comes ONLY from the despawn barrier (amends §4.1/§4.2)
+
+A `spawn(k)` addresses the existence cell and **nothing else** — `BaselineSnapshot.spawn` clears no components/tags/edges (erasure power belongs to `despawn` alone, per §4.1's own cell independence), matching `Projector.applySpawn` (= idempotent `ensurePlaced`). The review found the ladder had shipped respawn-fresh spawn — a both-sides-consistent divergence from the projector that the conformance generators had been fenced around; it is fixed and the fence is deleted (spawn-on-live is fuzzed, duplicate spawn is in the P7 replay set). In `normalizeBatch`, **duplicate spawns dedupe FIRST-spawn-wins per despawn-segment** (a later duplicate is dropped — last-wins would violate the spawn-first invariant; a surviving despawn resets the segment so a respawn survives). Respawn-fresh semantics arise exclusively from the despawn barrier.
+
+### 10.3 A TARGETED relation-remove is a per-edge conditional fact in BOTH arities (amends §4.1)
+
+§4.1's original taxonomy ("(key, rel, all) for arity one") was wrong for targeted removes: a targeted remove is **conditional on the current edge** (it removes only the matching target — it cannot LWW-collapse with `relation-set` without changing state). A normalized batch may therefore carry a `relation-set` **and** a targeted `relation-remove` for one arity-one slot, in order. Only the **target-less** remove addresses the whole slot cell. Pinned in normalize.test.ts.
+
+### 10.4 Cell keys are injection-proof (amends §4)
+
+`EntityKey`s are peer-controlled (§2.3's own threat model), so `normalizeBatch`'s cell identities must not be string-joins a hostile key can collide (verified collision with separator-bearing keys). Shipped: JSON-tuple cell keys (3-tuple slot vs 4-tuple edge — which also retires the `"*"` sentinel); the conformance key pool includes hostile keys.
+
+### 10.5 spawn-first/despawn-last are scoped to well-formed producer batches (amends §4.2)
+
+Order preservation and despawn-last genuinely conflict for an ill-formed batch (`[despawn k, component-set k]` with no respawn). The shipped resolution: **order preservation + the despawn barrier win**; the spawn-first/despawn-last invariants hold for well-formed producer batches (the adapter's obligation). Part III's projector loop MUST tolerate facts after a despawn (the current kernel already does).
+
+### 10.6 The guard set is wider than §A4's list (amends §5.5; 006 §A4)
+
+Beyond the structural `world.*` methods: **`world.tick()`** throws on `iterationDepth > 0` and on re-entrant tick (all builds — a mid-walk phase flush is the exact corruption §A4 exists to prevent; re-entrancy also broke the outer tick's `ticking` flag), and DEV-throws inside an observer/reactive emit; **`world.import()`** DEV-throws inside an emit (a mid-emit load half-applies: the mixed per-primitive guards swallow relation edges). `world.sync()` iterates a **snapshot** of the inbound list (a source tearing itself down mid-drain no longer skips its sibling's drain). The §5.5 drain-entry assert obligation is recorded on `InboundSource.drain`'s JSDoc — `world.sync()`'s check is the sync-path defense, not a substitute for Part III's own drain-entry assert.
+
+### 10.7 P7's notify-silence is scoped; Tier-1 may over-fire on duplicate structural re-applies (amends §8 P7)
+
+`addTag`/`setRelation`/`addRelation` bump the coarse global tag/relation version **unconditionally** as-built (002 §4.2's cheap membership signal), so a duplicate structural re-apply is state-idempotent on both sides but may re-fire a Tier-1 query — permitted by 002's "may over-fire, never miss" contract. P7 asserts state-idempotence for every duplicate fact, and notify-silence on the equality-suppressed (Tier-3/resource) and genuinely stampless channels. Part III's reconcile should expect the Tier-1 over-fire on structural own-echo re-applies and not treat it as a bug.
+
+---
+
+*Sources: `004-part2-4-revision.md` (post-red-team, settled) §§A1–A2, B4, C1–C4, D1–D7, E; as-built `src/core/{field,schema,ecs-store,runtime-store,world,snapshot}.ts`; `002-reactivity.md`; `design-comments.md` (the external review driving issues 1–2). This note is the normative Part II; `design.md` §9–§10 + the Part II API reference are superseded per §0. §10's amendments were settled by the Part II adversarial review (17-agent workflow, findings verified with executed repros).*

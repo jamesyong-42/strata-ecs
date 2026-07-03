@@ -13,8 +13,8 @@ baseline, the note wins.
 | [002-reactivity.md](002-reactivity.md) | `world.reactive` — poll-at-boundary stamps, the three observer tiers, `notify()`, the `reactiveOn` gate | IMPLEMENTED |
 | [003-resource-reactivity-and-react.md](003-resource-reactivity-and-react.md) | Per-resource stamps, `observeResource`, the `strata-ecs/react` binding (`useComponent`/`useResource`) | IMPLEMENTED |
 | [004-part2-4-revision.md](004-part2-4-revision.md) | The Parts II–IV revision plan — adjudicates [design-comments.md](design-comments.md), red-teamed | PLAN (executed by 005/006) |
-| [005-part2-spec.md](005-part2-spec.md) | The normative Part II spec — **supersedes design.md §9–§10 + Part II API reference** | NORMATIVE, not yet implemented |
-| [006-part3-4-amendments.md](006-part3-4-amendments.md) | Normative Parts III–IV amendments + two Part I addenda (mid-tick guard; 002 §0/§6 rewording) | NORMATIVE, not yet implemented |
+| [005-part2-spec.md](005-part2-spec.md) | The normative Part II spec — **supersedes design.md §9–§10 + Part II API reference** | NORMATIVE, **IMPLEMENTED** (M1–M4 + review fixes; as-built amendments in its §10) |
+| [006-part3-4-amendments.md](006-part3-4-amendments.md) | Normative Parts III–IV amendments + two Part I addenda (mid-tick guard; 002 §0/§6 rewording) | NORMATIVE; the §A4 guard + Part II pieces are IMPLEMENTED (as-built addendum in §A4), Parts III–IV pending |
 
 ## Reviews, plans, reports
 
