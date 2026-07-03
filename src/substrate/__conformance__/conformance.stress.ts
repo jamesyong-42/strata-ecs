@@ -7,12 +7,14 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { LoroDoc } from "loro-crdt";
 import { scaled } from "../../core/__stress__/harness";
 import { createWorld } from "../../core/world";
 import type { Entity } from "../../core/entity";
 import { type EntityKey, entityKey } from "../../core/field";
 import { Projector } from "../projector";
 import { BaselineSnapshot } from "../baseline";
+import { LoroSnapshot } from "../../durable/loro-snapshot";
 import { keyPool, mulberry32, pick, randInt } from "./harness";
 import { runConformance } from "./runConformance";
 
@@ -26,6 +28,19 @@ runConformance(() => new BaselineSnapshot(), {
   seeds: SEEDS,
   keyCount: Math.min(64, scaled(40)),
   opCount: scaled(500),
+});
+
+// Part III M0: the Loro adapter runs the same WIDE SEED sweep (the soak dimension) but at LIGHTER
+// per-test bounds. The wasm store is ~50x slower per op than the baseline's Maps, and the harness does
+// an O(keyCount) cell-diff after EVERY op, so the baseline's 40-key/500-op bounds make a single P1 test
+// run multiple seconds — long enough to trip vitest's worker→reporter RPC ("onTaskUpdate" timeout). Full
+// PARITY at the baseline's exact bounds is already the CI conformance run (conformance.test.ts, seeds
+// [1,2,3,7,42] / 16 / 200); this soak trades per-test size for seed breadth.
+runConformance(() => new LoroSnapshot(new LoroDoc()), {
+  label: "LoroSnapshot (stress)",
+  seeds: SEEDS,
+  keyCount: Math.min(20, scaled(16)),
+  opCount: scaled(200),
 });
 
 // P3 bijection at scale — a wider interleaving sweep with the same invariant assertions.

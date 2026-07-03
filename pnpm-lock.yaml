@@ -29,6 +29,9 @@ importers:
       happy-dom:
         specifier: ^20.10.6
         version: 20.10.6
+      loro-crdt:
+        specifier: ^1.13.6
+        version: 1.13.6
       prettier:
         specifier: ^3.0.0
         version: 3.9.4
@@ -1084,6 +1087,9 @@ packages:
 
   lodash.merge@4.6.2:
     resolution: {integrity: sha512-0KpjqXRVvrYyCsX1swR/XTK0va6VQkQM6MNo7PqW77ByjAhoARA8EfrP1N4+KlKj8YS0ZUCtRT/YUuhyYDujIQ==}
+
+  loro-crdt@1.13.6:
+    resolution: {integrity: sha512-OsnKW64J+1XdCMafAqR+aASn/wQEgDzwcDwu6dDOVSxxbLPFgnU6LX8ja+hd5PnEcT+kuz9eXSagvlYXsRbQIw==}
 
   loupe@3.2.1:
     resolution: {integrity: sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ==}
@@ -2315,6 +2321,8 @@ snapshots:
       p-locate: 5.0.0
 
   lodash.merge@4.6.2: {}
+
+  loro-crdt@1.13.6: {}
 
   loupe@3.2.1: {}
 
