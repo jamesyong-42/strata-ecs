@@ -54,8 +54,10 @@ export { defineQuery, Not, Any, All, Related } from "./query";
 export type { Query, QueryTerm, Atom, RelTerm, Batch } from "./query";
 
 // --- systems + schedule ---
-export { defineSystem, phase, SystemCtx } from "./system";
-export type { System, Phase, Pipeline, Condition, SystemBody, EntityEditor, SystemAccess } from "./system";
+export { defineSystem, phase } from "./system";
+// SystemCtx is type-only: the tick constructs it (World owns one internally) and hands it to bodies
+// as `ctx`; applications never `new` it, so the concrete class is not public API (R2 seam).
+export type { SystemCtx, System, Phase, Pipeline, Condition, SystemBody, EntityEditor, SystemAccess } from "./system";
 export { validatePipelineAccess } from "./access-diagnostics";
 
 // --- world ---
@@ -71,6 +73,9 @@ export type { WorldObserver } from "./observe";
 
 // --- the store contract + implementation + command types (the seam Parts II–IV build on) ---
 export type { ECSStore } from "./ecs-store";
-export { RuntimeStore } from "./runtime-store";
-export type { SpawnInit, ComponentEntry } from "./runtime-store";
+// RuntimeStore is type-only: `world.runtime` is typed by it so tools/projection can reach the engine,
+// but the concrete class — constructible, carrying the internal primitives — is not public API (R2).
+// Those primitives are marked internal and stripped from the shipped .d.ts by `stripInternal`; the
+// public seam is ECSStore plus the projection methods (design §ref ~1250).
+export type { RuntimeStore, SpawnInit, ComponentEntry } from "./runtime-store";
 export type { StructuralCommand, ComponentInit, CommandBuffer } from "./command";

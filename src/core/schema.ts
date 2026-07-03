@@ -83,7 +83,6 @@ export interface Relation {
   readonly id: RelationId;
   readonly name: string;
   readonly arity: Arity;
-  readonly ordered: boolean;
 }
 
 /** The public resource (world-singleton) handle. `S`/`Sch` mirror {@link Component} (§3.4). */
@@ -181,14 +180,13 @@ export function defineTag(name: string): Tag {
 /** Declare a typed directed link between entities (§4). */
 export function defineRelation(
   name: string,
-  opts?: { arity?: Arity; ordered?: boolean },
+  opts?: { arity?: Arity },
 ): Relation {
   names.define(name);
   const handle: Relation = {
     id: nextRelationId++,
     name,
     arity: opts?.arity ?? "one",
-    ordered: opts?.ordered ?? false,
   };
   relationsById[handle.id] = handle;
   relationsByName.set(name, handle);

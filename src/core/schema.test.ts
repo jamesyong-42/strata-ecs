@@ -41,11 +41,11 @@ describe("defineTag / defineRelation / defineResource", () => {
     expect([A.id, B.id]).toEqual([0, 1]);
   });
 
-  it("defaults relation arity to one, ordered false", () => {
+  it("defaults relation arity to one", () => {
     const ChildOf = defineRelation("ChildOf");
-    const Targets = defineRelation("Targets", { arity: "many", ordered: true });
-    expect(ChildOf).toMatchObject({ id: 0, arity: "one", ordered: false });
-    expect(Targets).toMatchObject({ id: 1, arity: "many", ordered: true });
+    const Targets = defineRelation("Targets", { arity: "many" });
+    expect(ChildOf).toMatchObject({ id: 0, arity: "one" });
+    expect(Targets).toMatchObject({ id: 1, arity: "many" });
   });
 
   it("defines resources with a schema", () => {

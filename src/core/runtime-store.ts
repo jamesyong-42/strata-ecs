@@ -208,7 +208,7 @@ export class RuntimeStore implements ECSStore {
     return arch;
   }
 
-  /** Subscribe to archetype creation (queries cache matching-archetype lists this way, §3.1/§6). */
+  /** @internal Subscribe to archetype creation (queries cache matching-archetype lists this way, §3.1/§6). */
   observeArchetypes(fn: (a: Archetype) => void): void {
     this.archetypeObservers.push(fn);
   }
@@ -304,7 +304,8 @@ export class RuntimeStore implements ECSStore {
     }
   }
 
-  /** All archetypes that currently exist (for queries to seed their caches). */
+  /** @internal All archetypes that currently exist (for queries to seed their caches; also the
+   *  tools' reflection walk). Returns the internal {@link Archetype} type — not public API. */
   archetypes(): readonly Archetype[] {
     return this.archetypesById;
   }
@@ -937,7 +938,7 @@ export class RuntimeStore implements ECSStore {
   // Command buffer — the system-iteration deferral facility (§5.4, §5.5)
   // ---------------------------------------------------------------------------
 
-  /** Hand out a cleared buffer from the pool (grows the pool only on demand, §5.4). */
+  /** @internal Hand out a cleared buffer from the pool (grows the pool only on demand, §5.4). */
   allocateCommandBuffer(): CommandBuffer {
     const reused = this.freeBuffers.pop();
     if (reused !== undefined) {
@@ -948,7 +949,7 @@ export class RuntimeStore implements ECSStore {
     return this.bufferPool.length - 1;
   }
 
-  /** Append a command (producer-agnostic; only a system's `ctx` calls this, §5.4). */
+  /** @internal Append a command (producer-agnostic; only a system's `ctx` calls this, §5.4). */
   enqueue(buf: CommandBuffer, cmd: StructuralCommand): void {
     const arr = this.bufferPool[buf];
     arr.push(cmd);
@@ -965,7 +966,7 @@ export class RuntimeStore implements ECSStore {
     this.commandBufferWarnThreshold = n;
   }
 
-  /** Single-pass drain: apply every command, then clear. `apply` never enqueues, so no growth (§5.4). */
+  /** @internal Single-pass drain: apply every command, then clear. `apply` never enqueues, so no growth (§5.4). */
   flushCommandBuffer(buf: CommandBuffer): void {
     const cmds = this.bufferPool[buf];
     const n = cmds.length; // apply never appends to this buffer → n is stable
@@ -973,7 +974,7 @@ export class RuntimeStore implements ECSStore {
     cmds.length = 0;
   }
 
-  /** Return a buffer to the pool when its phase is done. */
+  /** @internal Return a buffer to the pool when its phase is done. */
   releaseCommandBuffer(buf: CommandBuffer): void {
     this.bufferPool[buf].length = 0;
     this.freeBuffers.push(buf);
@@ -1253,7 +1254,8 @@ export class RuntimeStore implements ECSStore {
   // Introspection (for tests / tooling)
   // ---------------------------------------------------------------------------
 
-  /** The archetype an entity is currently placed in, or `undefined` if identity-only. */
+  /** @internal The archetype an entity is currently placed in, or `undefined` if identity-only.
+   *  Legacy alias for {@link RuntimeStore.archetypeOf}; returns the internal {@link Archetype} type. */
   debugArchetypeOf(e: Entity): Archetype | undefined {
     return this.archetypeOf(e); // legacy alias — archetypeOf is the sanctioned reflection seam
   }

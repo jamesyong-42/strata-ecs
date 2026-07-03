@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+// The barrel exports RuntimeStore type-only (R2 seam); the impl module is where the concrete
+// class is constructed — exactly what a test exercising the store-through-ECSStore contract does.
+import { RuntimeStore } from "./runtime-store";
 import {
   type ECSStore,
   type Entity,
-  RuntimeStore,
   createWorld,
   defineComponent,
   defineQuery,

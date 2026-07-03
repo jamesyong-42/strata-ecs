@@ -86,17 +86,33 @@ export interface SeedSpec {
   readonly target: Entity;
 }
 
-/** A compiled query (store-agnostic). */
+/**
+ * A compiled query (store-agnostic) — **opaque** to consumers. Build one with {@link defineQuery}
+ * and hold it as a module constant. The compiled plan (required / excluded / any-groups / row
+ * filters / seed) is the store engine's private read view: those fields are stripped from the
+ * published types, so an application sees only this opaque handle and cannot depend on, or hand-
+ * build, the plan shape (R2 seam).
+ *
+ * `__brand` is a phantom field (never written at runtime) typed `never`: no value of type `never`
+ * exists, so a plain object is not assignable to `Query` — hand-constructing one needs an explicit
+ * unsafe cast, and {@link defineQuery} is the sole producer.
+ *
+ * NOTE: never write the strip-marker JSDoc tag anywhere in THIS comment (even in prose/backticks) —
+ * `stripInternal` scans the whole comment for it and would drop the entire interface. Mark the plan
+ * FIELDS below individually (as they are) instead; the field markers strip only the fields.
+ */
 export interface Query {
-  /** Required components — the archetype must have all (archetype-level AND). */
+  /** The opaque brand — phantom, type-level only, never present at runtime. */
+  readonly __brand: never;
+  /** @internal Required components — the archetype must have all (archetype-level AND). */
   readonly required: readonly ComponentId[];
-  /** Excluded components — the archetype must have none (`Not(component)`). */
+  /** @internal Excluded components — the archetype must have none (`Not(component)`). */
   readonly excluded: readonly ComponentId[];
-  /** Each pure-component `Any(...)` — the archetype must have at least one of the group. */
+  /** @internal Each pure-component `Any(...)` — the archetype must have at least one of the group. */
   readonly anyComponentGroups: readonly (readonly ComponentId[])[];
-  /** Tag/relation/mixed-`Any` terms, evaluated per row. */
+  /** @internal Tag/relation/mixed-`Any` terms, evaluated per row. */
   readonly rowFilters: readonly RowFilter[];
-  /** Set when a relation term has a concrete target — flips to reverse-index iteration. */
+  /** @internal Set when a relation term has a concrete target — flips to reverse-index iteration. */
   readonly seed?: SeedSpec;
 }
 
@@ -234,5 +250,8 @@ export function defineQuery(terms: readonly QueryTerm[]): Query {
 
   for (const term of terms) addTop(term);
 
-  return { required, excluded, anyComponentGroups, rowFilters, seed };
+  // The one sanctioned unsafe cast (Query is opaque + `never`-branded): defineQuery is the SOLE
+  // producer, so it builds the plan and stamps the phantom brand here. The `satisfies` keeps the
+  // plan shape checked; nothing outside this function can construct a Query.
+  return { required, excluded, anyComponentGroups, rowFilters, seed } satisfies Omit<Query, "__brand"> as unknown as Query;
 }
