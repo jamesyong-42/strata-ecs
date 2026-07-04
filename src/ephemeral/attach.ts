@@ -74,11 +74,12 @@
  */
 
 import { DEV, devWarn } from "../core/dev";
-import type { Component, ComponentId, EntityKey, InboundSource, World } from "../core";
+import type { Component, ComponentId, EntityKey, InboundSource, Tag, World } from "../core";
 import {
   Projector,
   cellEquals,
   componentByName,
+  isReservedName,
   tagByName,
   tryCanon,
 } from "../substrate";
@@ -152,8 +153,8 @@ export function attachEphemeral(world: World, eph: EphemeralStore): Attachment {
 class EphemeralBinding implements InboundSource {
   private readonly source: EphemeralSource;
   private readonly projector: Projector;
-  /** `${peerId}-` — our partition prefix; a key with this prefix is one of OUR minted keys (decision D). */
-  private readonly ownPrefix: string;
+  /** This peer's id — a key is ours iff it parses to the minted shape `${peerId}-<int>` (decision D, fix 5). */
+  private readonly peerId: string;
 
   /** The source events awaiting drain — filled by the subscription (decision C), emptied by `drain()`. */
   private pending: EphemeralEvent[] = [];
@@ -167,6 +168,8 @@ class EphemeralBinding implements InboundSource {
   private readonly lastSeenBlobByKey = new Map<EntityKey, LastSeen>();
   /** eid-ban memo (005 §7): a ComponentId is here once validated clean; re-checks are skipped. */
   private readonly validatedComponents = new Set<ComponentId>();
+  /** eid-ban memo, reject side (fix 4): a ComponentId with an `eid` field — soft-rejected, warned once. */
+  private readonly rejectedComponents = new Set<ComponentId>();
   /** One-shot DEV-diagnostic dedupe: `key|comp` canon rejects, `name:<kind>:<name>` unknowns, singletons. */
   private readonly warned = new Set<string>();
 
@@ -192,7 +195,7 @@ class EphemeralBinding implements InboundSource {
     private readonly eph: EphemeralStore,
   ) {
     this.source = eph.ephemeralSource;
-    this.ownPrefix = `${eph.peerId}-`;
+    this.peerId = eph.peerId;
     // ONE projector, shared with the store's mutators via the seam (decision B).
     this.projector = new Projector(world.runtime, () => eph.mintKey());
   }
@@ -210,8 +213,12 @@ class EphemeralBinding implements InboundSource {
       isInEmit: () => this.world.runtime.inObserverEmitActive,
     });
     this.unsubscribe = this.source.subscribe((ev) => {
+      if (ev.kind === "local") return; // own echo — Option A already applied it; project() drops it too, but
+      // filtering HERE bounds `pending` growth if sync() is never called and shrinks every drain (P4-R).
       this.pending.push(ev); // enqueue-never-apply (decision C) — drain() applies at sync()
     });
+    // Ephemeral projection is INDEPENDENT of durable drain order (004 A5's open question): the two layers
+    // share no keyspace and no bijection, so registration order among inbound sources is a non-requirement.
     this.world.registerInboundSource(this);
     this.startTimers();
     this.publishSyncStatus(); // initial EphemeralSyncStatus: peerCount 0, lastInboundFrame 0
@@ -249,8 +256,8 @@ class EphemeralBinding implements InboundSource {
   /** Route one event by origin (§15.3). Returns whether it projected ≥1 runtime fact (drives `lastInboundFrame`). */
   private project(ev: EphemeralEvent): boolean {
     const { kind, key } = ev;
-    if (kind === "local") return false; // own echo — Option A already applied it to our runtime (§15.3)
-    if (key.startsWith(this.ownPrefix)) return this.projectOwnPrefix(kind, key); // own-prefix remote/timeout
+    if (kind === "local") return false; // own echo — Option A already applied it (also filtered at enqueue)
+    if (this.isOwnKey(key)) return this.projectOwnPrefix(kind, key); // own-partition remote/timeout (fix 5)
     // A remote peer's key.
     if (kind === "remote") return this.projectRemoteSet(key, ev.value);
     return this.projectRemoteRemove(key); // kind === "timeout" (TTL lapse OR a remote delete, folded — §15.3)
@@ -291,7 +298,7 @@ class EphemeralBinding implements InboundSource {
    */
   private projectRemoteSet(key: EntityKey, blob: EphemeralBlob | undefined): boolean {
     if (blob === undefined) {
-      this.warnCanonReject(`blob:${key}`, key, "(blob)", "not a plain object");
+      this.warnCanonReject("blob", "(blob)", "(value)", "not a plain object"); // bounded dedupe (fix 6)
       return false;
     }
     const comps = readBlobComponents(blob);
@@ -311,29 +318,21 @@ class EphemeralBinding implements InboundSource {
     this.projector.applySpawn(key); // ensurePlaced — the entity is queryable even if componentless/tagless
     const seen: LastSeen = { components: new Map(), tags: new Set() };
     for (const [name, raw] of Object.entries(comps)) {
-      const comp = componentByName(name);
-      if (comp === undefined) {
-        this.warnUnknownName("component", name);
-        continue;
-      }
-      this.assertNoEidFields(comp);
-      const gate = tryCanon(comp, raw as ComponentValue);
-      if (!gate.ok) {
-        this.warnCanonReject(`${key}|${name}`, name, gate.field, gate.reason);
-        continue;
-      }
-      this.projector.applyComponent(key, comp, gate.value);
-      seen.components.set(name, gate.value);
+      const fact = this.canonInbound(name, raw); // NEVER throws — hostile facts are skipped (fixes 3/4)
+      if (fact === null) continue;
+      this.projector.applyComponent(key, fact.comp, fact.value);
+      seen.components.set(name, fact.value);
     }
     for (const name of tags) {
-      const tag = tagByName(name);
-      if (tag === undefined) {
-        this.warnUnknownName("tag", name);
-        continue;
-      }
+      const tag = this.resolveInboundTag(name); // null skips unknown/reserved tags (fix 2)
+      if (tag === null) continue;
       this.projector.applyTag(key, tag);
       seen.tags.add(name);
     }
+    // Record the cache entry UNCONDITIONALLY, even if every fact was rejected (fix 3c): the empty `seen`
+    // still tracks the key, so its eventual TTL `timeout`/remote-delete despawns the placed entity via
+    // projectRemoteRemove — a fully-rejected blob leaves a queryable-empty entity that TTLs out, never a
+    // permanent orphan. (This is reachable now that canonInbound cannot throw before this line.)
     this.lastSeenBlobByKey.set(key, seen);
     return true;
   }
@@ -349,6 +348,10 @@ class EphemeralBinding implements InboundSource {
   private projectSeen(key: EntityKey, seen: LastSeen, comps: Record<string, ComponentValue>, tags: string[]): boolean {
     let projected = false;
 
+    // The whole path is TOTAL — no step throws (fixes 3/4): canonInbound skips a hostile fact, tryCanon is
+    // root-guarded, the inbound eid ban soft-rejects. So the removals (steps 1–2) can never be stranded
+    // half-applied by a later throw the way the DEV eid-throw once did (the review's half-apply finding).
+
     // 1. Components that vanished from the blob → remove them from the projection (§15.6 dynamic components).
     for (const name of [...seen.components.keys()]) {
       if (Object.prototype.hasOwnProperty.call(comps, name)) continue;
@@ -359,7 +362,7 @@ class EphemeralBinding implements InboundSource {
       }
       seen.components.delete(name);
     }
-    // 2. Tags that vanished → remove.
+    // 2. Tags that vanished → remove (seen.tags never holds a reserved tag — fix 2 never added one).
     for (const name of [...seen.tags]) {
       if (tags.includes(name)) continue;
       const tag = tagByName(name);
@@ -371,31 +374,19 @@ class EphemeralBinding implements InboundSource {
     }
     // 3. Present components → write changed/added, no-op unchanged (the same-value keepalive re-set).
     for (const [name, raw] of Object.entries(comps)) {
-      const comp = componentByName(name);
-      if (comp === undefined) {
-        this.warnUnknownName("component", name);
-        continue;
-      }
-      this.assertNoEidFields(comp);
-      const gate = tryCanon(comp, raw as ComponentValue);
-      if (!gate.ok) {
-        this.warnCanonReject(`${key}|${name}`, name, gate.field, gate.reason);
-        continue;
-      }
+      const fact = this.canonInbound(name, raw); // NEVER throws — hostile facts are skipped (fixes 3/4)
+      if (fact === null) continue;
       const prev = seen.components.get(name);
-      if (prev !== undefined && cellEquals(gate.value, prev)) continue; // unchanged → no runtime write, no fire
-      this.projector.applyComponent(key, comp, gate.value);
-      seen.components.set(name, gate.value);
+      if (prev !== undefined && cellEquals(fact.value, prev)) continue; // unchanged → no runtime write, no fire
+      this.projector.applyComponent(key, fact.comp, fact.value);
+      seen.components.set(name, fact.value);
       projected = true;
     }
     // 4. Present tags → add the new ones (an already-present tag is left alone → no spurious reactive fire).
     for (const name of tags) {
       if (seen.tags.has(name)) continue;
-      const tag = tagByName(name);
-      if (tag === undefined) {
-        this.warnUnknownName("tag", name);
-        continue;
-      }
+      const tag = this.resolveInboundTag(name); // null skips unknown/reserved tags (fix 2)
+      if (tag === null) continue;
       this.projector.applyTag(key, tag);
       seen.tags.add(name);
       projected = true;
@@ -476,17 +467,28 @@ class EphemeralBinding implements InboundSource {
 
   /**
    * Distinct remote peer prefixes with ≥1 live projected entity (006 C7). Derived from the blob-diff cache's
-   * keys (its keyset IS the live remote projection). A key is `${peerId}-${counter}`; the counter is a
-   * non-negative integer (no `-`), so the peer prefix is everything before the LAST `-` — correct even when
-   * `peerId` is a UUID (which contains `-`). Cheap at presence scale (a handful of peers).
+   * keys (its keyset IS the live remote projection — own keys never enter it). Uses the ONE shared parser
+   * {@link parseMintedKey}, anchored to the minted shape `${peerId}-<int>`, so a forged key that does not
+   * match the shape (no hyphen, trailing hyphen, non-integer suffix) buckets under its whole string rather
+   * than skewing the count with a fabricated sub-prefix (fix 5). Cheap at presence scale (a few peers).
    */
   private countRemotePeers(): number {
     const prefixes = new Set<string>();
-    for (const key of this.lastSeenBlobByKey.keys()) {
-      const i = key.lastIndexOf("-");
-      prefixes.add(i === -1 ? key : key.slice(0, i));
-    }
+    for (const key of this.lastSeenBlobByKey.keys()) prefixes.add(parseMintedKey(key).peer);
     return prefixes.size;
+  }
+
+  /**
+   * Whether `key` is one of OUR partition's keys, anchored to the minted shape (fix 5): it must parse to
+   * `${peerId}-<int>` AND its peer prefix must EQUAL this peer's id exactly. A prefix `startsWith` test
+   * (the prior router) wrongly claimed a legitimate peer named `${myPeerId}-x` (its keys `${myPeerId}-x-0`
+   * start with `${myPeerId}-`), silently suppressing it; the exact-match + integer-suffix anchor routes only
+   * genuinely-own keys to {@link projectOwnPrefix}, and a forged `${myPeerId}-<int>` this session did not
+   * mint still lands there and is refused as a reused-peerId ghost.
+   */
+  private isOwnKey(key: EntityKey): boolean {
+    const parsed = parseMintedKey(key);
+    return parsed.minted && parsed.peer === this.peerId;
   }
 
   // --- teardown: the four steps, IN ORDER (005 §5.6) ------------------------------------------------
@@ -506,6 +508,13 @@ class EphemeralBinding implements InboundSource {
     if (this.keepaliveTimer !== null) clearInterval(this.keepaliveTimer);
     this.throttleTimer = null;
     this.keepaliveTimer = null;
+    // Purge OUR own keys from the source WITHOUT broadcasting (fix 1) — detach ≠ leave. Left in place, the
+    // adapter's `dirty`/`pendingDeletes` and the backing store's own keys survive; a same-store re-attach
+    // then re-broadcasts a despawned entity as a phantom on every peer. `delete` removes each blob and
+    // un-dirties it; draining `encodeDeletes` DISCARDS the just-captured tombstones so nothing ships on a
+    // later re-attach. Remote-applied keys are NOT touched (they are not minted) — they TTL out on their own.
+    for (const key of [...this.eph.mintedKeys]) this.source.delete(key);
+    this.source.encodeDeletes(); // drain + discard: detach broadcasts nothing
     this.pending = []; // 2. discard queued-but-undrained events ...
     this.lastSeenBlobByKey.clear(); // ... and the blob-diff cache
     this.projector.teardown(); // 3. despawn EVERY projected entity — remote AND own — + clear the bijection
@@ -514,51 +523,138 @@ class EphemeralBinding implements InboundSource {
     ATTACHED.delete(this.eph); // mark re-attachable
   }
 
-  // --- diagnostics ----------------------------------------------------------------------------------
+  // --- inbound fact validation (hostile-proof: NOTHING a peer sends escapes sync()) -----------------
 
   /**
-   * DEV-throw if `comp` declares any `eid` field (005 §7) — a replicated component MUST reference entities
-   * with `key` fields, not packed runtime handles (meaningless across the wire). Memoized per ComponentId:
-   * validated once at first replicated use, then skipped. Mirrors the store's own check (M1) for the inbound
-   * direction.
+   * Validate ONE inbound component fact against the schema (fixes 3a/3b/4). Returns the resolved component +
+   * its canonical value, or null (skip, one-shot DEV warn) for: an unknown name; a value that is not a plain
+   * object (which would throw `hasOwnProperty` inside tryCanon — fix 3a, checked BEFORE the eid ban/tryCanon);
+   * a component declaring an `eid` field (a wire eid is a meaningless packed handle — SOFT-rejected inbound,
+   * fix 4, unlike the store's own-mutation DEV-throw); or a per-field tryCanon reject. NEVER throws.
    */
-  private assertNoEidFields(comp: Component): void {
-    if (this.validatedComponents.has(comp.id)) return;
-    if (DEV) {
-      for (const f of comp.fields) {
-        if (f.spec.type === "eid") {
-          throw new Error(
-            `strata: ephemeral component "${comp.name}" declares an eid field "${f.name}" — an eid is a packed runtime handle, meaningless across the wire. Reference entities with a key field instead (005 §7).`,
-          );
-        }
+  private canonInbound(name: string, raw: unknown): { comp: Component; value: ComponentValue } | null {
+    const comp = componentByName(name);
+    if (comp === undefined) {
+      this.warnUnknownName("component", name);
+      return null;
+    }
+    if (!isPlainObject(raw)) {
+      this.warnCanonReject(`comp:${comp.id}`, name, "(value)", "not a plain object");
+      return null;
+    }
+    if (!this.inboundComponentAllowed(comp)) return null; // eid field → soft reject (fix 4)
+    const gate = tryCanon(comp, raw as ComponentValue);
+    if (!gate.ok) {
+      this.warnCanonReject(`comp:${comp.id}:${gate.field}`, name, gate.field, gate.reason);
+      return null;
+    }
+    return { comp, value: gate.value };
+  }
+
+  /**
+   * Resolve ONE inbound tag name to its handle, or null (skip). Skips an unknown tag (one-shot warn) and —
+   * the reserved-tag FIREWALL (fix 2) — ANY framework-reserved tag (e.g. `Local`): a forged blob carrying
+   * `tags:["Local"]` would apply Local to a REMOTE projection, silently breaking `Not(Local)` presence
+   * queries cross-peer. Reserved tags are computed locally per peer and never wire-borne (§15.4), so any
+   * reserved name is dropped, warned once. Never throws.
+   */
+  private resolveInboundTag(name: string): Tag | null {
+    const tag = tagByName(name);
+    if (tag === undefined) {
+      this.warnUnknownName("tag", name);
+      return null;
+    }
+    if (isReservedName(name)) {
+      this.warnOnce(`reserved-tag:${name}`, () =>
+        `inbound ephemeral blob carries the framework-reserved tag "${name}" — skipped; reserved tags are computed locally per peer, never transmitted (§15.4, 006 §B5).`,
+      );
+      return null;
+    }
+    return tag;
+  }
+
+  /**
+   * Whether an inbound `comp` is safe to project — false (skip) if it declares an `eid` field (005 §7): a
+   * wire eid is a packed runtime handle, meaningless in our runtime. INBOUND is a SOFT reject (fix 4): a
+   * remote peer must never throw out of `world.sync()`, so — unlike the store's own-mutation ban, which
+   * keeps its DEV throw — this warns once and skips, in ALL builds (never projecting a meaningless eid).
+   * Memoized per ComponentId on BOTH sides (validated-clean / rejected), so the scan and the warn each
+   * happen once.
+   */
+  private inboundComponentAllowed(comp: Component): boolean {
+    if (this.validatedComponents.has(comp.id)) return true;
+    if (this.rejectedComponents.has(comp.id)) return false;
+    for (const f of comp.fields) {
+      if (f.spec.type === "eid") {
+        this.rejectedComponents.add(comp.id);
+        this.warnOnce(`eid:${comp.id}`, () =>
+          `inbound ephemeral component "${comp.name}" declares an eid field "${f.name}" — a packed runtime handle is meaningless across the wire; the component is skipped. Reference entities with a key field instead (005 §7).`,
+        );
+        return false;
       }
     }
     this.validatedComponents.add(comp.id);
+    return true;
   }
 
-  /** One-shot DEV warn per rejected inbound value (005 §2.3 / 006 B4): a malformed blob touched nothing. */
+  // --- diagnostics (DEV-only; the dedupe set is DEV-gated and keyed by a BOUNDED id, never per-remote-key) --
+
+  /**
+   * One-shot DEV warn per rejected inbound value (005 §2.3 / 006 B4): a malformed fact touched nothing. The
+   * dedupe key is BOUNDED (a component/reason id or a constant, NOT the remote entity key — fix 6), and the
+   * `.add` is DEV-gated, so production (which never warns) never grows the set.
+   */
   private warnCanonReject(dedupe: string, name: string, field: string, reason: string): void {
-    if (this.warned.has(dedupe)) return;
+    if (!DEV || this.warned.has(dedupe)) return;
     this.warned.add(dedupe);
     devWarn(
       `inbound ephemeral value for "${name}" field "${field}" rejected (${reason}) — dropped, leaving the prior projection standing (005 §2.3).`,
     );
   }
 
-  /** One-shot DEV diagnostic per unresolved name (006 B3 R1) — skipped, never projected. */
+  /**
+   * One-shot DEV diagnostic per unresolved name kind (006 B3 R1) — skipped, never projected. Bucketed PER
+   * KIND (not per name), so a hostile peer streaming distinct unknown names cannot grow the set (fix 6); the
+   * `.add` is DEV-gated too. The first unknown component (and the first unknown tag) is named in the message.
+   */
   private warnUnknownName(kind: string, name: string): void {
-    const dedupe = `name:${kind}:${name}`;
-    if (this.warned.has(dedupe)) return;
+    const dedupe = `unknown:${kind}`;
+    if (!DEV || this.warned.has(dedupe)) return;
     this.warned.add(dedupe);
     devWarn(`inbound ephemeral blob names an unknown ${kind} "${name}" — skipped (no schema object resolves it; 006 §B3).`);
   }
 
-  /** A one-shot DEV warning keyed by `tag` (peerId-reuse, own-timeout) — the message is lazy (DEV-only). */
+  /**
+   * A one-shot DEV warning keyed by `tag` (peerId-reuse, own-timeout, reserved-tag, eid) — the message is
+   * lazy (DEV-only) and the `.add` is DEV-gated so production never grows the set (fix 6). Every `tag` key is
+   * BOUNDED (a constant, or a schema/reserved id), never per-remote-key.
+   */
   private warnOnce(tag: string, message: () => string): void {
-    if (this.warned.has(tag)) return;
+    if (!DEV || this.warned.has(tag)) return;
     this.warned.add(tag);
     devWarn(message());
   }
+}
+
+/** A non-null plain object (not an array, not a typed array) — the shape a component value must have (fix 3a). */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v) && !(v instanceof Uint8Array);
+}
+
+/** The minted key shape — `${peerId}-<counter>`, counter a non-negative integer (greedy prefix, digits end). */
+const MINTED_KEY = /^(.*)-(\d+)$/;
+
+/**
+ * The ONE parser both the own-partition router ({@link EphemeralBinding.isOwnKey}) and the peer-count
+ * ({@link EphemeralBinding.countRemotePeers}) derive from (fix 5). Anchored to the minted shape
+ * `${peerId}-<int>`: `peer` is the key minus a trailing `-<integer>`, `minted` says it matched. A key that
+ * does NOT match (no hyphen, a trailing hyphen, a non-integer suffix) buckets under its WHOLE string with
+ * `minted:false` — never misrouted into a partition, never a fabricated sub-prefix. Hostile strings pass
+ * through safely: "nohyphen"/"peer-"/"alice-9-" → whole-string bucket; "mallory-9-0" → peer "mallory-9".
+ */
+function parseMintedKey(key: string): { peer: string; minted: boolean } {
+  const m = MINTED_KEY.exec(key);
+  return m === null ? { peer: key, minted: false } : { peer: m[1], minted: true };
 }
 
 /** Read a blob's `components` record defensively (a hostile peer value is not a plain object). */

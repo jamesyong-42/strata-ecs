@@ -152,6 +152,16 @@ describe("tryCanon — inbound-safe, never throws (§2.3)", () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value.u8v).toBe(44);
   });
+
+  it("rejects a NON-OBJECT root value WITHOUT throwing (honors the never-throws contract — P4-R fix 3b)", () => {
+    // A hostile peer can send a component value that is not a plain object at all. The per-field loop reads
+    // it with hasOwnProperty, which THROWS on null; the root guard rejects the whole fact instead.
+    for (const bad of [null, 5, "x", true, undefined] as unknown[]) {
+      let result!: ReturnType<typeof tryCanon>;
+      expect(() => (result = tryCanon(Battery, bad as ComponentValue))).not.toThrow();
+      expect(result.ok).toBe(false);
+    }
+  });
 });
 
 describe("tryCanonResource — inbound-safe, object-backed, never throws (§2.3, §7)", () => {

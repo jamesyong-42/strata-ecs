@@ -438,6 +438,154 @@ describe("detach — full teardown (§5.6)", () => {
   });
 });
 
+// --- detach purges own outbound staging (fix 1) ----------------------------------------------------
+describe("detach purges own outbound staging (fix 1)", () => {
+  it("re-attach after a detach-before-flush ships NO phantom; the new spawn ships alone; remote keys survive", async () => {
+    const A = makePeer("alice");
+    const B = makePeer("bob");
+    // B holds a REMOTE projection of A (so B's Loro store carries the remote key "alice-0").
+    A.eph.spawn({ components: [[CursorPos, { x: 1, y: 1 }]] });
+    await sleep(25);
+    deliver(A, B);
+    B.world.sync();
+    expect(countMatches(B, remoteCursors)).toBe(1);
+
+    // B spawns its OWN entity (now dirty on B's source) then detaches BEFORE the throttle can flush it.
+    B.eph.spawn({ components: [[CursorPos, { x: 9, y: 9 }]] });
+    B.attachment.detach();
+
+    // Re-attach the SAME store: the purge un-dirtied + removed B's own key, so nothing re-broadcasts, and
+    // the remote key was NOT purged (only minted keys are).
+    B.attachment = attachEphemeral(B.world, B.eph);
+    expect(B.source.encodeChanged()).toBeNull(); // own dirty key purged → no phantom
+    expect(B.source.encodeDeletes()).toHaveLength(0); // no stale tombstones queued
+    expect(B.loro.get("alice-0")).toBeDefined(); // the remote key survived the own-key purge
+
+    // A freshly spawned entity after re-attach ships — and ONLY it (no phantom of the despawned key).
+    B.eph.spawn({ components: [[CursorPos, { x: 5, y: 5 }]] });
+    const changed = B.source.encodeChanged();
+    expect(changed).not.toBeNull();
+    const C = makePeer("carol");
+    C.source.apply(changed!);
+    C.world.sync();
+    expect(countMatches(C, remoteCursors)).toBe(1); // only the new cursor projected onto C
+    expect(C.world.get(C.world.firstOf(remoteCursors)!, CursorPos)).toEqual({ x: 5, y: 5 });
+  });
+
+  it("a bare re-attach (no new spawn) re-broadcasts nothing even though an entity was dirty at detach", async () => {
+    const A = makePeer("alice");
+    A.eph.spawn({ components: [[CursorPos, { x: 1, y: 1 }]] }); // dirty on the source
+    A.attachment.detach(); // detach before any flush — the dirty own key must be purged, not re-shipped
+    A.outbound.length = 0;
+
+    A.attachment = attachEphemeral(A.world, A.eph); // bare re-attach, NO new spawn
+    await sleep(30); // past a throttle window — the re-attached timers must send NOTHING
+    expect(A.outbound).toHaveLength(0);
+  });
+});
+
+// --- reserved-tag firewall (fix 2) -----------------------------------------------------------------
+describe("reserved-tag firewall on the inbound path (fix 2)", () => {
+  it("a forged tags:['Local'] blob does NOT apply Local to a remote projection; warn-once", () => {
+    const B = makePeer("bob");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const scratch = new LoroStore(30_000);
+    loros.push(scratch);
+    scratch.set("alice-0", { components: { AttCursorPos: { x: 1, y: 1 } }, tags: ["Local"] }); // forged reserved tag
+    B.source.apply(scratch.encodeAll());
+    B.world.sync();
+
+    const rc = B.world.firstOf(remoteCursors)!; // Not(Local) must STILL select it cross-peer
+    expect(rc).toBeDefined();
+    expect(B.world.hasTag(rc, Local)).toBe(false); // Local was NOT applied from the wire
+    expect(warn.mock.calls.filter((c) => /reserved/i.test(String(c[0])))).toHaveLength(1);
+
+    // A second forged-Local arrival does not warn again (bounded dedupe).
+    scratch.set("alice-1", { components: { AttCursorPos: { x: 2, y: 2 } }, tags: ["Local"] });
+    B.source.apply(scratch.encodeAll());
+    B.world.sync();
+    expect(warn.mock.calls.filter((c) => /reserved/i.test(String(c[0])))).toHaveLength(1);
+  });
+});
+
+// --- malformed component values do not throw out of sync() (fix 3) ----------------------------------
+describe("malformed component values are soft-rejected (fix 3)", () => {
+  it("a forged null-value blob does not abort the batch — an innocent peer in the SAME drain still applies", () => {
+    const B = makePeer("bob");
+    const scratch = new LoroStore(30_000);
+    loros.push(scratch);
+    scratch.set("mallory-0", { components: { AttCursorPos: null }, tags: [] }); // hostile: value is null
+    scratch.set("alice-0", { components: { AttCursorPos: { x: 7, y: 7 } }, tags: [] }); // innocent peer
+    B.source.apply(scratch.encodeAll()); // both events queue into ONE batch-atomic drain
+    expect(() => B.world.sync()).not.toThrow(); // NOTHING a peer sends may throw out of sync()
+
+    const rc = B.world.firstOf(remoteCursors)!;
+    expect(rc).toBeDefined();
+    expect(B.world.get(rc, CursorPos)).toEqual({ x: 7, y: 7 }); // alice projected despite mallory's poison
+    expect(countMatches(B, remoteCursors)).toBe(1); // mallory's rejected value left it without CursorPos
+  });
+
+  it("a fully-rejected UNSEEN blob is TRACKED and despawns on TTL — no permanent orphan (fix 3c)", async () => {
+    const B = makePeer("bob", 250);
+    const scratch = new LoroStore(30_000);
+    loros.push(scratch);
+    scratch.set("mallory-0", { components: { AttCursorPos: null }, tags: [] }); // every fact rejected
+    B.source.apply(scratch.encodeAll());
+    expect(() => B.world.sync()).not.toThrow();
+    // The spawned-and-placed entity was cached anyway (cache entry recorded despite full rejection), so
+    // peerCount (derived from the blob-diff cache) counts it — it is TRACKED, not a spawned-uncached orphan.
+    expect(B.world.getResource(EphemeralSyncStatus)!.peerCount).toBe(1);
+
+    await sleep(500); // > ttl + a cleanup tick → the tracked key times out
+    B.world.sync();
+    expect(B.world.getResource(EphemeralSyncStatus)!.peerCount).toBe(0); // despawned on TTL — no orphan survives
+  });
+});
+
+// --- minted-format key parsing (fix 5) -------------------------------------------------------------
+describe("minted-format key parsing (fix 5)", () => {
+  it("forged / oddly-shaped keys bucket by the anchored parser and never misroute into the own partition", () => {
+    const B = makePeer("bob");
+    const scratch = new LoroStore(30_000);
+    loros.push(scratch);
+    // nohyphen / peer- / alice-9- do not match the minted shape → whole-string buckets; mallory-9-0 and
+    // mallory-9-1 share the prefix "mallory-9"; carol-3 → "carol". Six keys → five distinct peer prefixes.
+    for (const key of ["nohyphen", "peer-", "alice-9-", "mallory-9-0", "mallory-9-1", "carol-3"]) {
+      scratch.set(key, { components: { AttCursorPos: { x: 1, y: 1 } }, tags: [] });
+    }
+    B.source.apply(scratch.encodeAll());
+    B.world.sync();
+
+    expect(B.world.getResource(EphemeralSyncStatus)!.peerCount).toBe(5); // mallory-9-0/1 collapse to one prefix
+    expect(countMatches(B, remoteCursors)).toBe(6); // all projected as remote — none suppressed as own
+  });
+
+  it("a legitimate peer named `${myPeerId}-x` is NOT suppressed as own (the startsWith bug)", () => {
+    const B = makePeer("bob");
+    const scratch = new LoroStore(30_000);
+    loros.push(scratch);
+    // "bob-x-0" starts with "bob-" but is NOT bob's (bob mints "bob-<int>"); it must project as remote.
+    scratch.set("bob-x-0", { components: { AttCursorPos: { x: 2, y: 2 } }, tags: [] });
+    B.source.apply(scratch.encodeAll());
+    B.world.sync();
+    const rc = B.world.firstOf(remoteCursors)!;
+    expect(rc).toBeDefined();
+    expect(B.world.get(rc, CursorPos)).toEqual({ x: 2, y: 2 }); // projected, not silently suppressed
+  });
+
+  it("a forged `${myPeerId}-<int>` this session did not mint routes to own-partition refusal (not projected)", () => {
+    const B = makePeer("bob");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const scratch = new LoroStore(30_000);
+    loros.push(scratch);
+    scratch.set("bob-77", { components: { AttCursorPos: { x: 3, y: 3 } }, tags: [] }); // forged own-prefix key
+    B.source.apply(scratch.encodeAll());
+    B.world.sync();
+    expect(countMatches(B, remoteCursors)).toBe(0); // refused as a reused-peerId ghost, never projected
+    expect(warn.mock.calls.filter((c) => /peerId reuse/i.test(String(c[0])))).toHaveLength(1);
+  });
+});
+
 // --- guards ----------------------------------------------------------------------------------------
 describe("attach / drain guards", () => {
   it("attachEphemeral throws mid-tick", () => {
@@ -479,14 +627,27 @@ describe("attach / drain guards", () => {
     expect(() => source.drain()).toThrow(/observer or reactive callback/i);
   });
 
-  it("the eid-field ban trips on the first replicated use of an inbound component", () => {
+  it("an inbound eid-field component is SOFT-rejected: no throw, skipped, warn-once (fix 4)", () => {
     const B = makePeer("bob");
     void BadEid; // registered by defineComponent at module load — resolved by name during projection
-    // Forge a blob carrying an eid-field component from another peer's prefix.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // A forged blob carrying an eid-field component ALONGSIDE a valid one, from a remote peer's prefix.
     const scratch = new LoroStore(30_000);
     loros.push(scratch);
-    scratch.set("alice-0", { components: { AttBadEid: { ref: 123 } }, tags: [] });
+    scratch.set("alice-0", { components: { AttBadEid: { ref: 123 }, AttCursorPos: { x: 5, y: 6 } }, tags: [] });
     B.source.apply(scratch.encodeAll());
-    expect(() => B.world.sync()).toThrow(/eid/i);
+    expect(() => B.world.sync()).not.toThrow(); // NOTHING a peer sends may throw out of sync() (north star)
+
+    const rc = B.world.firstOf(remoteCursors)!;
+    expect(rc).toBeDefined();
+    expect(B.world.get(rc, CursorPos)).toEqual({ x: 5, y: 6 }); // the valid sibling projected
+    expect(B.world.has(rc, BadEid)).toBe(false); // the eid component never entered the runtime
+    expect(warn.mock.calls.filter((c) => /eid/i.test(String(c[0])))).toHaveLength(1);
+
+    // A second arrival of the same eid component does not warn again (memoized per component id).
+    scratch.set("alice-1", { components: { AttBadEid: { ref: 9 } }, tags: [] });
+    B.source.apply(scratch.encodeAll());
+    B.world.sync();
+    expect(warn.mock.calls.filter((c) => /eid/i.test(String(c[0])))).toHaveLength(1);
   });
 });

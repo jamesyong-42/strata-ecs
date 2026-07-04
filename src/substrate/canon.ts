@@ -132,6 +132,13 @@ export type TryCanonResult =
  * the cell (§2.3): whatever relation held before still holds.
  */
 export function tryCanon(C: Component, v: ComponentValue): TryCanonResult {
+  // NEVER-THROWS at the root: a hostile peer may send a component value that is not an object at all
+  // (`null`, a number, a string). The per-field loop below reads it with `hasOwnProperty.call(value, …)`,
+  // which THROWS on `null` — a throw that, unguarded, escapes the ephemeral inbound drain out of
+  // `world.sync()` (P4-R). Reject the whole value as one fact instead; the class is "not a plain object".
+  if (v === null || typeof v !== "object") {
+    return { ok: false, field: "(value)", reason: "component value is not an object" };
+  }
   const value = v as Record<string, unknown>;
   const out: ComponentValue = {};
   for (const f of C.fields) {

@@ -41,5 +41,5 @@ export { Projector } from "./projector";
 // The durable/ephemeral adapter resolves durable NAMES → schema objects at its read boundary, and
 // hands out `Unsubscribe` from `subscribe`/`observeSync`. Re-exported here so the adapter imports the
 // whole Part II vocabulary from one place instead of reaching back into `../core`.
-export { componentByName, tagByName, relationByName, resourceByName } from "../core/schema";
+export { componentByName, tagByName, relationByName, resourceByName, isReservedName } from "../core/schema";
 export type { Unsubscribe } from "../core/reactive";

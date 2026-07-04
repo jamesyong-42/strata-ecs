@@ -43,7 +43,13 @@
  *         timestamp-order, and the store's throttle (≥ throttleMs, ≥ 1ms; design default 16ms) guarantees
  *         two distinct-value sends of any key are ≥ 1ms apart → distinct timestamps → out-of-order
  *         delivery resolves correctly. LOAD-BEARING for M2: throttleMs and the keepalive interval MUST
- *         stay ≥ ~1ms (trivially true at the design defaults).
+ *         stay ≥ ~1ms (trivially true at the design defaults). CORRECTION (P4-R): the throttle is not the
+ *         only sender — the KEEPALIVE (`encodeKeys`) is a second one on its own clock, so the ≥1ms floor
+ *         alone does NOT bound the gap between a throttle send and a keepalive send of the SAME key. A
+ *         key mid-change is dirty AND about to ride the change path; a same-ms keepalive copy carrying the
+ *         OLD value could tie and win (first-applied-wins). So `encodeKeys` (keepalive) SKIPS currently-
+ *         dirty keys — they ship (fresh-stamped) via the change path only; the keepalive re-stamps solely
+ *         idle keys, which by definition have no competing in-flight change.
  *       - CROSS-PEER SAME-KEY CONTENTION DOES NOT CONVERGE (two stores writing one key diverge by
  *         apply-order on a tie). This is UNREACHABLE under writer-partitioning (every key has exactly one
  *         writer, design §15.1) — and is precisely WHY partitioning is load-bearing, not an optimization.
@@ -145,11 +151,15 @@ export class LoroEphemeralSnapshot implements EphemeralSource {
   /**
    * Explicit removal (best-effort leave, finding 5). Captures the tombstone the local-update stream
    * emits SYNCHRONOUSLY (finding 1) so `encodeDeletes` can ship it — `encode`/`encodeAll` cannot carry a
-   * removal. A no-op `delete` (absent key) emits no tombstone. Un-dirties the key so a same-window
-   * set-then-delete does not also encode it as a live value.
+   * removal. Un-dirties the key so a same-window set-then-delete does not also encode it as a live value.
+   *
+   * PRESENCE GUARD (fix 6): loro `delete` of an ABSENT key still emits a BLIND incremental tombstone (the
+   * prior comment claiming "no-op → no tombstone" was false). Shipping that useless removal is pure waste,
+   * so skip the whole capture when the key is not present — un-dirty and return.
    */
   delete(key: EntityKey): void {
     this.dirty.delete(key);
+    if (this.source.get(key) === undefined) return; // absent → loro would emit a blind tombstone; skip it
     let tombstone: Uint8Array | undefined;
     const capture = this.source.subscribeLocalUpdates((bytes) => {
       tombstone = bytes;
@@ -228,6 +238,12 @@ export class LoroEphemeralSnapshot implements EphemeralSource {
     try {
       let any = false;
       for (const key of keys) {
+        // KEEPALIVE (refreshReal) SKIPS currently-dirty keys (fix 6): a dirty key already rides the change
+        // path (encodeChanged) with a fresh stamp this same window. Re-emitting it on the keepalive can tie
+        // the throttle send within one wall-clock ms carrying the OLD value, and a same-ms LWW tie is
+        // first-applied-wins (M0 finding 2) — so the stale keepalive copy could win and strand the receiver.
+        // (The change path itself, refreshReal=false, must NOT skip — those keys ARE the change.)
+        if (refreshReal && this.dirty.has(key)) continue;
         const v = this.source.get(key);
         if (v === undefined) continue; // deleted / never-present → nothing to encode or refresh
         if (refreshReal) this.source.set(key, v); // re-stamp on the REAL store (keeps the owner alive)

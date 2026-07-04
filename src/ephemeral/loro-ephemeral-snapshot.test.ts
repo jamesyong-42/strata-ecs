@@ -138,6 +138,7 @@ describe("encodeKeys — chosen subset (006 B5 keepalive)", () => {
     A.eph.set(k("alice-0"), { a: 1 });
     A.eph.set(k("alice-1"), { b: 2 });
     A.eph.set(k("bob-9"), { c: 3 }); // a learned remote key — must NOT be re-broadcast (006 B5)
+    A.eph.encodeChanged(); // drain the dirty set (the throttle path); keepalive only re-stamps IDLE keys (fix 6)
 
     const bytes = A.eph.encodeKeys([k("alice-0"), k("alice-1")]);
     expect(bytes).not.toBeNull();
@@ -150,6 +151,22 @@ describe("encodeKeys — chosen subset (006 B5 keepalive)", () => {
   it("returns null when none of the requested keys are present", () => {
     const A = adapter();
     expect(A.eph.encodeKeys([k("ghost-0")])).toBeNull();
+  });
+
+  it("SKIPS a currently-dirty key — it rides the change path, not a same-ms keepalive copy (fix 6)", () => {
+    const A = adapter();
+    A.eph.set(k("alice-0"), { v: 1 }); // dirty (not yet encodeChanged'd)
+    A.eph.set(k("alice-1"), { v: 2 }); // dirty
+    // alice-0 stays dirty; alice-1 is drained (clean) → only alice-1 rides the keepalive.
+    // (Drain alice-1 alone by re-setting it clean is awkward; instead prove the all-dirty case returns null.)
+    expect(A.eph.encodeKeys([k("alice-0"), k("alice-1")])).toBeNull(); // both dirty → nothing keepalived
+
+    A.eph.encodeChanged(); // the throttle drains dirty
+    const bytes = A.eph.encodeKeys([k("alice-0"), k("alice-1")]); // now both idle → both keepalived
+    expect(bytes).not.toBeNull();
+    const B = adapter();
+    B.eph.apply(bytes!);
+    expect(B.events.filter((e) => e.kind === "remote").map((e) => e.key).sort()).toEqual(["alice-0", "alice-1"]);
   });
 });
 
@@ -169,6 +186,7 @@ describe("TTL timeout + keepalive (finding 4)", () => {
   it("keepalive re-set keeps the OWNER's own idle key alive (no spurious own-key timeout)", async () => {
     const A = adapter(150); // short TTL owner
     A.eph.set(k("alice-0"), { v: 1 });
+    A.eph.encodeChanged(); // the throttle drains the dirty set first — keepalive only re-stamps IDLE keys (fix 6)
     for (let i = 0; i < 6; i++) {
       await sleep(50); // ttl/3
       A.eph.encodeKeys([k("alice-0")]); // keepalive: re-stamps on the REAL store
@@ -217,6 +235,13 @@ describe("explicit delete (finding 5)", () => {
     expect(A.events.some((e) => e.kind === "local" && e.key === "alice-0" && e.value === undefined)).toBe(true);
     expect(A.eph.encodeDeletes()).toHaveLength(1);
     expect(A.eph.encodeDeletes()).toHaveLength(0); // drained
+  });
+
+  it("delete of an ABSENT key captures no tombstone (presence guard — fix 6)", () => {
+    const A = adapter();
+    A.eph.delete(k("never-set-0")); // absent → loro WOULD emit a blind tombstone; the guard skips the capture
+    expect(A.eph.encodeDeletes()).toHaveLength(0); // nothing to ship
+    expect(A.events.filter((e) => e.kind === "local")).toHaveLength(0); // no echo either
   });
 });
 
