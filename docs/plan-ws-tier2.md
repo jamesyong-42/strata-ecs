@@ -1,5 +1,7 @@
 # Plan — WebSocket Transport Demo + the Tier-2 Cleanup Pass
 
+**Status: IMPLEMENTED** (2026-07-04; Stream B: 3fd7183 dedup + 37eb40f fast path [idle notify() ~997µs → ~37ns at 10k watches] + 675db0f test hardening; Stream A: 574fa3a WS transport [smoke PASS 45/45 over live sockets, reconnect re-bootstrap] + 5199e19 review-lite hardening; lite review verdict: both streams sound; 662 ci + 5 smoke + 240 stress green).
+
 Two independent streams (disjoint file sets; run in parallel).
 
 ## Stream A — the real WebSocket transport demo
