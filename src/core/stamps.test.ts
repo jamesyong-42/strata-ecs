@@ -215,6 +215,78 @@ describe("tag/relation membership version (§4.2)", () => {
     expect(w.hasTag(e, Selected)).toBe(true);
     expect(rt.lastTagRelFrame).toBe(3);
   });
+
+  // The other four flush arms' bumpTagRel were untested before R6 (only ctx.addTag was covered) —
+  // each is now routed through the shared do* primitive, so each must still advance lastTagRelFrame
+  // at flush. A row-filtered Tier-1 watch keys off exactly this version (§4.2).
+  it("ctx.removeTag through a tick bumps lastTagRelFrame at flush (applyCommand path)", () => {
+    const w = reactiveWorld();
+    const rt = w.runtime;
+    const e = w.spawn({ components: [[Driver, { v: 0 }]] });
+    w.addTag(e, Selected); // present before the tick
+    const Untagger = defineSystem(defineQuery([Driver]), (_batch, ctx) => {
+      ctx.removeTag(e, Selected);
+    });
+
+    rt.advanceFrame();
+    rt.advanceFrame(); // frame 3
+    w.tick([phase("untag", [Untagger])]);
+
+    expect(w.hasTag(e, Selected)).toBe(false);
+    expect(rt.lastTagRelFrame).toBe(3);
+  });
+
+  it("ctx.setRelation through a tick bumps lastTagRelFrame at flush (applyCommand path)", () => {
+    const w = reactiveWorld();
+    const rt = w.runtime;
+    const e = w.spawn({ components: [[Driver, { v: 0 }]] });
+    const target = w.spawn();
+    const Setter = defineSystem(defineQuery([Driver]), (_batch, ctx) => {
+      ctx.setRelation(e, Owns, target);
+    });
+
+    rt.advanceFrame();
+    rt.advanceFrame(); // frame 3
+    w.tick([phase("set", [Setter])]);
+
+    expect(w.getRelation(e, Owns)).toBe(target);
+    expect(rt.lastTagRelFrame).toBe(3);
+  });
+
+  it("ctx.addRelation through a tick bumps lastTagRelFrame at flush (applyCommand path)", () => {
+    const w = reactiveWorld();
+    const rt = w.runtime;
+    const e = w.spawn({ components: [[Driver, { v: 0 }]] });
+    const target = w.spawn();
+    const Adder = defineSystem(defineQuery([Driver]), (_batch, ctx) => {
+      ctx.addRelation(e, Links, target);
+    });
+
+    rt.advanceFrame();
+    rt.advanceFrame(); // frame 3
+    w.tick([phase("add", [Adder])]);
+
+    expect(w.getRelations(e, Links)).toContain(target);
+    expect(rt.lastTagRelFrame).toBe(3);
+  });
+
+  it("ctx.removeRelation through a tick bumps lastTagRelFrame at flush (applyCommand path)", () => {
+    const w = reactiveWorld();
+    const rt = w.runtime;
+    const e = w.spawn({ components: [[Driver, { v: 0 }]] });
+    const target = w.spawn();
+    w.addRelation(e, Links, target); // edge present before the tick
+    const Remover = defineSystem(defineQuery([Driver]), (_batch, ctx) => {
+      ctx.removeRelation(e, Links, target);
+    });
+
+    rt.advanceFrame();
+    rt.advanceFrame(); // frame 3
+    w.tick([phase("rmrel", [Remover])]);
+
+    expect(w.getRelations(e, Links)).not.toContain(target);
+    expect(rt.lastTagRelFrame).toBe(3);
+  });
 });
 
 describe("stampWrites — 001 §3.1 route 1 (blanket over query-matching archetypes)", () => {

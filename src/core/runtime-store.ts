@@ -810,6 +810,23 @@ export class RuntimeStore implements ECSStore {
     this.migrate(e, newIds, EMPTY_FIELD_VALUES);
   }
 
+  /**
+   * The single cell-overwrite primitive (R6): write `c`'s already-encoded fields into `e`'s row and
+   * stamp the column. Sole owner of the "overwrite an in-place component's cells + value stamp"
+   * shape — both {@link writeComponent} (edit path) and {@link projectComponent}'s overwrite branch
+   * call it, so the loop + stamp live once. Assumes `e` is placed and already holds `c` (callers
+   * check). The `reactiveOn` gate lives inside {@link stampComponent}, so this is zero-cost when the
+   * reactive layer is untouched.
+   */
+  private doWriteCells(e: Entity, c: Component, encoded: ReadonlyMap<FieldId, Stored>): void {
+    const A = this.archetypeOfEntity(e);
+    const row = this.table.rowOf(slotOf(e));
+    for (const f of c.fields) {
+      writeCell(A.columns.get(f.fieldId) as Column, f.kind, row, encoded.get(f.fieldId) as Stored);
+    }
+    this.stampComponent(A, c.id); // edit-path value write (002 §2.2(3), 001 §3.1 route 2)
+  }
+
   /** Overwrite the value of a component the entity already has (value change). Throws if absent. */
   writeComponent<S>(e: Entity, c: Component<S>, value: S): void {
     this.assertAlive(e, "writeComponent");
@@ -826,13 +843,7 @@ export class RuntimeStore implements ECSStore {
       );
     }
     if (DEV) this.enforceWriteAccess(c); // 001 Rule 3: undeclared edit-path write throws before mutating
-    const encoded = encodeComponentValue(c, value as Record<string, unknown>);
-    const A = this.archetypeOfEntity(e);
-    const row = this.table.rowOf(slotOf(e));
-    for (const f of c.fields) {
-      writeCell(A.columns.get(f.fieldId) as Column, f.kind, row, encoded.get(f.fieldId) as Stored);
-    }
-    this.stampComponent(A, c.id); // edit-path value write (002 §2.2(3), 001 §3.1 route 2)
+    this.doWriteCells(e, c, encodeComponentValue(c, value as Record<string, unknown>));
   }
 
   // ---------------------------------------------------------------------------
@@ -847,12 +858,7 @@ export class RuntimeStore implements ECSStore {
       this.place(e, this.archetypeFor([c.id]), encoded);
       this.stampComponent(this.archetypeOfEntity(e), c.id); // initial value of the projected column
     } else if (this.archetypeOfEntity(e).hasComponent(c.id)) {
-      const A = this.archetypeOfEntity(e);
-      const row = this.table.rowOf(slotOf(e));
-      for (const f of c.fields) {
-        writeCell(A.columns.get(f.fieldId) as Column, f.kind, row, encoded.get(f.fieldId) as Stored);
-      }
-      this.stampComponent(A, c.id); // overwrite branch writes cells directly — stamp explicitly (002 §2.2)
+      this.doWriteCells(e, c, encoded); // overwrite branch — the same cell-loop + stamp as writeComponent (R6)
     } else {
       const newIds = RuntimeStore.sortedInsert(this.archetypeOfEntity(e).componentIds, c.id);
       this.migrate(e, newIds, encoded); // migrate stamps the added column
@@ -919,6 +925,46 @@ export class RuntimeStore implements ECSStore {
   }
 
   // ---------------------------------------------------------------------------
+  // Tag / relation stamp-owning primitives (R6) — the substore-write + membership bump, once
+  // ---------------------------------------------------------------------------
+  //
+  // Each of the five (add/remove tag, set/add/remove relation) is the SOLE owner of its
+  // "mutate the tag/relation substore + bump the §4.2 membership version" shape. Both the guarded
+  // public ops below AND the flush arms in {@link applyCommand} call these — so the substore call
+  // and `bumpTagRel()` are written once, not hand-copied per surface. The public ops keep their own
+  // preconditions (rejectMutationInEmit / assertAlive / arity throws); the flush arms keep theirs
+  // (validate-on-read at the top of applyCommand, drop-on-dead-target). The `reactiveOn` gate lives
+  // inside {@link bumpTagRel}, so these are zero-cost when reactivity is untouched.
+
+  private doAddTag(e: Entity, tagId: number): void {
+    this.ensurePlaced(e); // an identity-only source becomes queryable once tagged (§5.2)
+    this.tags.set(tagId, slotOf(e));
+    this.bumpTagRel(); // tag-filtered membership changed (002 §4.2)
+  }
+
+  private doRemoveTag(e: Entity, tagId: number): void {
+    this.tags.clear(tagId, slotOf(e)); // does not unplace the entity
+    this.bumpTagRel();
+  }
+
+  private doSetRelation(e: Entity, rel: Relation, target: Entity): void {
+    this.ensurePlaced(e); // places the source; the target is not placed (§5.2)
+    this.relations.setOne(rel, e, target);
+    this.bumpTagRel(); // relation-filtered membership changed (002 §4.2)
+  }
+
+  private doAddRelation(e: Entity, rel: Relation, target: Entity): void {
+    this.ensurePlaced(e);
+    this.relations.addMany(rel, e, target);
+    this.bumpTagRel();
+  }
+
+  private doRemoveRelation(e: Entity, rel: Relation, target?: Entity): void {
+    this.relations.remove(rel, e, target); // remove one edge (target given) or all; does not unplace
+    this.bumpTagRel();
+  }
+
+  // ---------------------------------------------------------------------------
   // Tags (slot-indexed bitsets, §3.2)
   // ---------------------------------------------------------------------------
 
@@ -926,17 +972,14 @@ export class RuntimeStore implements ECSStore {
   addTag(e: Entity, t: Tag): void {
     if (this.rejectMutationInEmit("addTag")) return; // 002 §6
     this.assertAlive(e, "addTag");
-    this.ensurePlaced(e);
-    this.tags.set(t.id, slotOf(e));
-    this.bumpTagRel(); // tag-filtered membership changed (002 §4.2)
+    this.doAddTag(e, t.id);
   }
 
   /** Remove a tag (does not unplace the entity). */
   removeTag(e: Entity, t: Tag): void {
     if (this.rejectMutationInEmit("removeTag")) return; // 002 §6
     this.assertAlive(e, "removeTag");
-    this.tags.clear(t.id, slotOf(e));
-    this.bumpTagRel(); // tag-filtered membership changed (002 §4.2)
+    this.doRemoveTag(e, t.id);
   }
 
   /** Generation-guarded tag read: a stale handle reads `false`, never the reused slot's bit (§3.2). */
@@ -961,9 +1004,7 @@ export class RuntimeStore implements ECSStore {
     if (rel.arity !== "one") {
       throw new Error(`strata: setRelation is for arity "one" relations — use addRelation for "${rel.name}".`);
     }
-    this.ensurePlaced(e);
-    this.relations.setOne(rel, e, target);
-    this.bumpTagRel(); // relation-filtered membership changed (002 §4.2)
+    this.doSetRelation(e, rel, target);
   }
 
   /** Arity "many": add an edge (idempotent). Places the source; the target is not placed. */
@@ -973,17 +1014,14 @@ export class RuntimeStore implements ECSStore {
     if (rel.arity !== "many") {
       throw new Error(`strata: addRelation is for arity "many" relations — use setRelation for "${rel.name}".`);
     }
-    this.ensurePlaced(e);
-    this.relations.addMany(rel, e, target);
-    this.bumpTagRel(); // relation-filtered membership changed (002 §4.2)
+    this.doAddRelation(e, rel, target);
   }
 
   /** Remove one edge (if `target` given) or all edges of `rel` from `e`. Does not unplace. */
   removeRelation(e: Entity, rel: Relation, target?: Entity): void {
     if (this.rejectMutationInEmit("removeRelation")) return; // 002 §6
     this.assertAlive(e, "removeRelation");
-    this.relations.remove(rel, e, target);
-    this.bumpTagRel(); // relation-filtered membership changed (002 §4.2)
+    this.doRemoveRelation(e, rel, target);
   }
 
   /** The single target of an arity-"one" relation, validated (§3.3). */
@@ -1159,35 +1197,27 @@ export class RuntimeStore implements ECSStore {
         return;
       }
       case "addTag":
-        this.ensurePlaced(cmd.entity);
-        this.tags.set(cmd.tag, slotOf(cmd.entity));
-        this.bumpTagRel(); // direct bitset write — not routed through addTag (002 §4.2)
+        this.doAddTag(cmd.entity, cmd.tag); // substore-write + §4.2 bump, shared with the public op (R6)
         return;
       case "removeTag":
-        this.tags.clear(cmd.tag, slotOf(cmd.entity));
-        this.bumpTagRel(); // direct bitset write — not routed through removeTag (002 §4.2)
+        this.doRemoveTag(cmd.entity, cmd.tag);
         return;
       case "setRelation": {
         const rel = relationById(cmd.relation);
         if (rel === undefined || !this.table.isAlive(cmd.target)) return; // drop an edge to a dead target
-        this.ensurePlaced(cmd.entity);
-        this.relations.setOne(rel, cmd.entity, cmd.target);
-        this.bumpTagRel(); // direct index write — not routed through setRelation (002 §4.2)
+        this.doSetRelation(cmd.entity, rel, cmd.target);
         return;
       }
       case "addRelation": {
         const rel = relationById(cmd.relation);
         if (rel === undefined || !this.table.isAlive(cmd.target)) return;
-        this.ensurePlaced(cmd.entity);
-        this.relations.addMany(rel, cmd.entity, cmd.target);
-        this.bumpTagRel(); // direct index write — not routed through addRelation (002 §4.2)
+        this.doAddRelation(cmd.entity, rel, cmd.target);
         return;
       }
       case "removeRelation": {
         const rel = relationById(cmd.relation);
         if (rel === undefined) return;
-        this.relations.remove(rel, cmd.entity, cmd.target);
-        this.bumpTagRel(); // direct index write — not routed through removeRelation (002 §4.2)
+        this.doRemoveRelation(cmd.entity, rel, cmd.target);
         return;
       }
     }
