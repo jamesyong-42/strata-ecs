@@ -34,6 +34,10 @@ export type {
   SpawnInitOf,
 } from "./schema";
 
+// The framework-exported partition-ownership tag the ephemeral store auto-applies (design §15.4/§20).
+// Query-only for apps (`Not(Local)` = remote peers); never transmitted; store-owned lifecycle.
+export { Local } from "./local";
+
 // --- field types + schema-literal inference helpers (§4) ---
 export { field, enumOf, entityKey } from "./field";
 export type {
