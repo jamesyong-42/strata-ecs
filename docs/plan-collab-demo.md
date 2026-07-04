@@ -1,5 +1,7 @@
 # Collab Demo Plan — the canvas editor goes multiplayer
 
+**Status: IMPLEMENTED** (2026-07-04; D0 a12b043, D1 93324a7, D2 a8ba1b9; 628 ci + 238 stress green; collab-smoke PASS 40/40 sync AND async loopback; local-only mode unchanged; review-lite fixed restore-in-collab + pagehide double-fire).
+
 **Goal:** the flagship `examples/canvas-editor` gains a `?collab=<room>` mode: two browser tabs
 editing ONE document live — durable shapes (drag/draw/delete converging, committer-wins, undo
 local-only) + ephemeral presence (live remote cursors + selection highlights) — with zero server:
