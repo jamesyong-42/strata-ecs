@@ -23,6 +23,7 @@ baseline, the note wins.
 | [review-part1.md](review-part1.md) | The adversarially-verified honest Part I review — post-verification severities, R1–R4 fixed on main, refuted claims recorded |
 | [design-comments.md](design-comments.md) | The external design review of Parts II–IV that 004 adjudicates |
 | [plan-part1.md](plan-part1.md) | Part I build plan (M0–M7, complete) + deferred type-level follow-ups |
+| [plan-part3.md](plan-part3.md) | Part III build plan (M0–M5, **IMPLEMENTED** — the durable layer ships; as-built amendments in 005 §10 + 006 addenda) |
 | [plan-example-canvas.md](plan-example-canvas.md) | The canvas-editor example plan (implemented) |
 | [plan-tools-observer.md](plan-tools-observer.md) | The `strata-ecs/tools` observer panel plan (implemented; T0 observability spec lives here) |
 | [plan-stress-bench.md](plan-stress-bench.md) | Stress/fuzz + benchmark plan |

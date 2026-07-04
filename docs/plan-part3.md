@@ -1,5 +1,7 @@
 # Part III Build Plan — The Durable Layer (`strata-ecs/durable`)
 
+**Status: IMPLEMENTED** (2026-07-04; M0 befe4e2+a0e4492, M1 bd665d2, M2 ade0ef3, M3 e62540d, M4 3e58959+dc4ade4, M5 64a668d; 556 ci + 238 stress green; both review gates passed; as-built amendments in 005 §10 and 006's addenda).
+
 **Specs this plan executes:** `design.md` §11–§14 (baseline, locked) as amended by
 `006-part3-4-amendments.md` (normative) and `005-part2-spec.md` (the frozen Part II contract,
 including its §10 as-built amendments). Where those disagree, 006 > 005 > design.md.

@@ -619,7 +619,8 @@ Beyond the structural `world.*` methods: **`world.tick()`** throws on `iteration
 
 `CRDTSnapshot` stays frozen as §1.2 defines it. The concrete `LoroSnapshot` additionally exposes an
 adapter-level surface its owning `DurableStore` needs (bd665d2): `peerIdStr`, `entityKeysRaw()` (the
-key-mint counter-resume scan), `version()` + `exportUpdatesSince(from)` (per-commit outbound
+key-mint counter-resume scan), `resourceNamesRaw()` (the attach-time resource-seeding enumerator —
+the frozen `Snapshot` deliberately has none), `version()` + `exportUpdatesSince(from)` (per-commit outbound
 increments — an increment presupposes the receiver holds the causal base; a fresh receiver importing
 one takes a **pending** import and quarantines, so joiners bootstrap from a snapshot first), and a
 third reserved **`meta` root map** (`readMeta`/`ensureMeta` — holds `docId`; writes are tagged
