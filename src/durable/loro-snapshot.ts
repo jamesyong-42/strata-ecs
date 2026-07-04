@@ -602,7 +602,21 @@ export class LoroSnapshot implements CRDTSnapshot {
   }
 
   setResource(res: Resource, v: ComponentValue): void {
-    this.resourcesMap.set(res.name, canonResource(res, v)); // 005 §2/§10.1: object-backed canonical
+    const canonical = canonResource(res, v); // 005 §2/§10.1: object-backed canonical
+    // 006 B3 R4 — OVERLAY the known-field canonical values onto the register's CURRENT raw value, so a
+    // NEWER peer's unknown resource field SURVIVES this write instead of being stripped by a wholesale
+    // assignment (§13.4: a durable resource reconciles exactly like a single-cell component, so it gets the
+    // identical overlay as setComponent). Without this, an older-schema peer's `setResource` silently
+    // destroys the newer peer's extra field across the wire (the resource twin of the component R4 loss).
+    // A fresh / absent / poisoned (container) register writes the canonical value as-is; the baseline +
+    // surfaced ChangeEvent path strips extras via canonResource/tryCanonResource so local compares stay
+    // well-defined (R4: the raw value with the extra field lives in Loro, not the baseline).
+    const cur = this.resourcesMap.get(res.name);
+    if (cur !== undefined && !isContainer(cur) && typeof cur === "object" && cur !== null) {
+      this.resourcesMap.set(res.name, { ...(cur as Record<string, unknown>), ...canonical });
+    } else {
+      this.resourcesMap.set(res.name, canonical);
+    }
   }
 
   removeResource(res: Resource): void {
@@ -776,6 +790,17 @@ export class LoroSnapshot implements CRDTSnapshot {
    */
   entityKeysRaw(): string[] {
     return this.entitiesMap.keys().map(String);
+  }
+
+  /**
+   * Every resource NAME in the "resources" root map (RAW keys — includes names this build's schema does not
+   * resolve; the caller filters + gates). Attach uses this to SEED the baseline + runtime from a cold-loaded
+   * doc's pre-existing resources (§13.1 founding agreement): a resource has no entity to hang off, so it has
+   * no other enumerator on the frozen Snapshot interface — the resource sibling of {@link entityKeysRaw}.
+   * TODO(005-§10.8-amendment): the orchestrator amends 005 §10.8 for this store-support surface.
+   */
+  resourceNamesRaw(): string[] {
+    return this.resourcesMap.keys().map(String);
   }
 
   /** The current document version — the starting cursor for {@link exportUpdatesSince}. */

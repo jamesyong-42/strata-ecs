@@ -75,6 +75,7 @@ describe("attach — two-phase projection seeding the baseline (§13.1)", () => 
       store.snapshot.setComponent(K("1-1"), BFill, { r: 255, g: 0, b: 0 });
       store.snapshot.setRelation(K("1-0"), BChild, K("1-1")); // arity "one"
       store.snapshot.addRelation(K("1-0"), BLink, K("1-1")); // arity "many"
+      store.snapshot.setResource(BClock, { t: 42 }); // a pre-existing resource — seeded by attach (fix 5)
     });
 
     const w = createWorld();
@@ -103,6 +104,11 @@ describe("attach — two-phase projection seeding the baseline (§13.1)", () => 
     expect(att.baseline.hasTag(K("1-0"), BSel)).toBe(true);
     expect(att.baseline.getRelationOne(K("1-0"), BChild)).toBe(K("1-1"));
     expect(att.baseline.getRelationMany(K("1-0"), BLink)).toEqual([K("1-1")]);
+    // The pre-existing RESOURCE is seeded into runtime AND baseline (the founding agreement for resources,
+    // fix 5) — without the seed pass it would be invisible until its next write.
+    expect(w.getResource(BClock)).toEqual({ t: 42 });
+    expect(att.baseline.getResource(BClock)).toEqual({ t: 42 });
+    expect(cellEquals(w.getResource(BClock), att.baseline.getResource(BClock))).toBe(true);
   });
 
   it("an observeQuery armed BEFORE attach fires once at the next notify (006 C3 first-paint)", () => {

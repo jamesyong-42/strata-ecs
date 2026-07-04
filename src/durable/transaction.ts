@@ -357,13 +357,21 @@ class Transaction implements Mutator {
         switch (op.kind) {
           case "spawn":
             this.snapshot.spawn(op.key);
-            for (const [comp, value] of op.components) this.snapshot.setComponent(op.key, comp, value);
+            for (const [comp, value] of op.components) {
+              this.tr.clearHeld(op.key, comp); // 006 C5 (b), defensive: a fresh key holds nothing, but symmetric
+              this.snapshot.setComponent(op.key, comp, value);
+            }
             for (const tag of op.tags) this.snapshot.addTag(op.key, tag);
             break;
           case "write": // doc side of the agreement point (runtime + baseline done in stage 1)
             this.snapshot.setComponent(op.key, op.comp, op.value);
             break;
           case "addComponent": // structure — document only; folded value included (§12.2)
+            // 006 C5 (b): a single-tx removeComponent+addComponent surfaces as a NET component-SET in the
+            // frontier diff (no remove fact), so supersession (c) never fires for the reconcile — clear the
+            // held remote loser HERE. Our committed value wins committer-wins; the held value LOST. Mirrors
+            // the `write` branch's clearHeld (stage 1); without it the end-of-drain sweep resurrects the loser.
+            this.tr.clearHeld(op.key, op.comp);
             this.snapshot.setComponent(op.key, op.comp, op.value);
             break;
           case "removeComponent":

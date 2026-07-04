@@ -61,9 +61,16 @@
  *  E. **Drain order is remote-then-local within one `sync()`.** The two arrival paths (store queue for
  *     remote, binding queue for local echoes) cannot reconstruct exact cross-path interleaving from two
  *     arrays, so M2 fixes a defined order: remote batches (in queue order) then local echoes (in queue
- *     order). Loro carries CONVERGED values on both paths, so the final runtime state converges; the
- *     order becomes load-bearing only in M4, where the drag-protection §13.5 flow is remote-then-echo
- *     anyway (a remote value drops mid-drag, the local commit's echo then agrees).
+ *     order). Loro carries CONVERGED values on both paths. The order IS load-bearing (the M4R review
+ *     proved it — an earlier note claimed the guards reach the same result either way; they do not):
+ *     remote-first means a remote structural REMOVE can clear a cell's baseline BEFORE the own value-echo
+ *     for that cell drains, reclassifying the echo as a structural ADD (§13.3 table) — so the echo's apply
+ *     MUST re-read the CONVERGED doc (decision F, extended to the structural branches) or it resurrects a
+ *     cell the doc deleted. Local-first would diverge differently (the echo would classify as a value
+ *     write against the still-present baseline). Convergence holds for EITHER order ONLY because every echo
+ *     apply — value AND structural — honors converged truth; the fixed order plus decision F is the
+ *     contract, not order-independence. The §13.5 drag flow is remote-then-echo anyway (a remote value
+ *     drops mid-drag, the local commit's echo then agrees).
  */
 
 import { DEV, devWarn } from "../core/dev";
@@ -75,6 +82,7 @@ import {
   componentByName,
   normalizeBatch,
   relationByName,
+  resourceByName,
   tagByName,
   tryCanon,
   tryCanonResource,
@@ -113,17 +121,35 @@ const ATTACHED = new WeakSet<DurableStore>();
  */
 const STRANDED_WARN_THRESHOLD = 100;
 
-/** One held-off remote COMPONENT value (006 C5): the cell + the converged value banked at drop time. */
+/**
+ * One held-off remote COMPONENT drop (006 C5): the entry MARKS that a remote value is pending on this cell.
+ * `value` is the converged value at drop time, retained for diagnostics (the C8 sync tab) — the {@link sweep}
+ * re-reads converged truth at apply time (fix 3) rather than replaying this, so a stale hole cannot resurrect.
+ */
 interface HeldComponent {
   readonly key: EntityKey;
   readonly comp: Component;
   readonly value: ComponentValue;
 }
 
-/** One held-off remote RESOURCE value — the cardinality-one sibling of {@link HeldComponent}. */
+/** One held-off remote RESOURCE drop — the cardinality-one sibling of {@link HeldComponent}. */
 interface HeldResource {
   readonly res: Resource;
   readonly value: ComponentValue;
+}
+
+/** Deduplicated union of two name-keyed records' keys (the first may be undefined) — a cell-enumeration seam. */
+function unionNames(a: Record<string, unknown> | undefined, b: Record<string, unknown>): Iterable<string> {
+  const s = new Set<string>(a === undefined ? [] : Object.keys(a));
+  for (const k of Object.keys(b)) s.add(k);
+  return s;
+}
+
+/** Deduplicated union of two name lists (the first may be undefined) — the tag-enumeration sibling. */
+function unionList(a: string[] | undefined, b: string[]): Iterable<string> {
+  const s = new Set<string>(a ?? []);
+  for (const k of b) s.add(k);
+  return s;
 }
 
 /**
@@ -308,6 +334,27 @@ class DurableBinding implements InboundSource {
         }
       }
     }
+
+    // Resources — a cold-loaded doc's pre-existing resources have no entity to hang off (no per-entity
+    // record surfaces them), so seed them here from the §10.8-amendment enumerator. Runtime + baseline
+    // together = the founding agreement for resources: without this pass a projected resource is invisible
+    // until its next write, and its first remote change misreads as a local edit in flight (§13.1/§13.3).
+    for (const name of this.store.snapshot.resourceNamesRaw()) {
+      const res = resourceByName(name);
+      if (res === undefined) {
+        this.warnUnknownName("resource", name); // 006 B3 R1 — one-shot, never projected
+        continue;
+      }
+      const raw = this.store.snapshot.getResource(res);
+      if (raw === undefined) continue; // absent / poisoned (container) → skip (getResource already warned)
+      const gate = tryCanonResource(res, raw);
+      if (!gate.ok) {
+        this.warnCanonReject(`res:${res.name}`, res.name, gate.field, gate.reason);
+        continue; // malformed → seed neither side (§2.3)
+      }
+      this.world.runtime.setResource(res, gate.value); // resources bypass the kernel (§10.8)
+      this.baseline.setResource(res, gate.value); // R4-stripped local-schema value, like the reconcile path
+    }
   }
 
   /** Subscribe to the snapshot for LOCAL echoes only (decision D) — enqueue, never apply (§12.4). */
@@ -361,11 +408,15 @@ class DurableBinding implements InboundSource {
 
   /**
    * Apply one normalized doc-fact — the reconcile matrix (§13.3, decision B). Structural facts (spawn /
-   * despawn / component add-or-remove / tag / relation) always apply and advance the baseline (own is the
-   * runtime's only path to the change; remote has no in-flight divergence to protect). `component-set` is
-   * CLASSIFIED against the pre-batch baseline: baseline-absent ⇒ structural ADD, baseline-present ⇒ the
-   * drag-protected VALUE matrix (§13.3 table). Every value APPLY re-reads the doc's CONVERGED value
-   * (decision F); the batch payload drives only classification and the malformed reject. A held-cell
+   * despawn / component add-or-remove / tag / relation) reach the runtime ONLY here (own is its only path
+   * to the change; remote has no in-flight divergence to protect). `component-set` is CLASSIFIED against the
+   * pre-batch baseline: baseline-absent ⇒ structural ADD, baseline-present ⇒ the drag-protected VALUE matrix
+   * (§13.3 table). THE UNIFYING PRINCIPLE (M4R): an own-origin echo is COMMIT-TIME-STALE, so EVERY apply it
+   * drives — value AND structural — honors the doc's CONVERGED state re-read at drain time (decision F,
+   * {@link convergedComponent}), not the batch payload; the payload drives only classification + the
+   * malformed reject. So a structural ADD re-reads converged (applies the LWW winner, or NOTHING if the doc
+   * deleted the cell), an own component-REMOVE re-reads converged (keeps the cell if a concurrent set won),
+   * and a DESPAWN reconciles the surviving entity per cell ({@link reconcileSurvivingDespawn}). A held-cell
    * entry is CLEARED by any structural fact on its cell (supersession (c)) and by any applied value fact
    * (supersession (a)); the local commit's agreement clears it via the `clearHeld` seam (rule (b)).
    */
@@ -376,8 +427,22 @@ class DurableBinding implements InboundSource {
         this.baseline.spawn(ev.key);
         break;
       case "despawn":
-        // Structural on EVERY cell of the entity (§13.3 (c)): drop the entity's held entries FIRST, so the
-        // sweep can't resolve `key` to a fresh handle and resurrect a despawned component (006 C5 (c)).
+        // A despawn is a WHOLE-ENTITY fact, but the doc converges PER CELL — a concurrent remote SET can win
+        // an LWW against the despawn (loro-snapshot's partial-cell resurrection), leaving the entity ALIVE in
+        // the converged doc even though its `exists` cell was removed (which is what SURFACED the despawn
+        // fact). So a despawn is commit-time-stale for BOTH origins (the unifying principle): a blind
+        // projector.remove would tear down a live entity + its bijection and diverge from the doc. Reconcile
+        // per cell against converged truth and KEEP the entity when any cell survives.
+        //
+        // NB the M4R review scoped this to own-origin, reasoning remote structural facts converge from the
+        // frontier diff — TRUE for component-remove (the fact simply does not fire when a set wins the cell)
+        // but FALSE for despawn: `exists` has no concurrent writer, so the despawn fact fires and its
+        // whole-entity removal nukes the surviving cells. A probe confirmed the remote-side divergence (a set
+        // that won LWW is lost on the peer that drains the despawn in a LATER drain than its own set-echo).
+        if (this.reconcileSurvivingDespawn(ev.key)) break;
+        // Fully-gone (the doc agrees the entity has no surviving cell): structural on EVERY cell (§13.3 (c)).
+        // Drop the entity's held entries FIRST, so the sweep can't resolve `key` to a fresh handle and
+        // resurrect a despawned component (006 C5 (c)).
         this.clearHeldForEntity(ev.key);
         this.projector.remove(ev.key); // both-directions relation cleanup + unbind
         this.baseline.despawn(ev.key); // baseline analogue of the runtime's both-directions cleanup
@@ -390,12 +455,22 @@ class DurableBinding implements InboundSource {
           break; // reject touches NEITHER runtime nor baseline (§2.3) — the prior cell stands
         }
         if (this.baseline.getComponent(ev.key, ev.comp) === undefined) {
-          // baseline absent → structural ADD (own or remote): always apply, advance baseline (§13.3 row 1),
-          // UNCHANGED from the pre-matrix path. No converged re-read is needed here: a concurrent add of
-          // the SAME component on another peer arrives with the cell baseline-PRESENT, so it classifies as
-          // a value write and re-reads the converged (LWW) value on that path — convergence still holds.
-          this.projector.applyComponent(ev.key, ev.comp, gate.value);
-          this.baseline.setComponent(ev.key, ev.comp, gate.value);
+          // baseline absent → structural ADD. THE UNIFYING PRINCIPLE (decision F, extended to structural
+          // echoes): an own-origin echo is COMMIT-TIME-STALE, so the apply must honor the doc's CONVERGED
+          // state re-read at drain time — NOT the batch payload. The load-bearing case: A commits a VALUE to
+          // present C; B concurrently removeComponent(C) (or destroy) and WINS LWW; A drains remote-first
+          // (decision E) — the remote-remove clears the baseline, so A's own value-echo now reclassifies
+          // HERE as a structural ADD. Re-applying the stale payload would resurrect a zombie cell the doc
+          // deleted (runtime==baseline self-conceals it — it survives a full re-sync). So apply the CONVERGED
+          // re-read instead: if the doc still holds the cell, apply the LWW winner; if the doc deleted it
+          // (converged undefined — we lost the race), apply NOTHING (runtime + baseline stay absent). A clean
+          // first add re-reads the value we just committed (a no-op change); concurrent add-vs-add applies
+          // the LWW winner. Drain ORDER is load-bearing here — see decision E.
+          const converged = this.convergedComponent(ev.key, ev.comp);
+          if (converged !== undefined) {
+            this.projector.applyComponent(ev.key, ev.comp, converged);
+            this.baseline.setComponent(ev.key, ev.comp, converged);
+          }
           this.onStructuralCell(ev.key, ev.comp); // (c) clear a stale hold + reset the stranded counter
         } else {
           // baseline present → the drag-protected VALUE matrix (§13.3, decision B/F).
@@ -406,6 +481,21 @@ class DurableBinding implements InboundSource {
       case "component-remove":
         this.assertNoEidFields(ev.comp);
         if (this.baseline.getComponent(ev.key, ev.comp) === undefined) break; // baseline absent → no-op
+        if (ev.origin === "local") {
+          // OWN remove echo is commit-time-stale (the unifying principle, fix 2): a concurrent remote SET
+          // may have WON LWW between our removeComponent commit and this drain. Honor the CONVERGED doc — if
+          // the cell is PRESENT (the set won), apply the converged value as a value write instead of
+          // removing; else we remove a cell the doc keeps and diverge (runtime==baseline self-conceals it).
+          // A remote remove echo needs no re-read — it arrives as a converged transition from the frontier
+          // diff, already reflecting the winning LWW.
+          const converged = this.convergedComponent(ev.key, ev.comp);
+          if (converged !== undefined) {
+            this.projector.applyComponent(ev.key, ev.comp, converged);
+            this.baseline.setComponent(ev.key, ev.comp, converged);
+            this.onStructuralCell(ev.key, ev.comp); // reconverged the cell — clear a stale hold + reset stranded
+            break;
+          }
+        }
         this.projector.removeComponent(ev.key, ev.comp);
         this.baseline.removeComponent(ev.key, ev.comp);
         this.onStructuralCell(ev.key, ev.comp); // (c): else the sweep's add-if-absent resurrects the component
@@ -490,8 +580,11 @@ class DurableBinding implements InboundSource {
       // (remote, value) with a local drag in flight → the one DROP. Runtime + baseline untouched; bank the
       // converged value so a drag that reconverges to baseline WITHOUT committing still recovers it (C5).
       const ck = this.cellKey(key, comp);
-      if (converged !== undefined) this.held.set(ck, { key, comp, value: converged });
-      if (DEV) this.countDrop(ck, `${key}|${comp.name}`, this.held.has(ck));
+      const banked = converged !== undefined; // a malformed/absent converged value banks NOTHING
+      if (banked) this.held.set(ck, { key, comp, value: converged });
+      // Only a REAL banked drop feeds the stranded counter (a malformed converged value is an inbound-reject
+      // concern (006 B4), not a stranded cell); pass the just-computed `banked` state, not a re-read held.has.
+      if (DEV && banked) this.countDrop(ck, `${key}|${comp.name}`, banked);
     }
   }
 
@@ -514,19 +607,103 @@ class DurableBinding implements InboundSource {
     } else if (origin === "local") {
       if (converged !== undefined) this.baseline.setResource(res, converged); // baseline-only (own asymmetry)
     } else {
-      if (converged !== undefined) this.heldRes.set(res.name, { res, value: converged });
-      if (DEV) this.countDrop(`res:${res.name}`, `resource "${res.name}"`, this.heldRes.has(res.name));
+      const banked = converged !== undefined;
+      if (banked) this.heldRes.set(res.name, { res, value: converged });
+      if (DEV && banked) this.countDrop(`res:${res.name}`, `resource "${res.name}"`, banked);
     }
   }
 
   /**
-   * The end-of-drain sweep (006 C5, decision G). For each surviving held cell, apply the banked value the
-   * moment it reconverges (`cellEquals(runtime, baseline)` NOW holds — the drag ended without a commit).
-   * The applied value is the banked converged truth from drop time; nothing changed the cell since (any
-   * applied fact, commit, or structural fact would have cleared the entry — supersession (a)/(b)/(c)), so
-   * the bank IS the current converged value. Sweep-applies STAMP (projector writes), so reactivity
-   * observes the recovered value this frame (006 C2). A held cell whose baseline vanished is dropped, not
-   * resurrected (defensive; structural facts already clear such entries).
+   * Reconcile an entity against the converged doc on a despawn fact whose entity SURVIVED a per-cell LWW
+   * (fix 2 — the unifying principle: honor converged truth at drain time). The despawn may have LOST cells
+   * to a concurrent remote (loro-snapshot's partial-cell resurrection: a set concurrent with a despawn
+   * leaves that one cell alive), so the entity can still be ALIVE in the converged document. If the doc
+   * holds NO cell for the key, return false and let the caller run the real despawn. Otherwise reconcile
+   * each cell to converged truth (converged-present → value write; converged-absent → remove) and KEEP the
+   * entity + its bijection, returning true. Applies to BOTH origins (see the despawn dispatch note — a
+   * remote despawn diverges the same way). The entity's INCOMING edges ride their own relation-remove facts
+   * (normalizeBatch folds only the entity's OWN cells into the despawn), so this reconciles the key's OWN
+   * cells: components, tags, outgoing relations.
+   */
+  private reconcileSurvivingDespawn(key: EntityKey): boolean {
+    const snap = this.store.snapshot;
+    if (!snap.hasEntity(key)) return false; // the doc agrees the entity is fully gone → despawn it
+    const docRec = snap.readEntity(key);
+    if (docRec === undefined) return false; // defensive: hasEntity but no record → despawn
+    const baseRec = this.baseline.readEntity(key);
+
+    // Components: converged-present → apply the LWW value; converged-absent → remove (§13.3, per cell).
+    for (const name of unionNames(baseRec?.components, docRec.components)) {
+      const comp = componentByName(name);
+      if (comp === undefined) continue; // unknown component — never projected (006 B3 R1)
+      const converged = this.convergedComponent(key, comp);
+      if (converged !== undefined) {
+        this.projector.applyComponent(key, comp, converged);
+        this.baseline.setComponent(key, comp, converged);
+      } else if (this.baseline.getComponent(key, comp) !== undefined) {
+        this.projector.removeComponent(key, comp);
+        this.baseline.removeComponent(key, comp);
+      }
+      this.onStructuralCell(key, comp); // the cell reconverged/removed — clear a stale hold + reset stranded
+    }
+
+    // Tags: the doc holds it → add; else → remove.
+    for (const name of unionList(baseRec?.tags, docRec.tags)) {
+      const tag = tagByName(name);
+      if (tag === undefined) continue;
+      if (snap.hasTag(key, tag)) {
+        this.projector.applyTag(key, tag);
+        this.baseline.addTag(key, tag);
+      } else {
+        this.projector.removeTag(key, tag);
+        this.baseline.removeTag(key, tag);
+      }
+    }
+
+    // Outgoing relations: reconcile each slot to the doc, arity-split (setRelation/getRelationOne vs
+    // addRelation/getRelationMany), converging targets present/absent in the doc.
+    for (const name of unionNames(baseRec?.relations, docRec.relations)) {
+      const rel = relationByName(name);
+      if (rel === undefined) continue;
+      if (rel.arity === "one") {
+        const docTarget = snap.getRelationOne(key, rel);
+        if (docTarget !== undefined) {
+          this.projector.applyRelationSet(key, rel, docTarget);
+          this.baseline.setRelation(key, rel, docTarget);
+        } else {
+          const baseTarget = this.baseline.getRelationOne(key, rel);
+          if (baseTarget !== undefined) {
+            this.projector.removeRelation(key, rel, baseTarget);
+            this.baseline.removeRelation(key, rel, baseTarget);
+          }
+        }
+      } else {
+        const docTargets = new Set(snap.getRelationMany(key, rel));
+        for (const t of this.baseline.getRelationMany(key, rel)) {
+          if (!docTargets.has(t)) {
+            this.projector.removeRelation(key, rel, t);
+            this.baseline.removeRelation(key, rel, t);
+          }
+        }
+        for (const t of docTargets) {
+          this.projector.applyRelationAdd(key, rel, t);
+          this.baseline.addRelation(key, rel, t);
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
+   * The end-of-drain sweep (006 C5, decision G). For each surviving held cell, the moment it reconverges
+   * (`cellEquals(runtime, baseline)` NOW holds — the drag ended without a commit) apply the CONVERGED
+   * re-read of the doc, NOT the banked value (fix 3, the unifying principle: honor converged truth at drain
+   * time). A held entry now only MARKS "a remote value is pending on this cell"; between the drop and this
+   * sweep a fact the supersession rules SHOULD have caught (the (b) hole was one) may have changed converged
+   * truth — so re-reading is the safety net. If converged truth VANISHED (the doc no longer holds the cell),
+   * drop the hold WITHOUT applying — never resurrect a value the document deleted. Sweep-applies STAMP
+   * (projector writes), so reactivity observes the recovered value this frame (006 C2). A held cell whose
+   * baseline vanished is dropped, not resurrected (structural facts already clear such entries).
    */
   private sweep(): void {
     for (const [ck, e] of this.held) {
@@ -536,10 +713,12 @@ class DurableBinding implements InboundSource {
         continue;
       }
       if (!cellEquals(this.runtimeComponent(e.key, e.comp), baselineVal)) continue; // still mid-drag → hold
-      this.projector.applyComponent(e.key, e.comp, e.value);
-      this.baseline.setComponent(e.key, e.comp, e.value);
+      const converged = this.convergedComponent(e.key, e.comp); // re-read truth, not the banked value
       this.held.delete(ck);
-      this.resetStranded(ck);
+      this.resetStranded(ck); // the cell reconverged → agreement, whether or not a value is applied
+      if (converged === undefined) continue; // the doc dropped the cell — drop the hold, do NOT resurrect
+      this.projector.applyComponent(e.key, e.comp, converged);
+      this.baseline.setComponent(e.key, e.comp, converged);
     }
     for (const [name, e] of this.heldRes) {
       const baselineVal = this.baseline.getResource(e.res);
@@ -548,10 +727,12 @@ class DurableBinding implements InboundSource {
         continue;
       }
       if (!cellEquals(this.world.runtime.getResource(e.res) as ComponentValue | undefined, baselineVal)) continue;
-      this.world.runtime.setResource(e.res, e.value);
-      this.baseline.setResource(e.res, e.value);
+      const converged = this.convergedResource(e.res); // re-read truth, not the banked value
       this.heldRes.delete(name);
       this.resetStranded(`res:${name}`);
+      if (converged === undefined) continue; // the doc dropped the resource — drop the hold
+      this.world.runtime.setResource(e.res, converged);
+      this.baseline.setResource(e.res, converged);
     }
   }
 
@@ -603,7 +784,12 @@ class DurableBinding implements InboundSource {
 
   /** Drop every held entry for `key` — the despawn case of supersession (c) (both-directions, like the runtime). */
   private clearHeldForEntity(key: EntityKey): void {
-    for (const [ck, e] of this.held) if (e.key === key) this.held.delete(ck);
+    for (const [ck, e] of this.held) {
+      if (e.key === key) {
+        this.held.delete(ck);
+        this.resetStranded(ck); // also clear the cell's dropCount / strandedWarned — they track the hold
+      }
+    }
   }
 
   /**

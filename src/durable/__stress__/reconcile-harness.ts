@@ -56,10 +56,20 @@ function readRuntime(peer: Peer, key: EntityKey, comp: Component): ComponentValu
 /** Apply one random op to `peer` on one of the shared `keys` (no `sync()` here — the caller syncs every op). */
 function stepPeer(peer: Peer, keys: EntityKey[], rng: () => number): void {
   const idx = randInt(rng, keys.length);
-  const h = peer.store.resolve(keys[idx])!;
-  switch (randInt(rng, 4)) {
+  const key = keys[idx];
+  const h = peer.store.resolve(key);
+  // The entity may be DESTROYED on this peer (a remote/own destroy landed) — skip; a partial-cell
+  // resurrection can revive it later, at which point resolve() binds again (the M4R structural-echo path).
+  if (h === undefined) {
+    peer.drag.delete(idx);
+    return;
+  }
+  const hasHPos = peer.att.baseline.getComponent(key, HPos) !== undefined;
+  const hasHFill = peer.att.baseline.getComponent(key, HFill) !== undefined;
+  switch (randInt(rng, 7)) {
     case 0: {
       // Start/continue a runtime-only DRAG on HPos (divergence from baseline — remote HPos values drop).
+      if (!hasHPos) return; // HPos was removed by a destroy/partial-resurrection — nothing to drag
       const v = posVal(rng);
       peer.world.edit(h).set(HPos, v);
       peer.drag.set(idx, v);
@@ -67,6 +77,7 @@ function stepPeer(peer: Peer, keys: EntityKey[], rng: () => number): void {
     }
     case 1: {
       // END a drag with a commit if one is in flight (the sanctioned ending, §13.5) — else a fresh commit.
+      if (!hasHPos) return void peer.drag.delete(idx);
       const inFlight = peer.drag.get(idx);
       const v = inFlight ?? posVal(rng);
       peer.store.transaction((tx) => tx.edit(h).set(HPos, v));
@@ -74,12 +85,29 @@ function stepPeer(peer: Peer, keys: EntityKey[], rng: () => number): void {
       break;
     }
     case 2:
-      // A value commit to the NEVER-dragged component — always an agreement path (component independence).
+      // A value commit to HFill (agreement path when present — component independence, §13.4).
+      if (!hasHFill) return;
       peer.store.transaction((tx) => tx.edit(h).set(HFill, fillVal(rng)));
       break;
     case 3:
       // A direct HPos commit (may pre-empt a drag on this cell — committer-wins as the later op).
+      if (!hasHPos) return;
       peer.store.transaction((tx) => tx.edit(h).set(HPos, posVal(rng)));
+      peer.drag.delete(idx);
+      break;
+    case 4:
+      // STRUCTURAL add: re-introduce HFill when absent (concurrent add-vs-add → LWW winner, fix 1).
+      if (hasHFill) return;
+      peer.store.transaction((tx) => tx.addComponent(h, HFill, fillVal(rng)));
+      break;
+    case 5:
+      // STRUCTURAL remove of HFill (keeps HPos so the entity stays alive; own remove-echo re-read, fix 2a).
+      if (!hasHFill) return;
+      peer.store.transaction((tx) => tx.removeComponent(h, HFill));
+      break;
+    case 6:
+      // STRUCTURAL despawn (whole entity; own/remote despawn survival re-read, fix 2b + the remote extension).
+      peer.store.transaction((tx) => tx.destroy(h));
       peer.drag.delete(idx);
       break;
   }
@@ -88,8 +116,13 @@ function stepPeer(peer: Peer, keys: EntityKey[], rng: () => number): void {
 /** Commit every still-in-flight drag so no cell is left diverged at quiescence (the §13.5 promise kept). */
 function commitAllDrags(peer: Peer, keys: EntityKey[]): void {
   for (const [idx, v] of peer.drag) {
-    const h = peer.store.resolve(keys[idx])!;
-    peer.store.transaction((tx) => tx.edit(h).set(HPos, v));
+    const key = keys[idx];
+    const h = peer.store.resolve(key);
+    // Skip a drag whose cell no longer exists (the entity/component was removed structurally) — the cell is
+    // gone on both sides, so there is nothing left to reconverge; committing would throw (absent component).
+    if (h !== undefined && peer.att.baseline.getComponent(key, HPos) !== undefined) {
+      peer.store.transaction((tx) => tx.edit(h).set(HPos, v));
+    }
   }
   peer.drag.clear();
 }

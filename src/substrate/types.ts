@@ -124,6 +124,14 @@ export type Origin =
  * `component-set` is intentionally AMBIGUOUS — it may ADD a previously-absent component (structural)
  * or OVERWRITE a present one (value); the binding classifies it against the baseline at reconcile
  * (§1.4). `component-remove` is always structural.
+ *
+ * **`.value` (on `component-set` / `resource-set`) is the RAW register value from the document** — it
+ * carries whatever the doc holds, INCLUDING foreign-schema fields a newer peer wrote that this build's
+ * schema does not declare (006 B3 R4). It is NOT pre-stripped to the local schema. Every consumer MUST
+ * gate it through `canon` / `tryCanon` (components) or `canonResource` / `tryCanonResource` (resources)
+ * before use, so a malformed value rejects and extra fields strip to well-defined local-schema cells.
+ * Reconcile already does this — it re-reads the converged value through `tryCanon` at drain time and uses
+ * `.value` only for classification (add-vs-value, malformed-reject), never applying it raw.
  */
 export type ChangeEvent =
   | { kind: "spawn"; key: EntityKey; origin: Origin }
