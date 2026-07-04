@@ -1,5 +1,7 @@
 # Part IV Build Plan — The Ephemeral Layer (`strata-ecs/ephemeral`)
 
+**Status: IMPLEMENTED** (2026-07-04; M0 a024402, M1 dab91b9, M2 a0289b3, M3 9c4dd09, review fixes 889c4f9; 626 ci + 238 stress + build green; the review gate passed with the as-built addendum recorded in 006 §C7).
+
 **Specs this plan executes:** `design.md` §15 + the Part IV API reference (baseline, locked) as
 amended by `006-part3-4-amendments.md` (normative — esp. **B5** session-unique peerId +
 keepalive-own-keys-only, **C7** EphemeralSyncStatus as amended, the §A4 guard) and
