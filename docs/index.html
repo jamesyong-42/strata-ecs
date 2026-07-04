@@ -1,0 +1,1575 @@
+<!--
+  strata-ecs — concept guide (docs/index.html), one of a two-page site (api.html is separate).
+  Self-contained, GitHub-Pages ready. Only external fetch is Google Fonts.
+  Repo URL used for source links: https://github.com/jamesyong/strata-ecs  (from package.json)
+-->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>strata-ecs — a collaborative ECS for editors and canvas apps</title>
+<meta name="description" content="strata-ecs is a collaborative entity-component-system for editors and infinite-canvas apps: typed-array fast, reactive by design, with multiplayer as layers that never touch the hot path." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #fbfbf9;
+    --ink: #16181d;
+    --muted: #5c6470;
+    --faint: #8b93a0;
+    --line: #e3e5e1;
+    --line-soft: #edeeea;
+    --panel: #f3f3ef;
+    --panel-2: #ecece7;
+
+    /* layer palette — color encodes the stratum site-wide */
+    --core: #3b5bdb;      --core-deep: #2f47b0;  --core-wash: #eef1fd;
+    --react: #7048e8;     --react-deep: #5a34c8; --react-wash: #f3effd;
+    --durable: #0f766e;   --durable-deep: #0b5951; --durable-wash: #e5f1ef;
+    --ephem: #b45309;     --ephem-deep: #8f4107; --ephem-wash: #f8efe2;
+
+    --code-bg: #0f1216;
+    --code-chip: #1b2027;
+    --code-ink: #cfd3da;
+    --c-com: #8a9a86;
+    --c-str: #d4c08f;
+    --c-kw: #8fa6e6;
+    --c-typ: #b4a3f0;
+    --c-fn: #e3c489;
+    --c-num: #d9998c;
+
+    --sidebar-w: 260px;
+    --measure: 740px;
+    --radius: 7px;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  html, body { max-width: 100%; overflow-x: hidden; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, serif;
+    font-size: 16.5px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection { background: #d9e0f7; color: var(--ink); }
+
+  /* ------------------------------------------------------------------ sidebar */
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: var(--sidebar-w);
+    padding: 30px 22px 44px 26px;
+    overflow-y: auto;
+    border-right: 1px solid var(--line);
+    background: var(--bg);
+    z-index: 40;
+    scrollbar-width: thin;
+  }
+  .brand {
+    display: flex; align-items: baseline; gap: 9px;
+    text-decoration: none; color: var(--ink);
+  }
+  .brand b {
+    font-family: "Archivo", sans-serif;
+    font-weight: 700; font-size: 20px; letter-spacing: -0.02em;
+  }
+  .brand .dash { color: var(--core); font-weight: 700; }
+  .ver {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--faint); margin: 7px 0 4px;
+  }
+  .api-link {
+    display: inline-block; margin: 6px 0 24px;
+    font-family: "JetBrains Mono", monospace; font-size: 11.5px;
+    color: var(--core-deep); text-decoration: none;
+    border-bottom: 1px solid rgba(59,91,219,.3);
+    padding-bottom: 1px;
+  }
+  .api-link:hover { border-bottom-color: var(--core); }
+
+  .nav-group { margin-bottom: 18px; padding-left: 11px; border-left: 2px solid var(--line); }
+  .nav-group.g-start { border-left-color: var(--core); }
+  .nav-group.g-core  { border-left-color: var(--core); }
+  .nav-group.g-react { border-left-color: var(--react); }
+  .nav-group.g-collab{ border-left-color: var(--durable); }
+  .nav-group.g-more  { border-left-color: var(--faint); }
+  .nav-group > .lbl {
+    display: block; font-family: "JetBrains Mono", monospace;
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.15em; color: var(--faint); margin-bottom: 7px;
+  }
+  .nav-group a {
+    display: block; padding: 3px 0; margin-left: -2px;
+    font-family: "Archivo", sans-serif; font-size: 13.5px; font-weight: 600;
+    color: var(--muted); text-decoration: none; line-height: 1.35;
+    transition: color .12s;
+  }
+  .nav-group a.sub { padding-left: 14px; font-weight: 600; font-size: 12.5px; color: var(--faint); }
+  .nav-group a:hover { color: var(--ink); }
+  .nav-group a.active { color: var(--core-deep); }
+  .g-react a.active { color: var(--react-deep); }
+  .g-collab a.active { color: var(--durable-deep); }
+  .g-more a.active { color: var(--ink); }
+
+  .nav-foot {
+    margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line);
+    font-family: "JetBrains Mono", monospace; font-size: 12px;
+  }
+  .nav-foot a { display: block; padding: 3px 0; color: var(--muted); text-decoration: none; }
+  .nav-foot a:hover { color: var(--core-deep); }
+
+  .nav-toggle {
+    display: none; position: fixed; top: 12px; left: 12px; z-index: 60;
+    font-family: "JetBrains Mono", monospace; font-size: 12px;
+    padding: 8px 13px; background: var(--ink); color: var(--bg);
+    border: none; border-radius: var(--radius); cursor: pointer;
+  }
+
+  /* ------------------------------------------------------------------ layout */
+  main { margin-left: var(--sidebar-w); padding: 0 56px 140px; }
+  .measure { max-width: var(--measure); margin: 0 auto; }
+
+  section { margin-bottom: 76px; scroll-margin-top: 24px; }
+
+  /* ------------------------------------------------------------------ hero */
+  .hero { padding: 92px 0 52px; border-bottom: 1px solid var(--line); margin-bottom: 60px; }
+  .eyebrow {
+    font-family: "JetBrains Mono", monospace; font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.18em; color: var(--core-deep);
+    margin: 0 0 18px;
+  }
+  .hero h1 {
+    font-family: "Archivo", sans-serif; font-weight: 700;
+    font-size: clamp(32px, 5.2vw, 56px); letter-spacing: -0.028em; line-height: 1.05;
+    margin: 0 0 22px; overflow-wrap: break-word;
+  }
+  .hero h1 em { font-style: normal; color: var(--core); }
+  .hero .lede {
+    font-size: 20px; line-height: 1.55; color: var(--muted);
+    max-width: 640px; margin: 0 0 30px;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 9px; margin: 0 0 6px; }
+  .chip {
+    font-family: "JetBrains Mono", monospace; font-size: 12px;
+    padding: 5px 12px; border: 1px solid var(--line); background: var(--panel);
+    border-radius: 100px; color: var(--muted);
+  }
+  .chip b { color: var(--ink); font-weight: 600; }
+  .chip.pre { border-style: dashed; }
+  .prenote { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--faint); margin: 12px 0 0; }
+
+  /* ------------------------------------------------------------------ headings */
+  h2 {
+    display: flex; align-items: center; gap: 12px;
+    font-family: "Archivo", sans-serif; font-weight: 700; font-size: 29px;
+    letter-spacing: -0.02em; line-height: 1.15; margin: 0 0 6px; padding-top: 6px;
+    scroll-margin-top: 24px;
+  }
+  h2 .glyph { flex: none; width: 22px; height: 22px; }
+  h3 {
+    font-family: "Archivo", sans-serif; font-weight: 600; font-size: 20px;
+    letter-spacing: -0.012em; margin: 42px 0 8px; scroll-margin-top: 24px;
+  }
+  h4 { font-family: "Archivo", sans-serif; font-weight: 600; font-size: 15.5px; margin: 26px 0 6px; }
+  .sec-eyebrow {
+    font-family: "JetBrains Mono", monospace; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.16em; margin: 0 0 10px; padding-left: 34px;
+  }
+  .l-core   { color: var(--core-deep); }
+  .l-react  { color: var(--react-deep); }
+  .l-durable{ color: var(--durable-deep); }
+  .l-ephem  { color: var(--ephem-deep); }
+  .l-neutral{ color: var(--faint); }
+
+  p { margin: 0 0 15px; }
+  a { color: var(--core-deep); text-decoration: underline; text-decoration-color: rgba(59,91,219,.32); text-underline-offset: 2px; }
+  a:hover { text-decoration-color: var(--core); }
+  strong { font-weight: 600; }
+  em { font-style: italic; }
+  ul, ol { padding-left: 22px; margin: 0 0 16px; }
+  li { margin-bottom: 7px; }
+
+  code {
+    font-family: "JetBrains Mono", monospace; font-size: 0.85em;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 4px; padding: 1px 5px; white-space: nowrap;
+  }
+  .anchor {
+    margin-left: 6px; font-family: "JetBrains Mono", monospace; font-size: 0.6em;
+    color: var(--faint); text-decoration: none; opacity: 0; transition: opacity .12s;
+  }
+  h2:hover .anchor, h3:hover .anchor { opacity: 1; }
+
+  /* ------------------------------------------------------------------ code blocks */
+  figure.code {
+    position: relative; margin: 18px 0 22px; border-radius: 9px;
+    background: var(--code-bg); overflow: hidden;
+    box-shadow: 0 1px 0 rgba(22,24,29,.12), 0 16px 34px -24px rgba(15,18,22,.6);
+  }
+  figure.code .bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px 8px 14px; border-bottom: 1px solid rgba(255,255,255,.05);
+  }
+  figure.code .file {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    color: #7d8794; letter-spacing: 0.02em;
+  }
+  figure.code .file b { color: #aab3c0; font-weight: 500; }
+  figure.code pre { margin: 0; padding: 16px 18px; overflow-x: auto; }
+  figure.code code {
+    background: none; border: none; padding: 0; white-space: pre;
+    font-size: 13px; line-height: 1.62; color: var(--code-ink);
+  }
+  .copy {
+    font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: .05em;
+    text-transform: uppercase; color: #7d8794; background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.1); border-radius: 5px; padding: 3px 8px; cursor: pointer;
+    transition: color .12s, border-color .12s;
+  }
+  .copy:hover { color: #cfd3da; border-color: rgba(255,255,255,.28); }
+  .copy.done { color: #8fbf9e; border-color: #8fbf9e; }
+  .tok-c { color: var(--c-com); font-style: italic; }
+  .tok-s { color: var(--c-str); }
+  .tok-k { color: var(--c-kw); }
+  .tok-t { color: var(--c-typ); }
+  .tok-f { color: var(--c-fn); }
+  .tok-n { color: var(--c-num); }
+
+  /* ------------------------------------------------------------------ callouts */
+  .rule, .note {
+    margin: 20px 0 22px; padding: 13px 16px 13px 17px;
+    border: 1px solid var(--line); border-left-width: 3px;
+    border-radius: 0 var(--radius) var(--radius) 0; background: var(--panel);
+    font-size: 15px;
+  }
+  .rule > :last-child, .note > :last-child { margin-bottom: 0; }
+  .tag {
+    display: inline-block; font-family: "JetBrains Mono", monospace;
+    font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.13em;
+    margin-bottom: 4px;
+  }
+  .rule { border-left-color: var(--core); background: var(--core-wash); }
+  .rule .tag { color: var(--core-deep); }
+  .rule.r-react   { border-left-color: var(--react); background: var(--react-wash); }
+  .rule.r-react .tag { color: var(--react-deep); }
+  .rule.r-durable { border-left-color: var(--durable); background: var(--durable-wash); }
+  .rule.r-durable .tag { color: var(--durable-deep); }
+  .rule.r-ephem   { border-left-color: var(--ephem); background: var(--ephem-wash); }
+  .rule.r-ephem .tag { color: var(--ephem-deep); }
+  .note { border-left-color: var(--faint); background: var(--panel); }
+  .note .tag { color: var(--muted); }
+
+  /* ------------------------------------------------------------------ tables */
+  .tbl { overflow-x: auto; margin: 20px 0 22px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th {
+    font-family: "JetBrains Mono", monospace; font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em; text-align: left; color: var(--faint);
+    padding: 9px 13px; border-bottom: 1px solid var(--line); background: var(--panel);
+    white-space: nowrap;
+  }
+  td { padding: 9px 13px; border-bottom: 1px solid var(--line-soft); vertical-align: top; line-height: 1.5; }
+  tr:last-child td { border-bottom: none; }
+  td code { white-space: nowrap; font-size: 12px; }
+  td.band { border-left: 3px solid var(--line); font-weight: 600; font-family: "JetBrains Mono", monospace; font-size: 12px; }
+  td.b-core { border-left-color: var(--core); color: var(--core-deep); }
+  td.b-durable { border-left-color: var(--durable); color: var(--durable-deep); }
+  td.b-ephem { border-left-color: var(--ephem); color: var(--ephem-deep); }
+
+  /* ------------------------------------------------------------------ diagrams */
+  .fig { margin: 26px 0; }
+  .fig svg { display: block; width: 100%; height: auto; }
+  .fig figcaption {
+    font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--faint);
+    margin-top: 10px; line-height: 1.5;
+  }
+  .dlabel { font-family: "JetBrains Mono", monospace; }
+
+  footer {
+    border-top: 1px solid var(--line); margin-top: 90px; padding-top: 26px;
+    font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--faint);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  }
+  footer a { color: var(--muted); }
+
+  /* ------------------------------------------------------------------ responsive */
+  @media (max-width: 960px) {
+    .sidebar { transform: translateX(-100%); transition: transform .22s ease; box-shadow: 12px 0 40px -22px rgba(22,24,29,.4); }
+    body.nav-open .sidebar { transform: none; }
+    .nav-toggle { display: block; }
+    main { margin-left: 0; padding: 64px 20px 100px; }
+    .hero { padding-top: 20px; }
+    .hero h1 { font-size: clamp(26px, 7.3vw, 38px); overflow-wrap: anywhere; }
+    .hero .lede { font-size: 18px; }
+    h2 { font-size: 25px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar { transition: none; }
+    .draw { stroke-dashoffset: 0 !important; animation: none !important; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .draw { stroke-dasharray: 1400; stroke-dashoffset: 1400; animation: draw 1.4s ease forwards; }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+  }
+</style>
+
+<button type="button" class="nav-toggle" id="navToggle" aria-label="Toggle navigation">menu</button>
+
+<nav class="sidebar" id="sidebar">
+  <a class="brand" href="#top"><b>strata<span class="dash">·</span>ecs</b></a>
+  <div class="ver">v0 · pre-release</div>
+  <a class="api-link" href="api.html">API reference →</a>
+
+  <div class="nav-group g-start">
+    <span class="lbl">Start</span>
+    <a href="#why">Why strata</a>
+    <a href="#data-model">The data model</a>
+    <a href="#schema">Schema</a>
+  </div>
+  <div class="nav-group g-core">
+    <span class="lbl">Core</span>
+    <a href="#mutation">Mutation timing</a>
+    <a href="#queries">Queries</a>
+    <a href="#systems">Systems &amp; pipelines</a>
+    <a href="#frame">The frame</a>
+  </div>
+  <div class="nav-group g-react">
+    <span class="lbl">Reactivity</span>
+    <a href="#reactivity">Reactivity</a>
+    <a href="#react" class="sub">React binding</a>
+    <a href="#tools">Observability &amp; tools</a>
+  </div>
+  <div class="nav-group g-collab">
+    <span class="lbl">Collaboration</span>
+    <a href="#persistence">Persistence (local)</a>
+    <a href="#collab">Three tiers of state</a>
+    <a href="#durable" class="sub">The durable layer</a>
+    <a href="#ephemeral" class="sub">The ephemeral layer</a>
+    <a href="#transport" class="sub">Transport</a>
+  </div>
+  <div class="nav-group g-more">
+    <span class="lbl">More</span>
+    <a href="#example">The example app</a>
+    <a href="#notes">Design notes</a>
+  </div>
+
+  <div class="nav-foot">
+    <a href="https://github.com/jamesyong/strata-ecs">GitHub ↗</a>
+    <a href="api.html">API reference ↗</a>
+  </div>
+</nav>
+
+<main id="top">
+<div class="measure">
+
+  <!-- ============================================================= HERO -->
+  <header class="hero">
+    <p class="eyebrow">collaborative ECS · typescript · pre-release</p>
+    <h1>A collaborative ECS for editors and <em>infinite-canvas</em> apps.</h1>
+    <p class="lede">
+      Typed-array fast, reactive by design, with multiplayer as layers that never touch the
+      hot path. Model your document as entities and components; iterate it at archetype-column
+      speed; add persistence and live presence as opt-in strata that project into the same
+      runtime — nothing in the hot loop pays for durability or sync.
+    </p>
+    <div class="chips">
+      <span class="chip pre"><b>npm i strata-ecs</b></span>
+      <span class="chip"><b>628+</b> tests</span>
+      <span class="chip"><b>MIT</b></span>
+    </div>
+    <p class="prenote">// pre-release — not yet published to npm; the API may move before 0.1.</p>
+
+    <!-- the strata cross-section: the signature diagram -->
+    <figure class="fig" style="margin-top:40px" aria-label="Architecture cross-section: the four strata">
+      <svg viewBox="0 0 1000 452" role="img" font-family="JetBrains Mono, monospace">
+        <title>strata-ecs architecture — four layered strata</title>
+        <!-- SYSTEMS band (user code) -->
+        <g>
+          <rect x="140" y="8" width="720" height="52" rx="8" fill="#ffffff" stroke="#c9cdd4" stroke-width="1.5"/>
+          <text x="500" y="30" text-anchor="middle" font-size="13" font-weight="600" fill="#16181d">SYSTEMS — your queries + mutations</text>
+          <text x="500" y="48" text-anchor="middle" font-size="10.5" fill="#5c6470">defineQuery · defineSystem · world.tick(pipeline)</text>
+        </g>
+        <!-- read / write arrows: systems <-> runtime (the hot path) -->
+        <g stroke-width="1.5" fill="none">
+          <path d="M410 60 L410 84" stroke="#3b5bdb" marker-end="url(#ar-core)"/>
+          <path d="M590 84 L590 60" stroke="#3b5bdb" marker-end="url(#ar-core-up)"/>
+          <text x="398" y="76" text-anchor="end" font-size="9.5" fill="#2f47b0">read</text>
+          <text x="602" y="76" font-size="9.5" fill="#2f47b0">write</text>
+        </g>
+        <!-- PART I runtime core -->
+        <g>
+          <path class="draw" d="M60 86 L940 86" stroke="#3b5bdb" stroke-width="1.5" fill="none"/>
+          <rect x="60" y="88" width="880" height="66" rx="9" fill="#eef1fd" stroke="#3b5bdb" stroke-width="1.5"/>
+          <text x="80" y="112" font-size="10" font-weight="600" fill="#2f47b0" letter-spacing="1.5">PART I · RUNTIME CORE · strata-ecs</text>
+          <text x="80" y="132" font-size="11.5" font-weight="600" fill="#16181d">archetype columns (SoA) · tag bitsets · relation indices · generational handles</text>
+          <text x="80" y="147" font-size="10" fill="#5c6470">the hot path — the only stratum a tick touches</text>
+          <text x="915" y="126" text-anchor="end" font-size="9.5" fill="#8b93a0">fast &amp; local ·</text>
+          <text x="915" y="140" text-anchor="end" font-size="9.5" fill="#8b93a0">usable alone</text>
+        </g>
+        <!-- projection seam label -->
+        <g stroke-width="1.5" fill="none">
+          <path d="M500 154 L500 178" stroke="#8b93a0" stroke-dasharray="3 3" marker-end="url(#ar-grey)"/>
+          <path d="M470 178 L470 154" stroke="#8b93a0" stroke-dasharray="3 3" marker-end="url(#ar-grey-up)"/>
+        </g>
+        <text x="512" y="171" font-size="9.5" fill="#5c6470">project ↕</text>
+        <!-- PART II substrate -->
+        <g>
+          <rect x="60" y="180" width="880" height="56" rx="9" fill="#f1f1ee" stroke="#b7bcc4" stroke-width="1.5"/>
+          <text x="80" y="203" font-size="10" font-weight="600" fill="#5c6470" letter-spacing="1.5">PART II · STORAGE SUBSTRATE · internal</text>
+          <text x="80" y="222" font-size="11" fill="#3a3f48">snapshot ladder · projector kernel · baseline · medium-agnostic seam</text>
+        </g>
+        <!-- projection arrows down to durable / ephemeral -->
+        <g stroke-width="1.5" fill="none">
+          <path d="M300 236 L300 268" stroke="#0f766e" marker-end="url(#ar-dur)"/>
+          <path d="M270 268 L270 236" stroke="#0f766e" marker-end="url(#ar-dur-up)"/>
+          <path d="M730 236 L730 268" stroke="#b45309" marker-end="url(#ar-eph)"/>
+          <path d="M700 268 L700 236" stroke="#b45309" marker-end="url(#ar-eph-up)"/>
+        </g>
+        <!-- PART III durable -->
+        <g>
+          <rect x="60" y="270" width="420" height="80" rx="9" fill="#e5f1ef" stroke="#0f766e" stroke-width="1.5"/>
+          <text x="80" y="294" font-size="10" font-weight="600" fill="#0b5951" letter-spacing="1.2">PART III · DURABLE · strata-ecs/durable</text>
+          <text x="80" y="314" font-size="11.5" font-weight="600" fill="#16181d">Loro CRDT · commit at boundaries</text>
+          <text x="80" y="332" font-size="10" fill="#3a3f48">the converging document — persistence + multiplayer</text>
+        </g>
+        <!-- PART IV ephemeral -->
+        <g>
+          <rect x="520" y="270" width="420" height="80" rx="9" fill="#f8efe2" stroke="#b45309" stroke-width="1.5"/>
+          <text x="540" y="294" font-size="10" font-weight="600" fill="#8f4107" letter-spacing="1.2">PART IV · EPHEMERAL · strata-ecs/ephemeral</text>
+          <text x="540" y="314" font-size="11.5" font-weight="600" fill="#16181d">Loro EphemeralStore · presence</text>
+          <text x="540" y="332" font-size="10" fill="#3a3f48">writer-partitioned, self-expiring — cursors &amp; selection</text>
+        </g>
+        <!-- optional bracket -->
+        <text x="500" y="384" text-anchor="middle" font-size="10" fill="#8b93a0">optional layers · Loro quarantined to exactly two adapter classes · adopt in order</text>
+        <!-- arrow markers -->
+        <defs>
+          <marker id="ar-core" markerWidth="7" markerHeight="7" refX="3.5" refY="6" orient="auto"><path d="M0 0 L3.5 6 L7 0" fill="#3b5bdb"/></marker>
+          <marker id="ar-core-up" markerWidth="7" markerHeight="7" refX="3.5" refY="1" orient="auto"><path d="M0 7 L3.5 1 L7 7" fill="#3b5bdb"/></marker>
+          <marker id="ar-grey" markerWidth="7" markerHeight="7" refX="3.5" refY="6" orient="auto"><path d="M0 0 L3.5 6 L7 0" fill="#8b93a0"/></marker>
+          <marker id="ar-grey-up" markerWidth="7" markerHeight="7" refX="3.5" refY="1" orient="auto"><path d="M0 7 L3.5 1 L7 7" fill="#8b93a0"/></marker>
+          <marker id="ar-dur" markerWidth="7" markerHeight="7" refX="3.5" refY="6" orient="auto"><path d="M0 0 L3.5 6 L7 0" fill="#0f766e"/></marker>
+          <marker id="ar-dur-up" markerWidth="7" markerHeight="7" refX="3.5" refY="1" orient="auto"><path d="M0 7 L3.5 1 L7 7" fill="#0f766e"/></marker>
+          <marker id="ar-eph" markerWidth="7" markerHeight="7" refX="3.5" refY="6" orient="auto"><path d="M0 0 L3.5 6 L7 0" fill="#b45309"/></marker>
+          <marker id="ar-eph-up" markerWidth="7" markerHeight="7" refX="3.5" refY="1" orient="auto"><path d="M0 7 L3.5 1 L7 7" fill="#b45309"/></marker>
+        </defs>
+      </svg>
+      <figcaption>The four strata, top to bottom: your systems drive the runtime core (the hot path); the substrate projects the optional durable document and ephemeral presence up into that same runtime and back down. A tick only ever touches the core.</figcaption>
+    </figure>
+
+    <!-- 60-second example -->
+    <h3 style="margin-top:38px">Sixty seconds</h3>
+    <p>Define components, spawn an entity, run a system over a query, tick the world. Every column is typed straight from the schema — no casts.</p>
+    <figure class="code" data-file="hello.ts"></figure>
+  </header>
+
+  <!-- ============================================================= WHY -->
+  <section id="why">
+    <p class="sec-eyebrow l-core">Positioning</p>
+    <h2><svg class="glyph" data-band="1" data-hue="core"></svg>Why strata<a class="anchor" href="#why">#</a></h2>
+    <p>Three claims, each with its receipt — and each with its honest cost.</p>
+
+    <h3>Dense iteration in the same tier as bitecs</h3>
+    <p>
+      Components are stored as struct-of-arrays typed-array columns grouped by archetype, so a
+      system is a contiguous loop over a <code>Float32Array</code>. On the canonical
+      <code>packed_5</code> / <code>simple_iter</code> / <code>frag_iter</code> micro-scenarios strata
+      ties or beats <a href="https://github.com/NateTheGreatt/bitECS">bitecs</a>, the flat-array
+      specialist, and it is fastest on entity-lifecycle churn. The paid cost is on the other side of
+      the archetype trade: adding or removing a component <em>migrates</em> the row between tables,
+      and random access by handle pays a slot→archetype→row indirection. See
+      <a href="https://github.com/jamesyong/strata-ecs/blob/main/BENCHMARKS.md">BENCHMARKS.md</a> for
+      the full cross-library table, losses included.
+    </p>
+
+    <h3>Reactivity built in, zero cost until used</h3>
+    <p>
+      The world is the change detector: subscribe to a query or a value and it tells you when the
+      data behind it moved. The machinery is dormant until the first observer registers — a pure
+      runtime that never calls <code>world.reactive</code> lays down no stamps and does no detection.
+      Once armed, an idle pass is cheap: about <strong>39&nbsp;ns per settled <code>notify()</code></strong>
+      over 10,000 value watches on an M-series laptop (measured; ~26M passes/second).
+    </p>
+
+    <h3>Collaboration as opt-in layers</h3>
+    <p>
+      Persistence and multiplayer are separate subpath imports — <code>strata-ecs/durable</code> and
+      <code>strata-ecs/ephemeral</code> — that you adopt in order of increasing commitment. They build
+      on an internal substrate and project into the same runtime your systems already read. The CRDT
+      (Loro) is <strong>quarantined to exactly two adapter classes</strong> in the whole codebase; the
+      hot path never imports it, and Part I is a complete product with neither layer present.
+    </p>
+  </section>
+
+  <!-- ============================================================= DATA MODEL -->
+  <section id="data-model">
+    <p class="sec-eyebrow l-core">The four primitives</p>
+    <h2><svg class="glyph" data-band="1" data-hue="core"></svg>The data model<a class="anchor" href="#data-model">#</a></h2>
+    <p>
+      Everything is one of four things: an <strong>entity</strong>, a <strong>component</strong>, a
+      <strong>tag</strong>, a <strong>relation</strong>, or a world-singleton <strong>resource</strong>.
+    </p>
+
+    <h3>Entities are generational handles</h3>
+    <p>
+      An <code>Entity</code> is an opaque <code>u32</code> — a 20-bit slot index packed with a 12-bit
+      generation. The slot is a direct row into the entity table (O(1) resolve); the generation is
+      bumped every time a slot is recycled, so a handle you kept past its entity's death reads dead
+      forever rather than silently aliasing a new entity. A handle is a <em>name, not a pointer</em>:
+      it stays constant as the entity migrates between archetypes.
+    </p>
+    <figure class="fig" aria-label="Packed entity handle and the slot table">
+      <svg viewBox="0 0 720 220" role="img" font-family="JetBrains Mono, monospace">
+        <title>The packed handle and the slot table</title>
+        <!-- packed handle -->
+        <text x="20" y="30" font-size="10.5" font-weight="600" fill="#2f47b0" letter-spacing="1">Entity — one u32</text>
+        <rect x="20" y="40" width="300" height="44" rx="6" fill="#eef1fd" stroke="#3b5bdb" stroke-width="1.5"/>
+        <line x1="200" y1="40" x2="200" y2="84" stroke="#3b5bdb" stroke-width="1.5"/>
+        <text x="110" y="60" text-anchor="middle" font-size="11" font-weight="600" fill="#16181d">generation</text>
+        <text x="110" y="75" text-anchor="middle" font-size="9.5" fill="#5c6470">12 bits</text>
+        <text x="260" y="60" text-anchor="middle" font-size="11" font-weight="600" fill="#16181d">slot</text>
+        <text x="260" y="75" text-anchor="middle" font-size="9.5" fill="#5c6470">20 bits</text>
+        <!-- arrow -->
+        <path d="M260 84 L260 118" stroke="#3b5bdb" stroke-width="1.5" fill="none" marker-end="url(#dm-ar)"/>
+        <text x="272" y="106" font-size="9.5" fill="#2f47b0">indexes</text>
+        <!-- slot table -->
+        <text x="20" y="140" font-size="10.5" font-weight="600" fill="#5c6470" letter-spacing="1">slot table</text>
+        <g font-size="10.5">
+          <rect x="20" y="150" width="300" height="24" fill="#f3f3ef" stroke="#c9cdd4" stroke-width="1"/>
+          <rect x="20" y="150" width="80" height="24" fill="#e6ebfb" stroke="#c9cdd4" stroke-width="1"/>
+          <text x="30" y="166" fill="#5c6470">slot</text>
+          <text x="130" y="166" fill="#16181d">generation</text>
+          <text x="230" y="166" fill="#16181d">→ archetype, row</text>
+          <rect x="20" y="174" width="300" height="22" fill="#fff" stroke="#e3e5e1" stroke-width="1"/>
+          <text x="30" y="189" fill="#16181d">260</text><text x="130" y="189" fill="#16181d">3</text><text x="230" y="189" fill="#5c6470">A2, row 14</text>
+        </g>
+        <!-- stale handle -->
+        <g>
+          <text x="380" y="60" font-size="10.5" font-weight="600" fill="#8f4107">stale handle</text>
+          <rect x="380" y="70" width="320" height="60" rx="6" fill="#f8efe2" stroke="#b45309" stroke-width="1.5"/>
+          <text x="396" y="92" font-size="11" fill="#16181d">gen 2, slot 260  →  table says gen 3</text>
+          <text x="396" y="112" font-size="11" font-weight="600" fill="#8f4107">mismatch ⇒ reads dead, never aliases</text>
+        </g>
+        <text x="380" y="176" font-size="10.5" fill="#5c6470">world.isAlive(stale) === false — permanently.</text>
+        <defs><marker id="dm-ar" markerWidth="7" markerHeight="7" refX="3.5" refY="6" orient="auto"><path d="M0 0 L3.5 6 L7 0" fill="#3b5bdb"/></marker></defs>
+      </svg>
+      <figcaption>The slot indexes the table; the generation is the guard. A recycled slot bumps its generation, so any handle minted against the old occupant fails the check.</figcaption>
+    </figure>
+
+    <h3>Components are SoA columns, grouped by archetype</h3>
+    <p>
+      A component is a named set of typed fields. Entities with the exact same set of components share
+      an <strong>archetype</strong> — a table whose rows are entities and whose columns are the fields,
+      each a real typed array. Adding or removing a component moves the entity's row to the archetype
+      with the new shape; that migration is the archetype model's cost, and the reason to split fields
+      that are edited independently into separate components (more on that under
+      <a href="#durable">the durable layer</a>).
+    </p>
+    <figure class="fig" aria-label="Archetype tables and migration">
+      <svg viewBox="0 0 720 260" role="img" font-family="JetBrains Mono, monospace">
+        <title>Archetype tables — rows are entities, columns are fields</title>
+        <!-- archetype A -->
+        <text x="20" y="26" font-size="10.5" font-weight="600" fill="#2f47b0">archetype [Position, Velocity]</text>
+        <g font-size="10">
+          <rect x="20" y="34" width="300" height="22" fill="#e6ebfb" stroke="#3b5bdb" stroke-width="1"/>
+          <text x="30" y="49" fill="#2f47b0">entity</text><text x="110" y="49" fill="#2f47b0">Position.x</text><text x="200" y="49" fill="#2f47b0">Position.y</text><text x="270" y="49" fill="#2f47b0">Velocity…</text>
+          <rect x="20" y="56" width="300" height="20" fill="#fff" stroke="#e3e5e1"/><text x="30" y="70" fill="#16181d">e3</text><text x="110" y="70">10.0</text><text x="200" y="70">4.0</text><text x="270" y="70">1,0</text>
+          <rect x="20" y="76" width="300" height="20" fill="#f7f8fc" stroke="#e3e5e1"/><text x="30" y="90" fill="#16181d">e7</text><text x="110" y="90">22.5</text><text x="200" y="90">9.0</text><text x="270" y="90">0,2</text>
+          <rect x="20" y="96" width="300" height="20" fill="#fff" stroke="#e3e5e1"/><text x="30" y="110" fill="#16181d">e9</text><text x="110" y="110">3.0</text><text x="200" y="110">7.0</text><text x="270" y="110">1,1</text>
+        </g>
+        <text x="20" y="140" font-size="9.5" fill="#5c6470">columns are Float32Arrays — a system loops them contiguously</text>
+
+        <!-- migration arrow -->
+        <path d="M330 90 L400 90" stroke="#3b5bdb" stroke-width="1.5" fill="none" marker-end="url(#am-ar)"/>
+        <text x="365" y="80" text-anchor="middle" font-size="9.5" fill="#2f47b0">addComponent</text>
+        <text x="365" y="104" text-anchor="middle" font-size="9.5" fill="#8f4107">migrate row</text>
+
+        <!-- archetype B -->
+        <text x="410" y="26" font-size="10.5" font-weight="600" fill="#0b5951">archetype [Position, Velocity, Frozen…]</text>
+        <g font-size="10">
+          <rect x="410" y="34" width="290" height="22" fill="#e5f1ef" stroke="#0f766e" stroke-width="1"/>
+          <text x="420" y="49" fill="#0b5951">entity</text><text x="500" y="49" fill="#0b5951">Position.x</text><text x="590" y="49" fill="#0b5951">…</text>
+          <rect x="410" y="56" width="290" height="20" fill="#fff" stroke="#e3e5e1"/><text x="420" y="70" fill="#16181d">e7</text><text x="500" y="70">22.5</text><text x="590" y="70">…</text>
+        </g>
+        <text x="410" y="140" font-size="9.5" fill="#5c6470">e7's row now lives here; its handle did not change</text>
+
+        <!-- tags / relations / resources note -->
+        <g font-size="10.5">
+          <rect x="20" y="168" width="215" height="72" rx="7" fill="#f3f3ef" stroke="#e3e5e1"/>
+          <text x="32" y="188" font-weight="600" fill="#16181d">tags</text>
+          <text x="32" y="205" fill="#5c6470">bitsets — outside archetype</text>
+          <text x="32" y="220" fill="#5c6470">identity; presence is the</text>
+          <text x="32" y="235" fill="#5c6470">information</text>
+          <rect x="245" y="168" width="215" height="72" rx="7" fill="#f3f3ef" stroke="#e3e5e1"/>
+          <text x="257" y="188" font-weight="600" fill="#16181d">relations</text>
+          <text x="257" y="205" fill="#5c6470">directed edges, inverse-</text>
+          <text x="257" y="220" fill="#5c6470">indexed, arity one/many,</text>
+          <text x="257" y="235" fill="#5c6470">cascade on despawn</text>
+          <rect x="470" y="168" width="230" height="72" rx="7" fill="#f3f3ef" stroke="#e3e5e1"/>
+          <text x="482" y="188" font-weight="600" fill="#16181d">resources</text>
+          <text x="482" y="205" fill="#5c6470">world singletons — camera,</text>
+          <text x="482" y="220" fill="#5c6470">tool mode, config; not</text>
+          <text x="482" y="235" fill="#5c6470">attached to any entity</text>
+        </g>
+        <defs><marker id="am-ar" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L6 3.5 L0 7" fill="#3b5bdb"/></marker></defs>
+      </svg>
+      <figcaption>Rows are entities, columns are fields. A shape change migrates one row between tables; tags, relations, and resources live outside the archetype and carry their own indices.</figcaption>
+    </figure>
+    <ul>
+      <li><strong>Tags</strong> are zero-data markers backed by bitsets — <code>Selected</code>, <code>Frozen</code>. Presence is the whole signal; they sit outside archetype identity.</li>
+      <li><strong>Relations</strong> are directed, inverse-indexed edges with arity <code>one</code> or <code>many</code>; deleting either endpoint cascades the edge away with zero cleanup code.</li>
+      <li><strong>Resources</strong> are world singletons — the camera, the active tool, a config object — read and written by name, not attached to entities.</li>
+    </ul>
+  </section>
+
+  <!-- ============================================================= SCHEMA -->
+  <section id="schema">
+    <p class="sec-eyebrow l-core">Declaring the data</p>
+    <h2><svg class="glyph" data-band="1" data-hue="core"></svg>Schema<a class="anchor" href="#schema">#</a></h2>
+    <p>
+      You declare each primitive once with a <code>define*</code> call and hold the returned handle as
+      a module constant. The schema literal is the source of truth: field types flow from it into both
+      the runtime storage and the TypeScript value type, so there is no hand-written <code>&lt;S&gt;</code>
+      that can drift from the columns.
+    </p>
+    <figure class="code" data-file="schema.ts"></figure>
+
+    <h3>Field types</h3>
+    <div class="tbl"><table>
+      <thead><tr><th>Type</th><th>Value in TS</th><th>Backing column</th></tr></thead>
+      <tbody>
+        <tr><td><code>f32</code> <code>f64</code></td><td><code>number</code></td><td><code>Float32Array</code> / <code>Float64Array</code></td></tr>
+        <tr><td><code>i8</code>…<code>i32</code>, <code>u8</code>…<code>u32</code></td><td><code>number</code></td><td>the matching integer typed array</td></tr>
+        <tr><td><code>bool</code></td><td><code>boolean</code></td><td><code>Uint8Array</code> (0 / 1)</td></tr>
+        <tr><td><code>string</code></td><td><code>string | null</code></td><td>per-cell <code>(string | null)[]</code></td></tr>
+        <tr><td><code>eid</code></td><td><code>Entity</code></td><td><code>Uint32Array</code> (a packed handle)</td></tr>
+        <tr><td><code>key</code></td><td><code>EntityKey | null</code></td><td>string column — a cross-store reference (§14.3)</td></tr>
+        <tr><td><code>enumOf([…])</code></td><td>the label union</td><td>smallest unsigned int that fits</td></tr>
+      </tbody>
+    </table></div>
+    <p>
+      Wrap a type in <code>field(type, { default })</code> to make it optional at spawn; a bare type is
+      required. <code>enumOf</code> takes an array for positional discriminants (local-only, reorder-hostile)
+      or an object for explicit stable ones (safe to persist and sync).
+    </p>
+
+    <h3>Type inference — the columns are real typed arrays</h3>
+    <p>
+      Because the handle remembers its schema literal, <code>batch.col(Position).x</code> <em>is</em> a
+      <code>Float32Array</code> at compile time — no cast, and a typo in the field name is a type error.
+    </p>
+    <figure class="code" data-file="inference.ts"></figure>
+
+    <div class="note">
+      <span class="tag">Note — the schema registry is process-global</span>
+      <p>
+        <code>define*</code> populate module-level registries, so a name is defined exactly once per
+        process. Under Vite HMR, escalate the schema module to a full reload (never a hot re-run) and
+        cache the definitions on <code>globalThis</code> — this is the reference pattern the example app
+        uses, in <code>ecs/schema.ts</code>.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================= MUTATION -->
+  <section id="mutation">
+    <p class="sec-eyebrow l-core">The core mental model</p>
+    <h2><svg class="glyph" data-band="1" data-hue="core"></svg>Mutation timing<a class="anchor" href="#mutation">#</a></h2>
+    <p>
+      There are two mutation surfaces, and the difference between them is the single most important
+      thing to hold in your head. <strong>Outside a system</strong>, <code>world.*</code> mutations
+      apply immediately — nothing is iterating, so a shape change is safe at once.
+      <strong>Inside a system</strong>, you get a <code>ctx</code> whose <em>value</em> writes are
+      immediate but whose <em>shape</em> changes (spawn, destroy, add/remove component, tags, relations)
+      are deferred: they enqueue into the phase's command buffer and land at the phase boundary.
+    </p>
+    <figure class="code" data-file="timing.ts"></figure>
+    <p>
+      Identity is the exception that makes deferral usable: <code>ctx.spawn()</code> mints a real handle
+      <em>now</em> — you can tag it, reference it, store it immediately — even though its components are
+      <em>placed</em> at the flush. It is queryable from the next phase on.
+    </p>
+    <div class="rule">
+      <span class="tag">Rule</span>
+      <p>Values flow immediately and are order-sensitive within a phase; structure lands at phase boundaries.</p>
+    </div>
+    <figure class="fig" aria-label="The tick timeline">
+      <svg viewBox="0 0 720 240" role="img" font-family="JetBrains Mono, monospace">
+        <title>The tick timeline — phases, systems, flush points</title>
+        <!-- timeline base -->
+        <line x1="20" y1="150" x2="700" y2="150" stroke="#c9cdd4" stroke-width="1.5"/>
+        <text x="20" y="26" font-size="10.5" font-weight="600" fill="#2f47b0">world.tick(pipeline)  —  one call, per phase in array order</text>
+        <!-- phase 1 -->
+        <rect x="40" y="70" width="270" height="60" rx="7" fill="#eef1fd" stroke="#3b5bdb" stroke-width="1.5"/>
+        <text x="52" y="88" font-size="10" font-weight="600" fill="#2f47b0">phase "sim"</text>
+        <text x="52" y="106" font-size="10" fill="#16181d">SystemA · SystemB — run in order</text>
+        <text x="52" y="121" font-size="9.5" fill="#5c6470">value writes visible at once</text>
+        <!-- flush 1 -->
+        <line x1="310" y1="60" x2="310" y2="150" stroke="#0f766e" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="315" y="66" font-size="9.5" fill="#0b5951">flush ①</text>
+        <text x="315" y="163" font-size="9" fill="#0b5951">shape changes land</text>
+        <!-- phase 2 -->
+        <rect x="330" y="70" width="270" height="60" rx="7" fill="#eef1fd" stroke="#3b5bdb" stroke-width="1.5"/>
+        <text x="342" y="88" font-size="10" font-weight="600" fill="#2f47b0">phase "post"</text>
+        <text x="342" y="106" font-size="10" fill="#16181d">SystemC — sees ① results</text>
+        <!-- flush 2 -->
+        <line x1="600" y1="60" x2="600" y2="150" stroke="#0f766e" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="605" y="66" font-size="9.5" fill="#0b5951">flush ②</text>
+        <!-- deferred spawn track -->
+        <path d="M120 121 C120 178, 400 178, 430 178" stroke="#b45309" stroke-width="1.5" fill="none" marker-end="url(#tt-ar)"/>
+        <text x="60" y="200" font-size="10" fill="#8f4107">ctx.spawn() in "sim": handle usable now …</text>
+        <text x="440" y="182" font-size="10" font-weight="600" fill="#8f4107">… queryable from "post"</text>
+        <defs><marker id="tt-ar" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L6 3.5 L0 7" fill="#b45309"/></marker></defs>
+      </svg>
+      <figcaption>Systems run in order within a phase; the phase boundary flushes queued shape changes. A spawn issued in one phase returns a live handle immediately but becomes visible to queries only after the next flush.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================= QUERIES -->
+  <section id="queries">
+    <p class="sec-eyebrow l-core">Finding entities</p>
+    <h2><svg class="glyph" data-band="1" data-hue="core"></svg>Queries<a class="anchor" href="#queries">#</a></h2>
+    <p>
+      A query is an array of terms AND-ed together, compiled once and held as a constant. Component
+      terms fold into archetype-level checks (evaluated once per archetype and cached); tag and relation
+      terms become per-row filters; a relation with a concrete target seeds iteration from the reverse
+      index. <code>defineQuery</code> returns an opaque handle; the store caches its matching archetypes.
+    </p>
+    <figure class="code" data-file="queries.ts"></figure>
+
+    <h3>Iterating a batch</h3>
+    <p>
+      A system body runs once per matching archetype chunk. Read columns through <code>col()</code> for
+      typed access, then loop the matched rows. <code>for (const r of batch)</code> fuses the row filters;
+      the explicit <code>rows</code>/<code>count</code> loop is the fastest idiom and valid for every chunk.
+    </p>
+    <figure class="code" data-file="iterate.ts"></figure>
+    <div class="note">
+      <span class="tag">Note — cost honesty</span>
+      <p>
+        Component membership is the cheapest term (archetype-level, checked once per table). Tags and
+        relations cost a per-row probe. A relation is a single hop — <code>Related(rel)</code> for any
+        edge, <code>Related(rel, target)</code> for a specific one — there is no multi-hop traversal in a
+        query; walk further edges yourself. <code>batch.rows</code> and the columns are chunk-scoped:
+        read what you need inside the loop, never retain them past it.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================= SYSTEMS -->
+  <section id="systems">
+    <p class="sec-eyebrow l-core">Behaviour &amp; the schedule</p>
+    <h2><svg class="glyph" data-band="1" data-hue="core"></svg>Systems &amp; pipelines<a class="anchor" href="#systems">#</a></h2>
+    <p>
+      A system pairs a query with a body and some options: a <code>name</code> for the tools, a
+      <code>runIf</code> gate on non-query state, and an <code>access</code> declaration of the columns it
+      reads and writes. Systems are grouped into named <code>phase</code>s; a pipeline is just an array of
+      phases, run in order. Because it is a plain array, you rebuild it as a value to reconfigure the frame.
+    </p>
+    <figure class="code" data-file="systems.ts"></figure>
+
+    <h3>Access declarations</h3>
+    <p>
+      The <code>access.write</code> envelope names every column a system may mutate across all of its
+      conditions. It is optional in the base runtime, but once reactivity is active it does real work:
+      it is how the framework knows which columns a system stamped, and — in dev builds — it enforces
+      that a system only writes what it declared. A gated-off system never runs, so it never stamps;
+      that keeps idle frames stamp-free and is why the <code>runIf</code> gate is load-bearing under
+      reactivity.
+    </p>
+  </section>
+
+  <!-- ============================================================= FRAME -->
+  <section id="frame">
+    <p class="sec-eyebrow l-core">Composition</p>
+    <h2><svg class="glyph" data-band="1" data-hue="core"></svg>The frame<a class="anchor" href="#frame">#</a></h2>
+    <p>
+      A frame is four stations, in order: drain any inbound layers, run your systems, settle the reactive
+      boundary, then render. In a pure Part I world <code>sync()</code> is a no-op — but you write it from
+      day one, so the durable and ephemeral layers attach later with zero rewrite.
+    </p>
+    <figure class="code" data-file="frameLoop.ts"></figure>
+    <figure class="fig" aria-label="The frame ring">
+      <svg viewBox="0 0 720 260" role="img" font-family="JetBrains Mono, monospace">
+        <title>The frame ring — four stations</title>
+        <!-- ring -->
+        <circle cx="360" cy="130" r="92" fill="none" stroke="#e3e5e1" stroke-width="1.5"/>
+        <!-- stations -->
+        <g>
+          <circle cx="360" cy="38" r="7" fill="#0f766e"/>
+          <text x="360" y="24" text-anchor="middle" font-size="11" font-weight="600" fill="#0b5951">sync()</text>
+          <text x="360" y="14" text-anchor="middle" font-size="9" fill="#5c6470">drain inbound layers</text>
+        </g>
+        <g>
+          <circle cx="452" cy="130" r="7" fill="#3b5bdb"/>
+          <text x="468" y="127" font-size="11" font-weight="600" fill="#2f47b0">tick(pipeline)</text>
+          <text x="468" y="141" font-size="9" fill="#5c6470">run systems, any cadence</text>
+        </g>
+        <g>
+          <circle cx="360" cy="222" r="7" fill="#7048e8"/>
+          <text x="360" y="244" text-anchor="middle" font-size="11" font-weight="600" fill="#5a34c8">reactive.notify()</text>
+          <text x="360" y="256" text-anchor="middle" font-size="9" fill="#5c6470">the one settled boundary</text>
+        </g>
+        <g>
+          <circle cx="268" cy="130" r="7" fill="#5c6470"/>
+          <text x="252" y="127" text-anchor="end" font-size="11" font-weight="600" fill="#16181d">render</text>
+          <text x="252" y="141" text-anchor="end" font-size="9" fill="#5c6470">read after tick returns</text>
+        </g>
+        <!-- direction arrows -->
+        <g stroke-width="1.5" fill="none">
+          <path d="M420 62 A92 92 0 0 1 424 66" stroke="#8b93a0" marker-end="url(#fr-ar)"/>
+          <path d="M424 194 A92 92 0 0 1 420 198" stroke="#8b93a0" marker-end="url(#fr-ar)"/>
+          <path d="M300 198 A92 92 0 0 1 296 194" stroke="#8b93a0" marker-end="url(#fr-ar)"/>
+          <path d="M296 66 A92 92 0 0 1 300 62" stroke="#8b93a0" marker-end="url(#fr-ar)"/>
+        </g>
+        <text x="360" y="126" text-anchor="middle" font-size="10" fill="#8b93a0">every</text>
+        <text x="360" y="140" text-anchor="middle" font-size="10" fill="#8b93a0">rAF</text>
+        <defs><marker id="fr-ar" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto"><path d="M0 0 L6 3.5 L0 7" fill="#8b93a0"/></marker></defs>
+      </svg>
+      <figcaption>sync() drains attached layers into the runtime; tick() runs systems and flushes their shape changes; notify() settles the reactive boundary once; render reads the finished state. One trip per frame.</figcaption>
+    </figure>
+    <div class="rule">
+      <span class="tag">Rule</span>
+      <p>One settled reactive boundary per frame: call <code>world.reactive.notify()</code> exactly once, after all ticks, before you render.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================= REACTIVITY -->
+  <section id="reactivity">
+    <p class="sec-eyebrow l-react">The change detector</p>
+    <h2><svg class="glyph" data-band="1" data-hue="react"></svg>Reactivity<a class="anchor" href="#reactivity">#</a></h2>
+    <p>
+      Reactivity is a poll-at-boundary read surface over stamps the store already carries — it never
+      touches the hot loop. Observers are compared against those stamps at one settled point per frame,
+      your <code>notify()</code>. There are three tiers, a visible cost-and-precision ladder, plus a
+      resource channel.
+    </p>
+    <figure class="fig" aria-label="The reactivity tier ladder">
+      <svg viewBox="0 0 720 240" role="img" font-family="JetBrains Mono, monospace">
+        <title>The reactivity ladder — cost vs precision</title>
+        <!-- axes -->
+        <line x1="60" y1="200" x2="700" y2="200" stroke="#c9cdd4" stroke-width="1.5"/>
+        <line x1="60" y1="200" x2="60" y2="20" stroke="#c9cdd4" stroke-width="1.5"/>
+        <text x="60" y="228" font-size="9.5" fill="#5c6470">coarser · cheaper</text>
+        <text x="700" y="228" text-anchor="end" font-size="9.5" fill="#5c6470">finer · more precise</text>
+        <text x="30" y="30" font-size="9.5" fill="#5c6470" transform="rotate(-90 30 110)">precision</text>
+        <!-- steps -->
+        <g>
+          <rect x="90" y="150" width="180" height="40" rx="6" fill="#f3effd" stroke="#7048e8" stroke-width="1.5"/>
+          <text x="102" y="167" font-size="11" font-weight="600" fill="#5a34c8">observeQuery</text>
+          <text x="102" y="182" font-size="9.5" fill="#5c6470">did anything matching move?</text>
+        </g>
+        <g>
+          <rect x="290" y="100" width="180" height="40" rx="6" fill="#f3effd" stroke="#7048e8" stroke-width="1.5"/>
+          <text x="302" y="117" font-size="11" font-weight="600" fill="#5a34c8">observeValue</text>
+          <text x="302" y="132" font-size="9.5" fill="#5c6470">this value actually differs</text>
+        </g>
+        <g>
+          <rect x="490" y="50" width="200" height="40" rx="6" fill="#f3effd" stroke="#7048e8" stroke-width="1.5"/>
+          <text x="502" y="67" font-size="11" font-weight="600" fill="#5a34c8">observeResource</text>
+          <text x="502" y="82" font-size="9.5" fill="#5c6470">a singleton changed</text>
+        </g>
+        <path d="M270 168 L290 128" stroke="#b6a6ef" stroke-width="1.5" fill="none"/>
+        <path d="M470 118 L490 78" stroke="#b6a6ef" stroke-width="1.5" fill="none"/>
+        <text x="90" y="36" font-size="9.5" fill="#5c6470">observeQuery may over-fire, never misses · observeValue is equality-suppressed</text>
+      </svg>
+      <figcaption>Pick the coarsest tier that still tells you what you need: a query watch to know a collection may have moved, a value watch for an exact per-entity value, a resource watch for a singleton.</figcaption>
+    </figure>
+    <figure class="code" data-file="reactivity.ts"></figure>
+    <ul>
+      <li><strong>Registration is a frame boundary.</strong> Subscribing never back-fires; a change made in the same frame as registration surfaces at the very next <code>notify()</code>, and nothing stamped before you subscribed ever fires.</li>
+      <li><strong><code>peek</code> reads the current value</strong> without subscribing; <code>invalidate(C)</code> is the manual stamp for a write no chokepoint saw.</li>
+      <li><strong>Watches die with their world.</strong> A <code>world.import(bytes, { replace: true })</code> settles them at the next <code>notify()</code> (entity watches fire <code>undefined</code> once and self-remove).</li>
+    </ul>
+    <div class="rule r-react">
+      <span class="tag">Rule</span>
+      <p><code>observeQuery</code> may over-fire but never misses; <code>observeValue</code> fires only on a real change. Both cost nothing until the first observer registers.</p>
+    </div>
+
+    <h3 id="react">React binding</h3>
+    <p>
+      <code>strata-ecs/react</code> is two hooks over <code>useSyncExternalStore</code>: they subscribe to
+      the value channel and re-render exactly once per real change at your next <code>notify()</code>. An
+      equal-value write does not re-render.
+    </p>
+    <figure class="code" data-file="ShapeInspector.tsx"></figure>
+  </section>
+
+  <!-- ============================================================= TOOLS -->
+  <section id="tools">
+    <p class="sec-eyebrow l-neutral">Introspection</p>
+    <h2><svg class="glyph" data-band="1" data-hue="neutral"></svg>Observability &amp; tools<a class="anchor" href="#tools">#</a></h2>
+    <p>
+      The runtime exposes a telemetry contract, <code>WorldObserver</code>: attach one with
+      <code>world.observe(obs)</code> and it receives spawn/destroy and per-tick/per-system/per-flush
+      events. It is zero-cost when nothing is attached — the hot paths pay one branch-on-null and take
+      no timings. Callbacks must not mutate the world and must not throw.
+    </p>
+    <figure class="code" data-file="observer.ts"></figure>
+    <p>
+      Built on that contract is <code>strata-ecs/tools</code> — a zero-dependency vanilla-DOM inspector
+      panel you mount with one call. It has three tabs: <strong>entities</strong> (a live, virtualized
+      list with a component/tag/relation detail pane), <strong>systems</strong> (per-system microseconds,
+      run/skip idle percentage, per-phase flush timings), and <strong>timeline</strong> (a canvas
+      waterfall of every entity's birth-to-death, so even one-tick entities show up). You pass a
+      <code>describe</code> callback to label entities in your own domain terms.
+    </p>
+    <figure class="code" data-file="panel.ts"></figure>
+  </section>
+
+  <!-- ============================================================= PERSISTENCE -->
+  <section id="persistence">
+    <p class="sec-eyebrow l-core">Local save &amp; load</p>
+    <h2><svg class="glyph" data-band="1" data-hue="core"></svg>Persistence (local)<a class="anchor" href="#persistence">#</a></h2>
+    <p>
+      Before any collaboration, the runtime serializes itself. <code>world.export()</code> returns bytes
+      (readable UTF-8 JSON); <code>world.import()</code> loads them. A plain import needs an empty world;
+      <code>import(bytes, { replace: true })</code> resets the world in place first — the document-open
+      path that keeps the same <code>World</code> object, and every observer and reactive registration on
+      it, instead of forcing a swap. It validates before it resets, so an incompatible snapshot throws
+      with the live board intact.
+    </p>
+    <figure class="code" data-file="persistence.ts"></figure>
+    <div class="rule">
+      <span class="tag">Rule</span>
+      <p>Import in place with <code>{ replace: true }</code>: every pre-reset handle reads dead afterward (generations bump), never aliased to a later entity, and your subscriptions survive.</p>
+    </div>
+    <p>
+      The example app's autosave is the pattern: a single <code>observeQuery</code> over the drawable
+      columns raises a debounced export on idle, deferring while a gesture is in flight so a multi-ms
+      world walk never hitches a drag.
+    </p>
+  </section>
+
+  <!-- ============================================================= COLLAB -->
+  <section id="collab">
+    <p class="sec-eyebrow l-durable">Multiplayer, in layers</p>
+    <h2><svg class="glyph" data-band="3" data-hue="durable"></svg>Three tiers of state<a class="anchor" href="#collab">#</a></h2>
+    <p>
+      Collaboration is a choice you make per component, not a mode you switch on. State lives in one of
+      three tiers, and where a component lives is decided by <em>how you create it</em>. The example app
+      draws this line on day one — document content vs. interaction state — so the collaborative layers
+      attach without a rewrite.
+    </p>
+    <div class="tbl"><table>
+      <thead><tr><th>Tier</th><th>Lives in</th><th>Lifetime</th><th>Who writes</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td class="band b-core">runtime-only</td><td>archetype columns</td><td>this session</td><td>anyone, immediately</td><td><code>Selected</code>, camera, drag drafts</td></tr>
+        <tr><td class="band b-durable">durable</td><td>Loro doc → projected</td><td>forever, converges</td><td>the committer, at boundaries</td><td><code>Position</code>, <code>Size</code>, <code>Fill</code></td></tr>
+        <tr><td class="band b-ephem">ephemeral</td><td>Loro EphemeralStore → projected</td><td>TTL, self-expiring</td><td>the owner, its partition only</td><td><code>CursorPos</code>, presence</td></tr>
+      </tbody>
+    </table></div>
+    <p>
+      The two collaborative tiers are separate imports and separate documents, but both project into the
+      same runtime your systems already read — durable content as ordinary entities, ephemeral peers as
+      <code>Not(Local)</code> entities. Below: how each works, and where the app's job stops and the
+      framework's begins.
+    </p>
+
+    <!-- ---------- DURABLE ---------- -->
+    <h3 id="durable">The durable layer</h3>
+    <p>
+      <code>createDurableStore(loroDoc)</code> is the one place a <code>LoroDoc</code> enters — you own
+      the document and its transport. <code>attachDurable(world, doc)</code> projects it into the runtime
+      and registers the drain that <code>sync()</code> pumps. You change the document only inside
+      <code>doc.transaction</code>, which records a batch of mutations and seals them as one Loro commit
+      (one commit is one undo unit).
+    </p>
+    <figure class="code" data-file="durable-setup.ts"></figure>
+    <p>
+      Inside a transaction, the <code>tx</code> vocabulary mirrors <code>world</code>/<code>ctx</code> — but
+      the timing rule is sharp and worth memorizing.
+    </p>
+    <div class="rule r-durable">
+      <span class="tag">Rule — visibility</span>
+      <p>A durable value write to an <em>existing</em> component is visible immediately; every structural effect (spawn, add/remove component, tags, relations, despawn) is visible after the next <code>sync()</code>.</p>
+    </div>
+    <p>
+      That split is what makes a drag cheap and correct. A drag writes runtime <code>Position</code> every
+      frame and commits <strong>once</strong> at gesture end; the framework holds remote edits to those
+      cells off while your drag is in flight, and on release everyone converges on the last committer's
+      value. You write no conflict code.
+    </p>
+    <figure class="fig" aria-label="The three layers of durable state">
+      <svg viewBox="0 0 720 250" role="img" font-family="JetBrains Mono, monospace">
+        <title>Loro doc, baseline, runtime — the lagging baseline as drag detector</title>
+        <!-- three stacked layers -->
+        <g>
+          <rect x="40" y="30" width="360" height="40" rx="7" fill="#e5f1ef" stroke="#0f766e" stroke-width="1.5"/>
+          <text x="52" y="55" font-size="11" font-weight="600" fill="#0b5951">Loro document — the converged truth</text>
+          <rect x="40" y="100" width="360" height="40" rx="7" fill="#f1f1ee" stroke="#b7bcc4" stroke-width="1.5"/>
+          <text x="52" y="125" font-size="11" font-weight="600" fill="#5c6470">baseline — last agreed value (lags)</text>
+          <rect x="40" y="170" width="360" height="40" rx="7" fill="#eef1fd" stroke="#3b5bdb" stroke-width="1.5"/>
+          <text x="52" y="195" font-size="11" font-weight="600" fill="#2f47b0">runtime — what the user sees now</text>
+        </g>
+        <!-- the 4-step story -->
+        <g font-size="10.5" fill="#16181d">
+          <text x="430" y="40" font-weight="600" fill="#0b5951">the drag detector, in 4 steps</text>
+          <text x="430" y="62">1 · idle: runtime == baseline == doc</text>
+          <text x="430" y="86" fill="#2f47b0">2 · drag: runtime moves ahead each</text>
+          <text x="446" y="100" fill="#2f47b0">frame; baseline lags behind</text>
+          <text x="430" y="124" fill="#8f4107">3 · remote edit to same cell arrives:</text>
+          <text x="446" y="138" fill="#8f4107">runtime ≠ baseline ⇒ held off</text>
+          <text x="430" y="162" fill="#0b5951">4 · commit: all three snap to the</text>
+          <text x="446" y="176" fill="#0b5951">committed value — converged</text>
+        </g>
+        <text x="430" y="206" font-size="9.5" fill="#5c6470">"runtime ahead of baseline" IS "a drag is in flight".</text>
+      </svg>
+      <figcaption>The baseline is the last value all peers agreed on. When the runtime runs ahead of it, a local gesture is in flight — so the framework knows to hold conflicting remote edits until you commit, then converge.</figcaption>
+    </figure>
+    <ul>
+      <li><strong>Committer-wins, per component.</strong> The last commit to a component wins; because the component is the conflict unit, splitting independently-edited fields into separate components (Position vs. Fill) means they never contend.</li>
+      <li><strong>Keys, not handles, cross the boundary.</strong> A runtime <code>Entity</code> handle is session-local; a durable <code>EntityKey</code> is the stable cross-session identity. Use <code>doc.keyOf(e)</code> to get one and <code>doc.resolve(key)</code> to turn it back into a handle.</li>
+      <li><strong>Undo is local-ops-only</strong> by construction — a transaction is the unit.</li>
+      <li><strong><code>DurableSyncStatus</code></strong> is a runtime-local resource (<code>pendingInbound</code>, <code>heldCells</code>, <code>lastAppliedFrame</code>) you read with <code>useResource</code>; it only moves on real activity, so an idle network re-renders nothing.</li>
+    </ul>
+    <div class="rule r-durable">
+      <span class="tag">Rule — identity</span>
+      <p>Persist keys, never handles: <code>doc.keyOf(e)</code> on the way out, <code>doc.resolve(key)</code> on the way in. A stored handle from a past session is meaningless.</p>
+    </div>
+
+    <!-- ---------- EPHEMERAL ---------- -->
+    <h3 id="ephemeral">The ephemeral layer</h3>
+    <p>
+      Presence — cursors, selection highlights, live previews — is modelled as entities too, but on a
+      writer-partitioned store. Each peer <strong>owns its own partition</strong>, writes to it
+      immediately, and the binding projects every <em>other</em> peer's blobs in as live entities that
+      self-expire on a TTL. Your own presence entity carries the framework's <code>Local</code> tag, so
+      the overlay query is simply <code>Not(Local)</code>.
+    </p>
+    <figure class="code" data-file="presence.ts"></figure>
+    <figure class="fig" aria-label="Per-peer partitions">
+      <svg viewBox="0 0 720 210" role="img" font-family="JetBrains Mono, monospace">
+        <title>Writer-partitioned presence — Local applied locally only</title>
+        <!-- peer A -->
+        <rect x="30" y="30" width="200" height="150" rx="8" fill="#f8efe2" stroke="#b45309" stroke-width="1.5"/>
+        <text x="42" y="52" font-size="11" font-weight="600" fill="#8f4107">peer A (me)</text>
+        <rect x="46" y="64" width="168" height="30" rx="5" fill="#fff" stroke="#b45309" stroke-width="1"/>
+        <text x="56" y="83" font-size="10" fill="#16181d">A's partition · writes only here</text>
+        <rect x="46" y="104" width="168" height="26" rx="5" fill="#e5f1ef" stroke="#0f766e" stroke-width="1"/>
+        <text x="56" y="121" font-size="10" fill="#0b5951">my entity — tagged Local</text>
+        <text x="46" y="152" font-size="9" fill="#5c6470">Local is applied on MY</text>
+        <text x="46" y="165" font-size="9" fill="#5c6470">runtime only; never sent</text>
+        <!-- wire -->
+        <path d="M230 105 L280 105" stroke="#8b93a0" stroke-width="1.5" fill="none" marker-end="url(#ep-ar)"/>
+        <path d="M440 120 L490 120" stroke="#8b93a0" stroke-width="1.5" fill="none" marker-end="url(#ep-ar2)"/>
+        <text x="300" y="98" font-size="9.5" fill="#5c6470">blob (throttled)</text>
+        <rect x="285" y="78" width="150" height="54" rx="6" fill="#f3f3ef" stroke="#c9cdd4"/>
+        <text x="300" y="100" font-size="10" fill="#16181d">transport — TTL</text>
+        <text x="300" y="116" font-size="10" fill="#16181d">keepalive refreshes</text>
+        <!-- peer B -->
+        <rect x="490" y="30" width="200" height="150" rx="8" fill="#eef1fd" stroke="#3b5bdb" stroke-width="1.5"/>
+        <text x="502" y="52" font-size="11" font-weight="600" fill="#2f47b0">peer B</text>
+        <rect x="506" y="64" width="168" height="30" rx="5" fill="#fff" stroke="#3b5bdb" stroke-width="1"/>
+        <text x="516" y="83" font-size="10" fill="#16181d">projects A in as an entity</text>
+        <rect x="506" y="104" width="168" height="26" rx="5" fill="#fff" stroke="#8b93a0" stroke-width="1"/>
+        <text x="516" y="121" font-size="10" fill="#5c6470">A here is Not(Local)</text>
+        <text x="506" y="152" font-size="9" fill="#5c6470">no Local tag on B's copy</text>
+        <text x="506" y="165" font-size="9" fill="#5c6470">of A → the overlay draws it</text>
+        <defs>
+          <marker id="ep-ar" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L6 3.5 L0 7" fill="#8b93a0"/></marker>
+          <marker id="ep-ar2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L6 3.5 L0 7" fill="#8b93a0"/></marker>
+        </defs>
+      </svg>
+      <figcaption>You write only your own partition; every other peer arrives as a <code>Not(Local)</code> entity. The <code>Local</code> tag is applied on your runtime only and never crosses the wire, so each peer sees itself as owner and everyone else as remote.</figcaption>
+    </figure>
+    <ul>
+      <li><strong>The facet pattern.</strong> Presence-of-a-component is a signal: the example adds a <code>SelectionRef</code> (a durable <code>key</code>) to its presence entity while it has a selection and removes it otherwise — membership carries the meaning.</li>
+      <li><strong>Self-healing lifetime.</strong> A <code>ttlMs</code> sets the expiry; a keepalive re-stamps live keys so idle-but-present peers don't vanish; <code>eph.leave()</code> on <code>pagehide</code> is a best-effort early departure. The TTL is always the guarantee.</li>
+      <li><strong><code>EphemeralSyncStatus</code></strong> (<code>peerCount</code>, <code>lastInboundFrame</code>) is the presence sibling of <code>DurableSyncStatus</code>.</li>
+    </ul>
+    <div class="rule r-ephem">
+      <span class="tag">Rule — partitioning &amp; identity</span>
+      <p>Only the owner writes its partition; everyone else reads it as <code>Not(Local)</code>. The <code>peerId</code> is session-unique (<code>crypto.randomUUID()</code>) — a reused id would keep refreshing a departed peer's ghost forever, so display identity goes in a component, never in the key prefix.</p>
+    </div>
+
+    <!-- ---------- TRANSPORT ---------- -->
+    <h3 id="transport">Transport — the app's job</h3>
+    <p>
+      The framework converges a document; it never moves bytes. Moving bytes is your transport: a typed
+      pipe of envelopes with no conflict code. The durable layer's outbound wire is
+      <code>doc.subscribeOutbound(bytes =&gt; send(bytes))</code>; inbound is
+      <code>transport.onMessage(bytes =&gt; doc.applyRemote(bytes))</code>.
+    </p>
+    <figure class="code" data-file="transport.ts"></figure>
+    <p>
+      A joiner cannot apply a bare increment before it has the document it references, so the app owns a
+      small <strong>bootstrap</strong>: broadcast <code>hello</code>, buffer inbound increments, and wait
+      for a <code>snapshot</code> (a full <code>doc.exportSnapshot()</code>) addressed to you; import it as
+      the causal base, then drain the buffer in arrival order. The handshake is <strong>bidirectional</strong>
+      — the joiner also broadcasts its own base so peers who predate it learn the joiner's construction
+      commit; otherwise the joiner's later increments would quarantine as missing dependencies.
+    </p>
+    <figure class="fig" aria-label="Two peers and a relay: the handshake">
+      <svg viewBox="0 0 720 250" role="img" font-family="JetBrains Mono, monospace">
+        <title>The bootstrap handshake over a relay</title>
+        <!-- lifelines -->
+        <text x="90" y="26" text-anchor="middle" font-size="11" font-weight="600" fill="#2f47b0">joiner</text>
+        <text x="360" y="26" text-anchor="middle" font-size="11" font-weight="600" fill="#5c6470">relay (dumb)</text>
+        <text x="630" y="26" text-anchor="middle" font-size="11" font-weight="600" fill="#0b5951">existing peer</text>
+        <line x1="90" y1="34" x2="90" y2="220" stroke="#c9cdd4" stroke-width="1.2"/>
+        <line x1="360" y1="34" x2="360" y2="220" stroke="#c9cdd4" stroke-width="1.2"/>
+        <line x1="630" y1="34" x2="630" y2="220" stroke="#c9cdd4" stroke-width="1.2"/>
+        <!-- hello -->
+        <path d="M90 60 L628 60" stroke="#3b5bdb" stroke-width="1.5" fill="none" marker-end="url(#hs-ar)"/>
+        <text x="360" y="53" text-anchor="middle" font-size="10" fill="#2f47b0">hello  (buffer inbound meanwhile)</text>
+        <!-- snapshot back -->
+        <path d="M628 92 L92 92" stroke="#0f766e" stroke-width="1.5" fill="none" marker-end="url(#hs-ar2)"/>
+        <text x="360" y="85" text-anchor="middle" font-size="10" fill="#0b5951">snapshot → import as causal base</text>
+        <!-- joiner broadcasts own base -->
+        <path d="M90 124 L628 124" stroke="#b45309" stroke-width="1.5" fill="none" marker-end="url(#hs-ar)"/>
+        <text x="360" y="117" text-anchor="middle" font-size="10" fill="#8f4107">my base (bidirectional) — so peers learn me</text>
+        <!-- drain -->
+        <rect x="40" y="146" width="100" height="24" rx="5" fill="#eef1fd" stroke="#3b5bdb"/>
+        <text x="90" y="162" text-anchor="middle" font-size="9.5" fill="#2f47b0">drain buffer</text>
+        <!-- steady increments -->
+        <path d="M628 194 L92 194" stroke="#0f766e" stroke-width="1.5" fill="none" marker-end="url(#hs-ar2)"/>
+        <path d="M90 210 L628 210" stroke="#3b5bdb" stroke-width="1.5" fill="none" marker-end="url(#hs-ar)"/>
+        <text x="360" y="187" text-anchor="middle" font-size="10" fill="#5c6470">then: sealed-commit increments both ways</text>
+        <defs>
+          <marker id="hs-ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L7 4 L0 8" fill="#3b5bdb"/></marker>
+          <marker id="hs-ar2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L7 4 L0 8" fill="#0f766e"/></marker>
+        </defs>
+      </svg>
+      <figcaption>The relay never decodes a frame — it routes bytes by room. Peers bootstrap each other over the app's own hello→snapshot protocol, exchanging bases bidirectionally, then trade sealed-commit increments. Convergence is the framework's, behind <code>applyRemote</code>.</figcaption>
+    </figure>
+    <div class="rule r-durable">
+      <span class="tag">Rule — delivery</span>
+      <p>Deliver each peer's messages causally in order, or exchange snapshots to re-sync. The quarantine backstop is <code>PendingImportError</code> — if an out-of-order import ever slips through, catch it and re-bootstrap. A reconnect is a full re-bootstrap, never a resumed half-synced stream.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================= EXAMPLE -->
+  <section id="example">
+    <p class="sec-eyebrow l-neutral">The flagship demo</p>
+    <h2><svg class="glyph" data-band="1" data-hue="neutral"></svg>The example app<a class="anchor" href="#example">#</a></h2>
+    <p>
+      <code>examples/canvas-editor</code> is an infinite-canvas whiteboard in vanilla TypeScript and
+      Canvas2D whose only runtime dependency is <code>strata-ecs</code>. The ECS <em>is</em> the state
+      manager; the frame is the subscription. It demonstrates, end to end:
+    </p>
+    <ul>
+      <li><strong>10k+ shapes with brute-force culling</strong> — no spatial index; the typed-array column sweep does what an R-tree usually would, sub-millisecond.</li>
+      <li><strong>A HUD and the observer panel</strong> — the framework's own <code>strata-ecs/tools</code>, mounted with one call, splitting ECS time from paint time honestly.</li>
+      <li><strong>Reactive repaint + autosave</strong> from a single <code>observeQuery</code> — no hand-set dirty flags; watch the console stay silent at idle, then drag.</li>
+      <li><strong><code>?collab</code> mode</strong> — the same editor, multiplayer, over a same-origin <code>BroadcastChannel</code> between tabs, or a real WebSocket relay across machines with <code>?ws</code>.</li>
+      <li><strong>Headless smoke suites</strong> — <code>?script=collab-smoke</code> runs bootstrap, create/duplicate/delete, edit-vs-drag convergence, late-join, and presence as an acceptance suite in one page.</li>
+    </ul>
+    <figure class="code" data-file="run.sh"></figure>
+  </section>
+
+  <!-- ============================================================= NOTES -->
+  <section id="notes">
+    <p class="sec-eyebrow l-neutral">The rules, collected</p>
+    <h2><svg class="glyph" data-band="1" data-hue="neutral"></svg>Design notes &amp; further reading<a class="anchor" href="#notes">#</a></h2>
+    <p>The normative one-liners from across this guide, in one place:</p>
+    <div class="rule"><span class="tag">Mutation</span><p>Values flow immediately and are order-sensitive within a phase; structure lands at phase boundaries.</p></div>
+    <div class="rule"><span class="tag">Frame</span><p>One settled reactive boundary per frame — <code>notify()</code> once, after all ticks, before render.</p></div>
+    <div class="rule r-react"><span class="tag">Reactivity</span><p><code>observeQuery</code> may over-fire but never misses; <code>observeValue</code> is equality-suppressed. Zero cost until the first observer.</p></div>
+    <div class="rule r-durable"><span class="tag">Durable · visibility</span><p>Durable value writes to existing components are visible immediately; every structural effect is visible after the next <code>sync()</code>.</p></div>
+    <div class="rule r-durable"><span class="tag">Durable · conflict</span><p>Committer-wins, per component — split independently-edited fields into separate components so they never contend.</p></div>
+    <div class="rule r-ephem"><span class="tag">Ephemeral</span><p>Only the owner writes its partition; read every other peer as <code>Not(Local)</code>. <code>peerId</code> is session-unique.</p></div>
+    <div class="rule r-durable"><span class="tag">Transport</span><p>Deliver per-peer messages causally in order, or exchange snapshots; the quarantine backstop is <code>PendingImportError</code>.</p></div>
+
+    <h3>Further reading</h3>
+    <p>
+      The deep specification and its as-built amendments live in the repository. Where a patch note
+      amends the design, the amendment is authoritative.
+    </p>
+    <ul>
+      <li><a href="https://github.com/jamesyong/strata-ecs/blob/main/docs/design.md">docs/design.md</a> — the full architecture and voice.</li>
+      <li><a href="https://github.com/jamesyong/strata-ecs/blob/main/docs/001-system-access-declaration.md">001</a> · <a href="https://github.com/jamesyong/strata-ecs/blob/main/docs/002-reactivity.md">002</a> · <a href="https://github.com/jamesyong/strata-ecs/blob/main/docs/003-resource-reactivity-and-react.md">003</a> — access declarations, reactivity, React.</li>
+      <li><a href="https://github.com/jamesyong/strata-ecs/blob/main/docs/005-part2-spec.md">005</a> (substrate) · <a href="https://github.com/jamesyong/strata-ecs/blob/main/docs/006-part3-4-amendments.md">006</a> (durable + ephemeral amendments — these win where they touch the design).</li>
+      <li><a href="https://github.com/jamesyong/strata-ecs/blob/main/BENCHMARKS.md">BENCHMARKS.md</a> — the cross-library comparison, losses included.</li>
+      <li><a href="api.html">API reference →</a> — every export, signature by signature.</li>
+    </ul>
+    <div class="note">
+      <span class="tag">Status</span>
+      <p>
+        strata-ecs is <strong>pre-release</strong>. The runtime core is feature-complete, benchmarked,
+        and adversarially reviewed; the collaborative layers are specified and built against that
+        substrate. It is not yet published to npm, and the API may move before 0.1. Read the design
+        docs above for the reasoning behind every rule on this page.
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <span>strata-ecs · v0 pre-release · MIT</span>
+    <span><a href="api.html">API reference</a> · <a href="https://github.com/jamesyong/strata-ecs">GitHub</a></span>
+  </footer>
+
+</div>
+</main>
+
+<!-- ============================================================= CODE SNIPPETS -->
+<!-- Raw code lives here as text/plain templates; the highlighter reads textContent,
+     tokenizes real characters, and injects spans. Keeps the markup above clean. -->
+<script type="text/plain" data-code="hello.ts">import { createWorld, defineComponent, defineQuery, defineSystem, phase } from "strata-ecs";
+
+const Position = defineComponent("Position", { x: "f32", y: "f32" });
+const Velocity = defineComponent("Velocity", { x: "f32", y: "f32" });
+
+const Movement = defineSystem(defineQuery([Position, Velocity]), (batch) => {
+  const px = batch.col(Position).x;   // Float32Array — typed from the schema, no cast
+  const py = batch.col(Position).y;
+  const vx = batch.col(Velocity).x;
+  const vy = batch.col(Velocity).y;
+  for (const r of batch) {            // matched rows; filters fused
+    px[r] += vx[r];
+    py[r] += vy[r];
+  }
+});
+
+const world = createWorld();
+const e = world.spawn({ components: [[Position, { x: 0, y: 0 }], [Velocity, { x: 1, y: 2 }]] });
+
+world.tick([phase("sim", [Movement])]);
+world.read(e, Position); // { x: 1, y: 2 }
+</script>
+
+<script type="text/plain" data-code="schema.ts">import { defineComponent, defineTag, defineRelation, defineResource, enumOf, field } from "strata-ecs";
+
+const Position = defineComponent("Position", { x: "f32", y: "f32" });
+const Fill = defineComponent("Fill", {
+  r: "u8", g: "u8", b: "u8",
+  a: field("u8", { default: 255 }),          // optional at spawn
+});
+const Kind = defineComponent("Kind", {
+  shape: enumOf({ rect: 1, ellipse: 2, note: 3 }),  // explicit discriminants — safe to persist
+});
+
+const Selected = defineTag("Selected");                    // zero-data marker
+const ConnectedTo = defineRelation("ConnectedTo", { arity: "many" });
+const Camera = defineResource("Camera", { x: "f32", y: "f32", zoom: "f32" });
+</script>
+
+<script type="text/plain" data-code="inference.ts">const Position = defineComponent("Position", { x: "f32", y: "f32" });
+
+// The value type is inferred from the schema literal:
+world.read(e, Position);          // { x: number; y: number }
+world.readField(e, Position, "x"); // number | undefined — allocation-free single-field read
+
+// Inside a system body, columns are the real typed arrays:
+const col = batch.col(Position);
+col.x;        // Float32Array
+col.z;        // type error — "z" is not a field of Position
+</script>
+
+<script type="text/plain" data-code="timing.ts">// OUTSIDE a system — world.* is immediate (nothing is iterating):
+const a = world.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+world.addComponent(a, Velocity, { x: 1, y: 0 });   // shape change, applied now
+world.edit(a).set(Position, { x: 10, y: 0 });      // value write, applied now
+
+// INSIDE a system — ctx values are immediate, ctx shape changes defer:
+const Spawner = defineSystem(defineQuery([Position]), (batch, ctx) => {
+  for (const r of batch) {
+    ctx.edit(batch.entity(r)).set(Position, { x: 0, y: 0 }); // value: immediate
+    const child = ctx.spawn({ components: [[Position, { x: 1, y: 1 }]] }); // handle: now
+    ctx.addTag(child, Selected);                              // shape: at phase boundary
+  }
+});
+</script>
+
+<script type="text/plain" data-code="queries.ts">import { defineQuery, Not, Any, All, Related } from "strata-ecs";
+
+const renderable  = defineQuery([Position, Size, Fill]);         // AND of components
+const idle        = defineQuery([Position, Not(Velocity)]);      // exclude a component
+const interactive = defineQuery([Position, Any(Selected, Hovered)]); // disjunction
+const children    = defineQuery([Position, Related(ChildOf, parent)]); // a specific edge
+</script>
+
+<script type="text/plain" data-code="iterate.ts">world.query(renderable).each((batch) => {
+  const px = batch.col(Position).x;
+  const py = batch.col(Position).y;
+  for (let i = 0; i < batch.count; i++) {
+    const r = batch.rows[i];        // fastest idiom — matched rows, no re-check
+    draw(px[r], py[r], batch.entity(r));
+  }
+});
+</script>
+
+<script type="text/plain" data-code="systems.ts">import { defineSystem, defineQuery, phase } from "strata-ecs";
+
+const DragMove = defineSystem(
+  defineQuery([Position, Selected]),
+  (batch, ctx) => {
+    const g = ctx.getResource(Gesture);
+    if (g === undefined || (g.dx === 0 && g.dy === 0)) return;
+    const px = batch.col(Position).x;
+    const py = batch.col(Position).y;
+    for (let i = 0; i < batch.count; i++) {
+      const r = batch.rows[i];
+      px[r] += g.dx;
+      py[r] += g.dy;
+    }
+  },
+  {
+    name: "DragMove",
+    runIf: (ctx) => ctx.getResource(Gesture)?.mode === "drag", // gate on a resource
+    access: { write: [Position] },                             // the write envelope
+  },
+);
+
+// A pipeline is a plain array of phases — rebuild it as a value to reconfigure the frame.
+const pipeline = () => [phase("input", [DragMove]), phase("sim", [Integrate], { runIf: simOn })];
+world.tick(pipeline());
+</script>
+
+<script type="text/plain" data-code="frameLoop.ts">function frame() {
+  requestAnimationFrame(frame);
+
+  world.sync();               // drain inbound layers (no-op in a pure Part I world)
+  world.tick(pipeline());     // run systems, flush shape changes at each phase boundary
+  world.reactive.notify();    // THE settled point — fire dirty observers, once
+  paint();                    // render reads the finished state after tick returns
+}
+requestAnimationFrame(frame);
+</script>
+
+<script type="text/plain" data-code="reactivity.ts">// Tier 1 — a query watch drives a repaint. May over-fire, never misses.
+const stop = world.reactive.observeQuery(
+  defineQuery([Position, Size, Fill]),
+  [Position, Size, Fill],     // the columns to watch
+  () => { repaint = true; },  // fires at the next notify() after a matching change
+);
+
+// Tier 3 — an exact per-entity value; equal-value writes are suppressed.
+world.reactive.observeValue(e, Position, (pos) => { /* pos: { x, y } | undefined */ });
+
+// A world singleton.
+world.reactive.observeResource(Camera, () => { repaint = true; });
+
+world.reactive.notify(); // once per frame, after all ticks
+</script>
+
+<script type="text/plain" data-code="ShapeInspector.tsx">import { useComponent, useResource } from "strata-ecs/react";
+
+function ShapeInspector({ world, entity }: { world: World; entity: Entity }) {
+  const pos = useComponent(world, entity, Position); // re-renders once per real change
+  const cam = useResource(world, Camera);
+  return <span>{pos ? `${pos.x}, ${pos.y}` : "—"}</span>;
+}
+</script>
+
+<script type="text/plain" data-code="observer.ts">import type { WorldObserver } from "strata-ecs";
+
+const detach = world.observe({
+  onSpawn(e)        { /* an entity came into existence */ },
+  onDestroy(e)      { /* about to be torn down — still fully readable here */ },
+  onSystemRun(phase, system, ran, micros) { /* per-system timing / skips */ },
+  onPhaseFlush(phase, micros) { /* the phase boundary */ },
+} satisfies WorldObserver);
+
+// …later
+detach();
+</script>
+
+<script type="text/plain" data-code="panel.ts">import { attachObserver } from "strata-ecs/tools";
+
+const obs = attachObserver(world, {
+  describe: (world, e) => ({ label: labelFor(world, e) }), // your domain naming
+});
+// …later
+obs.dispose();
+</script>
+
+<script type="text/plain" data-code="persistence.ts">// Save — bytes are readable UTF-8 JSON.
+const bytes = world.export();
+localStorage.setItem("autosave", new TextDecoder().decode(bytes));
+
+// Load in place — validates first, resets the SAME world, keeps every subscription.
+world.import(bytes, { replace: true });
+
+// A plain import requires an empty world:
+const fresh = createWorld();
+fresh.import(bytes);
+</script>
+
+<script type="text/plain" data-code="durable-setup.ts">import { LoroDoc } from "loro-crdt";
+import { createDurableStore, attachDurable } from "strata-ecs/durable";
+
+const doc = createDurableStore(new LoroDoc());   // the ONE place a LoroDoc enters
+const attachment = attachDurable(world, doc);    // project it in; register the drain
+
+doc.subscribeOutbound((bytes) => transport.send(bytes));  // OUTBOUND wire
+transport.onMessage((bytes) => doc.applyRemote(bytes));   // INBOUND wire
+
+// Change the document only inside a transaction — one commit, one undo unit.
+doc.transaction((tx) => {
+  const shape = tx.spawn({ components: [[Position, { x: 0, y: 0 }], [Size, { w: 100, h: 60 }]] });
+  tx.addTag(shape, Pinned);
+});
+
+// Seal a finished drag: commit the settled position ONCE at gesture end.
+doc.transaction((tx) => {
+  for (const e of moved) tx.edit(e).set(Position, world.read(e, Position));
+});
+</script>
+
+<script type="text/plain" data-code="presence.ts">import { LoroEphemeralSnapshot, createEphemeralStore, attachEphemeral } from "strata-ecs/ephemeral";
+import { EphemeralStore as LoroEphemeralStore } from "loro-crdt";
+import { Local, Not, defineQuery } from "strata-ecs";
+
+const source = new LoroEphemeralSnapshot(new LoroEphemeralStore(5000));  // 5s TTL
+const eph = createEphemeralStore(source, {
+  peerId: crypto.randomUUID(),               // session-unique — never reused
+  send: (bytes) => transport.send(bytes),
+  throttleMs: 33,                            // ~30Hz cursor cadence
+  ttlMs: 5000,
+});
+attachEphemeral(world, eph);
+transport.onMessage((bytes) => source.apply(bytes)); // INBOUND
+
+// My presence lives in my partition; it applies to my runtime immediately.
+const me = eph.spawn({ components: [[CursorPos, { x: 0, y: 0 }], [PresenceInfo, { name, color }]] });
+eph.edit(me).set(CursorPos, { x: wx, y: wy });   // every frame — the throttle coalesces
+
+// Everyone else projects in as Not(Local) entities:
+const remotePresence = defineQuery([CursorPos, PresenceInfo, Not(Local)]);
+
+eph.leave(); // best-effort departure; the TTL is the guarantee
+</script>
+
+<script type="text/plain" data-code="transport.ts">// The transport is a typed pipe — no conflict code. Convergence is the framework's.
+interface Envelope {
+  kind: "durable" | "ephemeral" | "hello" | "snapshot";
+  from: string;
+  to?: string;       // addressed (a snapshot answers one joiner) or broadcast
+  bytes?: Uint8Array;
+}
+
+// Bootstrap: a joiner buffers increments until a snapshot base lands.
+channel.onMessage((env) => {
+  switch (env.kind) {
+    case "durable":  bootstrapped ? doc.applyRemote(env.bytes) : buffer.push(env.bytes); break;
+    case "hello":    if (bootstrapped) channel.post({ kind: "snapshot", to: env.from, bytes: doc.exportSnapshot() }); break;
+    case "snapshot": doc.applyRemote(env.bytes); drain(buffer); break;
+  }
+});
+</script>
+
+<script type="text/plain" data-code="run.sh">pnpm install
+pnpm example:canvas          # → http://localhost:5173
+
+# multiplayer between two tabs (no server):
+#   http://localhost:5173/?collab=demo
+
+# across machines over a WebSocket relay:
+pnpm collab:server           # the dumb relay — ws://localhost:8787
+#   http://localhost:5173/?collab=demo&ws
+</script>
+
+<!-- ============================================================= BEHAVIOUR -->
+<script>
+(function () {
+  "use strict";
+
+  // ---- syntax highlighter: tokenize real chars, escape at emit ----
+  var KW = /\b(import|from|export|default|const|let|var|for|of|in|return|if|else|switch|case|break|new|function|type|interface|extends|implements|as|await|async|typeof|instanceof|void|true|false|null|undefined|this|readonly|satisfies)\b/;
+  var RE = new RegExp(
+    "(\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/)" +               // 1 comment
+    "|(`(?:\\\\.|[^`\\\\])*`|\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*')" + // 2 string
+    "|(\\b\\d[\\d_.eExXa-fA-F]*\\b)" +                       // 3 number
+    "|" + KW.source.replace(/\\b/g, "\\b") +                 // 4 keyword (capture group)
+    "|(\\b[A-Z][A-Za-z0-9_]*\\b)" +                          // 5 Type
+    "|([a-z_$][\\w$]*)(?=\\s*\\()",                          // 6 fn call
+    "g"
+  );
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function hl(raw) {
+    var out = "", last = 0, m;
+    RE.lastIndex = 0;
+    while ((m = RE.exec(raw))) {
+      out += esc(raw.slice(last, m.index));
+      if (m[1]) out += '<span class="tok-c">' + esc(m[1]) + "</span>";
+      else if (m[2]) out += '<span class="tok-s">' + esc(m[2]) + "</span>";
+      else if (m[3]) out += '<span class="tok-n">' + esc(m[3]) + "</span>";
+      else if (m[4]) out += '<span class="tok-k">' + esc(m[4]) + "</span>";
+      else if (m[5]) out += '<span class="tok-t">' + esc(m[5]) + "</span>";
+      else if (m[6]) out += '<span class="tok-f">' + esc(m[6]) + "</span>";
+      last = RE.lastIndex;
+    }
+    out += esc(raw.slice(last));
+    return out;
+  }
+
+  // ---- fill code figures from the text/plain templates ----
+  var tpl = {};
+  document.querySelectorAll('script[type="text/plain"][data-code]').forEach(function (s) {
+    tpl[s.getAttribute("data-code")] = s.textContent.replace(/^\n/, "").replace(/\n$/, "");
+  });
+  document.querySelectorAll("figure.code").forEach(function (fig) {
+    var name = fig.getAttribute("data-file");
+    var raw = tpl[name] || "";
+    var bar = document.createElement("div");
+    bar.className = "bar";
+    bar.innerHTML = '<span class="file"><b>' + esc(name) + "</b></span>";
+    var btn = document.createElement("button");
+    btn.className = "copy"; btn.type = "button"; btn.textContent = "copy";
+    btn.addEventListener("click", function () {
+      navigator.clipboard && navigator.clipboard.writeText(raw).then(function () {
+        btn.textContent = "copied"; btn.classList.add("done");
+        setTimeout(function () { btn.textContent = "copy"; btn.classList.remove("done"); }, 1400);
+      });
+    });
+    bar.appendChild(btn);
+    var pre = document.createElement("pre");
+    var code = document.createElement("code");
+    code.innerHTML = hl(raw);
+    pre.appendChild(code);
+    fig.appendChild(bar);
+    fig.appendChild(pre);
+  });
+
+  // ---- strata glyph: 4 stacked bands, the section's band highlighted ----
+  var HUE = { core: "#3b5bdb", react: "#7048e8", durable: "#0f766e", ephem: "#b45309", neutral: "#8b93a0" };
+  document.querySelectorAll("svg.glyph").forEach(function (g) {
+    var band = parseInt(g.getAttribute("data-band"), 10);
+    var hue = HUE[g.getAttribute("data-hue")] || HUE.neutral;
+    g.setAttribute("viewBox", "0 0 24 24");
+    g.setAttribute("aria-hidden", "true");
+    var ys = [3, 8, 13, 18], svg = "";
+    for (var i = 0; i < 4; i++) {
+      var on = (i + 1) === band;
+      svg += '<rect x="3" y="' + ys[i] + '" width="18" height="3.4" rx="1.2" fill="' +
+        (on ? hue : "#dfe1dd") + '"' + (on ? "" : ' opacity="0.9"') + "/>";
+    }
+    g.innerHTML = svg;
+  });
+
+  // ---- scrollspy ----
+  var links = Array.prototype.slice.call(document.querySelectorAll(".nav-group a[href^='#']"));
+  var byId = {};
+  links.forEach(function (a) { byId[a.getAttribute("href").slice(1)] = a; });
+  var ids = Object.keys(byId);
+  var spy = new IntersectionObserver(function (entries) {
+    entries.forEach(function (en) {
+      if (!en.isIntersecting) return;
+      var id = en.target.id;
+      links.forEach(function (a) { a.classList.remove("active"); });
+      if (byId[id]) byId[id].classList.add("active");
+    });
+  }, { rootMargin: "-10% 0px -80% 0px", threshold: 0 });
+  ids.forEach(function (id) { var el = document.getElementById(id); if (el) spy.observe(el); });
+
+  // ---- mobile nav ----
+  var toggle = document.getElementById("navToggle");
+  toggle && toggle.addEventListener("click", function () { document.body.classList.toggle("nav-open"); });
+  document.querySelectorAll(".sidebar a").forEach(function (a) {
+    a.addEventListener("click", function () { document.body.classList.remove("nav-open"); });
+  });
+
+  // ---- re-resolve a deep-link hash after code injection changed the layout height ----
+  if (location.hash && location.hash.length > 1) {
+    var target = document.getElementById(location.hash.slice(1));
+    if (target) target.scrollIntoView();
+  }
+})();
+</script>
