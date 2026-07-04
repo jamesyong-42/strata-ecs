@@ -194,11 +194,17 @@ export function startCollabBoot(
   });
 
   // pagehide: leave() ships MY tombstones over the channel FIRST (peers despawn me now, not on TTL), then
-  // dispose() tears down the durable channel + the ephemeral binding.
-  window.addEventListener("pagehide", () => {
-    presence.leave();
-    wiring.dispose();
-    presence.dispose();
-  });
+  // dispose() tears down the durable channel + the ephemeral binding. `once: true` — pagehide can fire
+  // again on a bfcache re-hide, and a second run would `channel.post` a tombstone through the channel the
+  // first dispose() already closed (a throw on unload); tearing down exactly once is correct here.
+  window.addEventListener(
+    "pagehide",
+    () => {
+      presence.leave();
+      wiring.dispose();
+      presence.dispose();
+    },
+    { once: true },
+  );
   return wiring;
 }

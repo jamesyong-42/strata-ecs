@@ -1,35 +1,47 @@
 /**
- * `?script=collab-smoke` — the D0 acceptance self-test, in ONE page, headless-friendly.
+ * `?script=collab-smoke` — the collab ACCEPTANCE self-test, in ONE page, headless-friendly. D2 hardened
+ * it from a crash-smoke into a precise convergence suite driven through the REAL app write-surface.
  *
- * Two independent worlds (A and B), each with its own attached durable store, wired over the in-memory
- * {@link Loopback} (the BroadcastChannel surface, synchronous — so the test is deterministic and drives
- * each world's `sync()` by hand). It runs the collab boot's REAL {@link wireCollab} bootstrap, then
- * exercises the D0 story end to end:
+ * PEER A **is the app's own world** (`worldRef.ts`). The collab write ops (collab/ops.ts —
+ * `commitCreate`/`commitDelete`/`commitDuplicate`/`commitDrag`) are hardwired to that singleton `world`
+ * plus `activeCollab()`, so the only way to exercise the genuine app path — not a hand-rolled
+ * `doc.transaction` — is to make peer A the app world: attach a durable store to it, install it as the
+ * active collab session, drive the real ops, and assert peer B (a plain second world over the loopback)
+ * converges PRECISELY (shape counts, component values, keys resolving). Everything is torn down at the
+ * end, so the app returns to local-only mode with its seeded board intact behind the PASS note.
  *
- *   1. bootstrap  — A seeds, B joins via snapshot and converges to A's board.
- *   2. create     — A creates a shape → B converges.
- *   3. drag+edit  — B drags A's shape (runtime writes, no commit) while A edits the SAME shape's Fill
- *                   (a different cell → applies) AND its Position (the SAME cell → dropped by drag
- *                   protection); B then commits the drag → both converge, committer-wins on Position.
- *   4. delete     — A deletes a shape → B converges (the entity is gone on B).
- *   5. presence   — B spawns an ephemeral cursor; it projects on A as `Not(Local)`, its position + a
- *                   `SelectionRef` facet flow across, and `eph.leave()` despawns it on A (D1).
+ * The story, end to end (each asserts convergence, not just no-throw):
+ *   1. bootstrap    — A seeds, B joins via snapshot and converges to A's board.
+ *   2. create       — A `commitCreate`s a runtime draft into a durable twin → B converges (geometry).
+ *   3. duplicate    — A `commitDuplicate`s the twin → B converges (the +16,+16 clone).
+ *   4. delete       — A `commitDelete`s a seed → B converges (entity gone, arrows would cascade).
+ *   5. edit vs drag — A recolors the twin's Fill while B drags its Position (component-granular: both
+ *                     land); A's concurrent Position is drag-protected off; B's commit wins committer-wins.
+ *   6. delete-drag  — A drags a shape while B deletes it; A's gesture-end `commitDrag` skips the dead
+ *                     entity cleanly (the §17 write-side rule — no crash, no strand, no resurrection).
+ *   7. late-join    — a third peer C joins mid-history, converges to the CURRENT document, and its first
+ *                     increment is accepted by A and B WITHOUT quarantine (the bidirectional-base exchange).
+ *   8. presence     — B's ephemeral cursor projects on A as `Not(Local)`; position + `SelectionRef` flow
+ *                     across; `eph.leave()` despawns it (D1).
  *
- * NO conflict-handling code appears here — the app writes through `doc.transaction` and reads the
- * runtime; the framework did the converging. PASS/FAIL is reported to the HUD note (the established
- * headless-screenshot pattern — see main.ts `?script=persist`).
+ * The WHOLE suite runs under BOTH loopback modes — `"sync"` (inline, deterministic) and `"async"`
+ * (microtask-deferred, realistic BroadcastChannel timing) — and main.ts asserts identical final
+ * convergence. NO conflict-handling code appears here: the app writes through `doc.transaction` and reads
+ * the runtime; the framework did the converging.
  */
 
 import { createWorld, type Entity } from "strata-ecs";
-import { attachDurable, createDurableStore, type Mutator } from "strata-ecs/durable";
+import { attachDurable, createDurableStore, type Attachment, type Mutator } from "strata-ecs/durable";
 import { attachEphemeral, createEphemeralStore, LoroEphemeralSnapshot } from "strata-ecs/ephemeral";
 import { EphemeralStore as LoroEphemeralStore, LoroDoc } from "loro-crdt";
 import { cam } from "../app/camera";
 import { world as appWorld } from "../app/worldRef";
 import { CursorPos, Fill, Kind, Position, PresenceInfo, SelectionRef, Size, Velocity, ZIndex } from "../ecs/schema";
 import { remotePresence } from "../ecs/queries";
+import { commitCreate, commitDelete, commitDrag, commitDuplicate } from "./ops";
+import { setActiveCollab } from "./mode";
 import { presenceIdentity } from "./presence";
-import { Loopback } from "./loopback";
+import { Loopback, type LoopbackMode } from "./loopback";
 import { wireCollab } from "./boot";
 
 interface Check {
@@ -37,8 +49,19 @@ interface Check {
   label: string;
 }
 
+/** The compact result main.ts folds into the HUD note + the both-modes-match assertion. */
+export interface SmokeResult {
+  passed: number;
+  total: number;
+  firstFail?: string;
+}
+
 const eq2 = (v: { x: number; y: number } | undefined, x: number, y: number): boolean =>
   v !== undefined && v.x === x && v.y === y;
+const sizeEq = (v: { w: number; h: number } | undefined, w: number, h: number): boolean =>
+  v !== undefined && v.w === w && v.h === h;
+const fillEq = (v: { r: number; g: number; b: number; a: number } | undefined, r: number, g: number, b: number, a: number): boolean =>
+  v !== undefined && v.r === r && v.g === g && v.b === b && v.a === a;
 
 /** Spawn one rect into a transaction — the smoke board's unit (a known, non-random shape). */
 function spawnRect(tx: Mutator, x: number, y: number, z: number): Entity {
@@ -48,22 +71,25 @@ function spawnRect(tx: Mutator, x: number, y: number, z: number): Entity {
 }
 
 /**
- * Run the self-test. Synchronous (the loopback delivers inline and we sync() by hand). Returns a compact
- * `collab-smoke: PASS n/n …` / `FAIL …` line for the HUD note.
+ * Run the acceptance suite under one loopback `mode`. Async because the `"async"` mode delivers over
+ * microtasks — `await loop.settle()` is the barrier at every cross-peer boundary (a no-op in `"sync"`
+ * mode, where delivery already happened inline). Returns the tally for the HUD note.
  */
-export function runCollabSmoke(): string {
+export async function runCollabSmoke(mode: LoopbackMode = "sync"): Promise<SmokeResult> {
   const checks: Check[] = [];
   const check = (label: string, ok: boolean): void => {
     checks.push({ label, ok });
   };
 
-  const loop = new Loopback();
+  const loop = new Loopback(mode);
   const statusLog: string[] = [];
 
-  // --- peer A: create, attach, wire, seed (the first peer) ------------------------------------------
-  const worldA = createWorld({ name: "collab-smoke-a" });
+  // --- peer A = THE APP WORLD: attach a durable store, install the collab session, drive the real ops --
+  const worldA = appWorld;
   const docA = createDurableStore(new LoroDoc());
-  attachDurable(worldA, docA);
+  const attA: Attachment = attachDurable(worldA, docA);
+  setActiveCollab({ room: "smoke", peerId: "A", doc: docA });
+
   const seeded: Entity[] = [];
   const wireA = wireCollab({
     peerId: "A",
@@ -76,7 +102,7 @@ export function runCollabSmoke(): string {
       });
     },
   });
-  wireA.seedNow(); // take the first-peer seed path now (no 800ms wait)
+  wireA.seedNow(); // take the first-peer seed path now (no 800ms wait) — synchronous, both modes
   worldA.sync(); // project the seed into A's runtime
   const keys = seeded.map((e) => docA.keyOf(e));
   check("A seeded 3 shapes with keys", keys.every((k) => k !== undefined) && keys.length === 3);
@@ -84,9 +110,11 @@ export function runCollabSmoke(): string {
   // --- peer B: join → bootstrap from A's snapshot ---------------------------------------------------
   const worldB = createWorld({ name: "collab-smoke-b" });
   const docB = createDurableStore(new LoroDoc());
-  attachDurable(worldB, docB);
+  const attB: Attachment = attachDurable(worldB, docB);
   const wireB = wireCollab({ peerId: "B", channel: loop.channel("B"), doc: docB, seedFirst: () => {}, onStatus: (m) => statusLog.push(`B:${m}`) });
-  // Creating B posted `hello`; A answered with a snapshot synchronously → B is already bootstrapped.
+  // Creating B posted `hello`; A answers with a snapshot. Sync mode completes inline; async mode needs the
+  // handshake (hello → snapshot → B's bidirectional base broadcast) to drain first.
+  await loop.settle();
   check("B bootstrapped from A's snapshot", wireB.isBootstrapped());
   worldB.sync(); // project the snapshot into B's runtime
   check(
@@ -94,50 +122,132 @@ export function runCollabSmoke(): string {
     keys.every((k) => k !== undefined && docB.resolve(k) !== undefined),
   );
 
-  // --- create: A makes a new shape → B converges ----------------------------------------------------
-  const sA = docA.transaction((tx) => spawnRect(tx, 700, 100, 4));
-  worldA.sync(); // A projects its own create; the outbound increment already reached B
-  const keyS = docA.keyOf(sA);
+  // --- create: A promotes a runtime draft into a durable twin (ops.ts commitCreate) → B converges ---
+  // The draw tool spawns a runtime-only draft (a peer must never see a half-drawn shape), then promotes
+  // it at pointer-up. Drive that exact path: a `world.spawn` draft, then the real commitCreate.
+  const draft = worldA.spawn({
+    components: [[Position, { x: 700, y: 100 }], [Size, { w: 80, h: 60 }], [Fill, { r: 88, g: 166, b: 255, a: 210 }], [ZIndex, { z: 4 }], [Kind, { shape: "rect" }], [Velocity, {}]],
+  });
+  const twinA = commitCreate(draft);
+  worldA.sync(); // A projects its own create (local echo, no round-trip)
+  check("commitCreate returned a durable twin", twinA !== undefined);
+  check("commitCreate destroyed the runtime draft", !worldA.isAlive(draft));
+  const twinKey = twinA !== undefined ? docA.keyOf(twinA) : undefined;
+  check("A's created twin has a durable key", twinKey !== undefined);
+  await loop.settle();
   worldB.sync(); // B drains the create increment
-  const sB = keyS !== undefined ? docB.resolve(keyS) : undefined;
-  check("B received A's created shape", sB !== undefined);
+  const twinB = twinKey !== undefined ? docB.resolve(twinKey) : undefined;
+  check("B converged on A's created shape", twinB !== undefined);
+  check("B's twin matches A's Position", twinB !== undefined && eq2(worldB.get(twinB, Position), 700, 100));
+  check("B's twin matches A's Size", twinB !== undefined && sizeEq(worldB.get(twinB, Size), 80, 60));
+  check("B's twin matches A's Fill", twinB !== undefined && fillEq(worldB.get(twinB, Fill), 88, 166, 255, 210));
 
-  // --- drag + concurrent edit (drag protection + component-granular convergence) --------------------
-  // B starts dragging S: runtime Position diverges from baseline, NO commit yet (a real drag mid-flight).
-  if (sB !== undefined) worldB.edit(sB).set(Position, { x: 150, y: 150 });
-
-  // A edits S's FILL (a different cell) → B applies it; the drag (Position) is untouched.
-  docA.transaction((tx) => tx.edit(sA).set(Fill, { r: 255, g: 0, b: 0, a: 255 }));
+  // --- duplicate: A clones the twin (+16,+16) through ops.ts commitDuplicate → B converges -----------
+  const clones = twinA !== undefined ? commitDuplicate([twinA]) : [];
   worldA.sync();
+  check("commitDuplicate returned one clone", clones.length === 1);
+  const cloneKey = clones[0] !== undefined ? docA.keyOf(clones[0]) : undefined;
+  check("A's clone has a durable key", cloneKey !== undefined);
+  await loop.settle();
   worldB.sync();
-  check("B applied A's Fill edit during the drag (different cell)", sB !== undefined && worldB.get(sB, Fill)?.r === 255);
-  check("B's drag held its Position through the Fill edit", sB !== undefined && eq2(worldB.get(sB, Position), 150, 150));
+  const cloneB = cloneKey !== undefined ? docB.resolve(cloneKey) : undefined;
+  check("B converged on A's duplicate", cloneB !== undefined);
+  check("B's clone is offset +16,+16 from the twin", cloneB !== undefined && eq2(worldB.get(cloneB, Position), 716, 116));
 
-  // A edits S's POSITION (the SAME cell B is dragging) → B's drag protection DROPS it (committer-wins pending).
-  docA.transaction((tx) => tx.edit(sA).set(Position, { x: 999, y: 999 }));
+  // --- delete: A destroys a seed through ops.ts commitDelete → B converges (entity gone) -------------
+  const delKey = keys[2];
+  if (seeded[2] !== undefined) commitDelete([seeded[2]]);
   worldA.sync();
+  check("A destroyed the seed locally", seeded[2] === undefined || !worldA.isAlive(seeded[2]));
+  await loop.settle();
   worldB.sync();
-  check("B's drag protection dropped A's concurrent Position (held off)", sB !== undefined && eq2(worldB.get(sB, Position), 150, 150));
+  check("B converged on A's delete (seed gone)", delKey !== undefined && docB.resolve(delKey) === undefined);
 
-  // B commits the drag → its Position wins committer-wins (later than A's), both converge.
-  if (sB !== undefined) docB.transaction((tx) => tx.edit(sB).set(Position, { x: 200, y: 200 }));
+  // --- edit vs. drag on ONE shape: component-granular convergence + drag protection + committer-wins --
+  // B starts dragging the twin (runtime Position diverges from baseline; NO commit — a real drag mid-flight).
+  if (twinB !== undefined) worldB.edit(twinB).set(Position, { x: 250, y: 250 });
+  // A recolors the twin's Fill (a DIFFERENT cell). Fill has no dedicated app verb, so A commits it through
+  // doc.transaction directly — the component-granular convergence is the framework's regardless of author.
+  if (twinA !== undefined) docA.transaction((tx) => tx.edit(twinA).set(Fill, { r: 255, g: 0, b: 0, a: 255 }));
+  worldA.sync();
+  await loop.settle();
+  worldB.sync();
+  check("B applied A's Fill during the drag (different cell)", twinB !== undefined && worldB.get(twinB, Fill)?.r === 255);
+  check("B's drag held its Position through the Fill edit", twinB !== undefined && eq2(worldB.get(twinB, Position), 250, 250));
+
+  // A drags the SAME cell B is dragging, via the REAL commitDrag (runtime write + gesture-end commit) →
+  // B's drag protection DROPS A's Position (committer-wins pending until B releases).
+  if (twinA !== undefined) {
+    worldA.edit(twinA).set(Position, { x: 900, y: 900 });
+    commitDrag([twinA], 0, 0);
+  }
+  worldA.sync();
+  await loop.settle();
+  worldB.sync();
+  check("B's drag protection dropped A's concurrent Position", twinB !== undefined && eq2(worldB.get(twinB, Position), 250, 250));
+
+  // B commits its drag → its Position wins committer-wins (later than A's); both converge; Fill stays red.
+  if (twinB !== undefined) docB.transaction((tx) => tx.edit(twinB).set(Position, { x: 260, y: 260 }));
   worldB.sync(); // B's own echo (agrees, no strand)
+  await loop.settle();
   worldA.sync(); // A drains B's committed Position
-  check("A converged to B's committed drag position (committer-wins)", eq2(worldA.get(sA, Position), 200, 200));
-  check("B settled at its committed drag position", sB !== undefined && eq2(worldB.get(sB, Position), 200, 200));
-  check("Fill converged red on A too (component-granular)", worldA.get(sA, Fill)?.r === 255);
+  check("A converged on B's committed drag (committer-wins)", twinA !== undefined && eq2(worldA.get(twinA, Position), 260, 260));
+  check("Fill converged red on A too (component-granular)", twinA !== undefined && worldA.get(twinA, Fill)?.r === 255);
+  check("Fill converged red on B too", twinB !== undefined && worldB.get(twinB, Fill)?.r === 255);
 
-  // --- delete: A deletes a seeded shape → B converges (entity gone) ----------------------------------
-  const delKey = keys[0];
-  docA.transaction((tx) => tx.destroy(seeded[0]));
+  // --- delete-under-drag: A drags a shape B deletes; A's commitDrag skips it cleanly (§17 write-side) --
+  const victim = seeded[1];
+  const victimKey = keys[1];
+  if (victim !== undefined) worldA.edit(victim).set(Position, { x: 111, y: 222 }); // A drags it (runtime only)
+  const victimOnB = victimKey !== undefined ? docB.resolve(victimKey) : undefined;
+  if (victimOnB !== undefined) docB.transaction((tx) => tx.destroy(victimOnB)); // B deletes it
+  await loop.settle();
+  worldA.sync(); // A drains B's delete → the victim despawns mid-drag
+  check("A's dragged shape was deleted out from under the drag", victim === undefined || !worldA.isAlive(victim));
+  // The §17 write-side rule: commitDrag's keyOf/isAlive/has(Position) guards make committing the dead drag
+  // a clean no-op — this must NOT throw and must NOT resurrect the shape.
+  let dragThrew = false;
+  try {
+    if (victim !== undefined) commitDrag([victim], 0, 0);
+  } catch {
+    dragThrew = true;
+  }
+  worldA.sync();
+  check("commitDrag on the deleted shape was a clean no-op (no throw)", !dragThrew);
+  await loop.settle();
+  worldB.sync();
+  check("B still sees the shape gone (the dead drag committed nothing)", victimKey !== undefined && docB.resolve(victimKey) === undefined);
+
+  // --- late-join: a third peer joins mid-history, then its first increment lands WITHOUT quarantine ----
+  // C bootstraps from the CURRENT document (not the seed) and — the D0 discovery — broadcasts its own base
+  // on joining, so A and B accept C's first increment (which references C's construction commit they lack).
+  const worldC = createWorld({ name: "collab-smoke-c" });
+  const docC = createDurableStore(new LoroDoc());
+  const attC: Attachment = attachDurable(worldC, docC);
+  const wireC = wireCollab({ peerId: "C", channel: loop.channel("C"), doc: docC, seedFirst: () => {}, onStatus: (m) => statusLog.push(`C:${m}`) });
+  await loop.settle();
+  check("C bootstrapped from an existing peer mid-history", wireC.isBootstrapped());
+  worldC.sync();
+  const twinOnC = twinKey !== undefined ? docC.resolve(twinKey) : undefined;
+  check("C converged on the recolored twin (mid-history snapshot)", twinOnC !== undefined && worldC.get(twinOnC, Fill)?.r === 255);
+  check("C converged on the twin's committed position", twinOnC !== undefined && eq2(worldC.get(twinOnC, Position), 260, 260));
+  check("C sees the duplicate clone", cloneKey !== undefined && docC.resolve(cloneKey) !== undefined);
+  check("C sees the deleted shapes as gone", delKey !== undefined && victimKey !== undefined && docC.resolve(delKey) === undefined && docC.resolve(victimKey) === undefined);
+  // C's FIRST increment → the existing peers must NOT quarantine it (the bidirectional base was exchanged).
+  const cShape = docC.transaction((tx) => spawnRect(tx, -300, -300, 9));
+  worldC.sync();
+  const cKey = docC.keyOf(cShape);
+  await loop.settle();
   worldA.sync();
   worldB.sync();
-  check("B converged on A's delete (shape gone)", delKey !== undefined && docB.resolve(delKey) === undefined);
+  check("A accepted C's first increment without quarantine", cKey !== undefined && docA.resolve(cKey) !== undefined);
+  check("B accepted C's first increment without quarantine", cKey !== undefined && docB.resolve(cKey) !== undefined);
+  check("no peer quarantined an out-of-order import", !statusLog.some((m) => m.includes("quarantined")));
 
   // --- presence: B's ephemeral cursor projects on A (Not(Local)); leave() despawns it ---------------
-  // A second inbound source per world (the ephemeral binding beside the durable one) — they share no
-  // keyspace, so worldX.sync() drains both. The ephemeral outbound is timer-driven in the app; the test
-  // pumps the throttle path by hand (encodeChanged → apply → sync) so it stays synchronous/deterministic.
+  // Presence rides its own in-memory wiring (not the loopback): it is TTL-self-healing, so delivery timing
+  // does not change its final convergence — it runs identically in both modes, and the test pumps the
+  // store's throttle path by hand (encodeChanged → apply → sync) to stay synchronous/deterministic.
   const loroA = new LoroEphemeralStore(5000);
   const loroB = new LoroEphemeralStore(5000);
   const ephSrcA = new LoroEphemeralSnapshot(loroA);
@@ -161,7 +271,6 @@ export function runCollabSmoke(): string {
     });
     return e;
   };
-  // The throttle path: coalesced changes + any despawn tombstones, then A drains.
   const flushBtoA = (): void => {
     const changed = ephSrcB.encodeChanged();
     if (changed !== null) ephSrcA.apply(changed);
@@ -169,15 +278,11 @@ export function runCollabSmoke(): string {
     worldA.sync();
   };
   // Two distinct-value sends of ONE key must land ≥1ms apart for Loro's wall-clock LWW to order them
-  // (M0 finding 2) — the app's 33ms throttle guarantees it; the synchronous test spins to force it.
-  const spin2ms = (): void => {
-    const t0 = performance.now();
-    while (performance.now() - t0 < 2) {
-      /* burn a wall-clock ms so the next same-key send carries a distinct timestamp */
-    }
-  };
+  // (M0 finding 2) — the app's 33ms throttle guarantees it; the test yields the clock forward to force it.
+  // An awaited delay (not a busy-wait) advances the clock cooperatively, so it also works under a headless
+  // browser's virtual-time budget, where a synchronous spin would freeze the (frozen-mid-task) clock.
+  const nudgeClock = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 2));
 
-  // Both peers spawn a presence entity; only B's should project onto A (A's own carries Local).
   ephA.spawn({ components: [[CursorPos, { x: 0, y: 0 }], [PresenceInfo, { name: "ada", color: "hsl(200 70% 60%)" }]] });
   const bCursor = ephB.spawn({ components: [[CursorPos, { x: 120, y: 80 }], [PresenceInfo, { name: "bo", color: "hsl(20 70% 60%)" }]] });
   worldA.sync(); // project A's own (Local) — it must NOT count as a remote peer
@@ -187,25 +292,25 @@ export function runCollabSmoke(): string {
   const bOnA = remoteOnA();
   check("A sees B's cursor position", bOnA !== undefined && eq2(worldA.get(bOnA, CursorPos), 120, 80));
 
-  spin2ms();
+  await nudgeClock();
   ephB.edit(bCursor).set(CursorPos, { x: 240, y: 200 });
   flushBtoA();
   check("A sees B's cursor move through the loopback", bOnA !== undefined && eq2(worldA.get(bOnA, CursorPos), 240, 200));
 
   // SelectionRef facet APPEARS (membership-as-signal): B selects one of A's seeded shapes.
-  spin2ms();
+  await nudgeClock();
   if (keys[0] !== undefined) ephB.addComponent(bCursor, SelectionRef, { targetKey: keys[0] });
   flushBtoA();
   check("B's SelectionRef facet appeared on A", bOnA !== undefined && worldA.get(bOnA, SelectionRef)?.targetKey === keys[0]);
 
   // SelectionRef facet DISAPPEARS (B deselects).
-  spin2ms();
+  await nudgeClock();
   ephB.removeComponent(bCursor, SelectionRef);
   flushBtoA();
   check("B's SelectionRef facet removed on A", bOnA !== undefined && worldA.get(bOnA, SelectionRef) === undefined);
 
-  // leave() — B departs: its tombstone (shipped via send → ephSrcA) despawns B on A now, not on TTL.
-  spin2ms();
+  // leave() — B departs: its tombstone despawns B on A now, not on TTL.
+  await nudgeClock();
   ephB.leave();
   worldA.sync();
   check("A despawned B's presence after leave()", remoteCountOnA() === 0);
@@ -215,25 +320,28 @@ export function runCollabSmoke(): string {
   loroA.destroy();
   loroB.destroy();
 
-  // --- teardown + tally -----------------------------------------------------------------------------
+  // --- teardown: return the app world to local-only mode, board intact behind the note --------------
   wireA.dispose();
   wireB.dispose();
+  wireC.dispose();
+  attA.detach(); // despawn A's durable projections — the app world is back to just its local seed board
+  attB.detach();
+  attC.detach();
+  setActiveCollab(null); // the live app is local-only again (the smoke never persisted a collab session)
+
   const passed = checks.filter((c) => c.ok).length;
   const firstFail = checks.find((c) => !c.ok);
-  if (passed === checks.length) {
-    return `collab-smoke: PASS ${passed}/${checks.length} — bootstrap · create · drag-vs-remote-edit · delete · presence all converged`;
-  }
-  const dbg = `A.rt=${JSON.stringify(worldA.get(sA, Position))} A.doc=${JSON.stringify(docA.getComponent(sA, Position))} B.rt=${sB ? JSON.stringify(worldB.get(sB, Position)) : "?"} B.doc=${sB ? JSON.stringify(docB.getComponent(sB, Position)) : "?"} status=${JSON.stringify(statusLog)}`;
-  return `collab-smoke: FAIL ${passed}/${checks.length} — first failure: ${firstFail?.label} [${dbg}]`;
+  return { passed, total: checks.length, firstFail: firstFail?.label };
 }
 
 /**
- * Make two REMOTE cursors visible in the running app for the headless PASS screenshot (the D2 two-cursor
- * frame's foundation). Attaches a real ephemeral store to the app's world — so the app projects presence
- * through the SAME `[CursorPos, PresenceInfo, Not(Local)]` path a real second tab would — and drives two
- * throwaway peers' cursors into it. The app's own frame-loop `world.sync()` projects them and the overlay
- * draws the labeled cursors next frame; they persist (60s TTL) for the screenshot. Renders NOTHING in the
- * durable document — this is purely the presence-rendering demo, independent of the correctness self-test.
+ * Make two REMOTE cursors visible in the running app for the headless PASS screenshot. Attaches a real
+ * ephemeral store to the app's world — so the app projects presence through the SAME
+ * `[CursorPos, PresenceInfo, Not(Local)]` path a real second tab would — and drives two throwaway peers'
+ * cursors into it. The app's own frame-loop `world.sync()` projects them and the overlay draws the labeled
+ * cursors next frame; they persist (60s TTL) for the screenshot. Renders NOTHING in the durable document —
+ * purely the presence-rendering demo, independent of the correctness self-test (which has torn its own
+ * bindings down by the time this runs).
  */
 export function injectDemoCursors(): void {
   const viewerSrc = new LoroEphemeralSnapshot(new LoroEphemeralStore(60_000));

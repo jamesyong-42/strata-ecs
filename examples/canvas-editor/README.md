@@ -69,9 +69,26 @@ manual dirty tracking, no conflict-resolution code, and no presence protocol any
 example — their **absence** is the demo. Undo is **local-ops-only** by construction in the durable
 layer (proven in the framework's durable suite); the example doesn't yet bind a key to it.
 
-`?script=collab-smoke` runs the whole story headlessly in one page — two worlds over an in-memory
-loopback: bootstrap, create, drag-vs-remote-edit, delete, and presence (cursor + selection projection,
-`leave()`) — and reports `PASS n/n` to the HUD note.
+**Two caveats.** (1) **Local file save/open (⤓/⤒) are disabled in collab mode**: the shared document
+lives only in the live session — there is no autosave and no localStorage (opening a `.json` would
+`world.import(replace)` the collab world out from under the attached durable binding, diverging the
+runtime from the document it mirrors). The buttons notify instead of acting. (2) The example does not
+bind an **undo** key: `undo` is local-ops-only and framework-proven, but it lives on the durable
+adapter, not the public `DurableStore` surface, so wiring a verb is deferred.
+
+`?script=collab-smoke` runs the whole story headlessly as an **acceptance suite** in one page. Peer A is
+the app's own world driving the REAL collab write ops (`commitCreate`/`commitDelete`/`commitDuplicate`/
+`commitDrag`); peers B and C are plain worlds over an in-memory loopback. It asserts precise convergence
+(shape counts, component values, keys resolving) across: bootstrap, create, duplicate, delete,
+edit-vs-drag (component-granular + drag protection + committer-wins), delete-under-drag (§17), a late
+joiner bootstrapping mid-history + the bidirectional-base exchange, and presence (cursor + selection
+projection, `leave()`). The whole suite runs under BOTH loopback modes — **sync** (inline, deterministic)
+and **async** (microtask-deferred, realistic BroadcastChannel timing) — and reports
+`PASS n/n (sync) · n/n (async)` to the HUD note.
+
+```sh
+pnpm example:canvas   # then open http://localhost:5173/?script=collab-smoke
+```
 
 ## Architecture — a file per lesson
 

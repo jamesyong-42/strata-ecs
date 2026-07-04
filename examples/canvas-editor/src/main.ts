@@ -191,19 +191,30 @@ if (params.get("script") === "persist") {
   }, 600);
 }
 
-// ?script=collab-smoke runs the D0 collab self-test in-process (two worlds + two stores over an
-// in-memory loopback channel) and reports PASS/FAIL to the HUD note — the headless verification path
-// (collab/smoke.ts). Independent of the app's world, so the local board still renders behind the note.
+// ?script=collab-smoke runs the collab acceptance self-test in-process (collab/smoke.ts): peer A is
+// THIS app world driving the real ops, peer B/C are plain worlds over an in-memory loopback. It runs the
+// WHOLE suite under BOTH loopback modes — sync (inline) and async (microtask-deferred, realistic
+// BroadcastChannel timing) — and asserts identical final convergence, reporting PASS/FAIL to the HUD note.
+// The suite tears its bindings down, so the app's seeded board renders behind the note as local-only again.
 if (params.get("script") === "collab-smoke") {
   setTimeout(() => {
-    try {
-      notify(runCollabSmoke());
-      // Make two remote cursors visible in the running app (the presence-rendering demo) so the PASS
-      // frame shows what a second tab looks like — the foundation for D2's two-cursor screenshot.
-      injectDemoCursors();
-    } catch (err) {
-      notify(`collab-smoke: FAIL — threw: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    void (async () => {
+      try {
+        const s = await runCollabSmoke("sync");
+        const a = await runCollabSmoke("async");
+        const ok = s.passed === s.total && a.passed === a.total && s.total === a.total;
+        notify(
+          ok
+            ? `collab-smoke: PASS ${s.passed}/${s.total} (sync) · ${a.passed}/${a.total} (async) — app-ops · async-loopback · late-join · presence all converged`
+            : `collab-smoke: FAIL — sync ${s.passed}/${s.total}${s.firstFail ? ` [${s.firstFail}]` : ""} · async ${a.passed}/${a.total}${a.firstFail ? ` [${a.firstFail}]` : ""}`,
+        );
+        // Make two remote cursors visible in the running app (the presence-rendering demo) so the PASS
+        // frame shows what a second tab looks like — the two-cursor screenshot.
+        injectDemoCursors();
+      } catch (err) {
+        notify(`collab-smoke: FAIL — threw: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    })();
   }, 600);
 }
 

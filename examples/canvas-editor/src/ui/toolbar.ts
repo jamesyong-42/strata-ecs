@@ -5,6 +5,7 @@
 
 import { deleteSelection, duplicateSelection } from "../app/editorOps";
 import { downloadDoc, loadDocFile, saveToLocalStorage } from "../app/persistence";
+import { isCollab } from "../collab/mode";
 import { onToolChange, setTool, type ToolId } from "../app/tools";
 
 const TOOLS: { id: ToolId; label: string; title: string }[] = [
@@ -53,8 +54,16 @@ export function buildToolbar(root: HTMLElement, notify: (msg: string) => void): 
   sep2.className = "sep";
   root.appendChild(sep2);
 
-  // persistence = world.export()/import() — the built-in serialization no rival ECS ships
+  // persistence = world.export()/import() — the built-in serialization no rival ECS ships. DISABLED in
+  // collab mode: the shared document lives only in the live session (no autosave/localStorage — plan §D0),
+  // and a file OPEN would `world.import(replace:true)` the collab world out from under the attached durable
+  // binding, diverging the runtime from the doc/baseline it still holds. So both surfaces refuse in collab.
+  const COLLAB_NOTE = "collab mode: the shared document has no local file save/open — it lives in the live session (§14.2)";
   btn("⤓", "Save: autosave now + download strata-canvas.json").addEventListener("click", () => {
+    if (isCollab()) {
+      notify(COLLAB_NOTE);
+      return;
+    }
     const autosaved = saveToLocalStorage();
     downloadDoc();
     notify(
@@ -77,5 +86,11 @@ export function buildToolbar(root: HTMLElement, notify: (msg: string) => void): 
     );
     fileInput.value = "";
   });
-  btn("⤒", "Open a strata-canvas.json document").addEventListener("click", () => fileInput.click());
+  btn("⤒", "Open a strata-canvas.json document").addEventListener("click", () => {
+    if (isCollab()) {
+      notify(COLLAB_NOTE);
+      return;
+    }
+    fileInput.click();
+  });
 }
