@@ -22,8 +22,12 @@
  *     values (`canon()`), name-keyed, `Local` excluded, `key`-field references pass through as strings.
  *
  * NOT M1 (the seam this file installs for M2 to wire): `attachEphemeral` / inbound blob-diff projection /
- * the two outbound timers (change-throttle + keepalive) / `EphemeralSyncStatus` (M2); the public
- * `strata-ecs/ephemeral` barrel (M3 — `src/ephemeral/index.ts` keeps throwing until then). This store only
+ * the two outbound timers (change-throttle + keepalive) / `EphemeralSyncStatus` (M2, all in attach.ts); the
+ * public `strata-ecs/ephemeral` barrel (M3 — `src/ephemeral/index.ts` keeps throwing until then). TWO M2
+ * pieces are folded HERE, where they need this store's private partition state: the public `leave()`
+ * (best-effort departure — deletes minted keys + flushes tombstones; needs `minted`/`ownEntities`/`send`)
+ * and the `@internal restageMinted` (own-timeout recovery — re-stages a live blob; needs `ownEntities`).
+ * This store only
  * QUEUES outbound: every mutation re-encodes the entity's blob and calls `source.set(key, blob)`, which
  * marks the key dirty and stamps LWW (M0 finding 4) — the THROTTLE (M2) decides when the bytes leave, so
  * set-per-mutation is correct and cheap. M2 reads the source, the minted-key set, and the timer config
@@ -375,6 +379,33 @@ export class EphemeralStore {
     this.flush(key, oe);
   }
 
+  // --- explicit departure (M2, design §15.3) --------------------------------------------------------
+
+  /**
+   * Best-effort explicit departure — the app wires it to `pagehide`/`beforeunload` (design §15.3). Deletes
+   * EVERY key this session minted on the source (capturing tombstones so peers despawn IMMEDIATELY rather
+   * than waiting the TTL), despawns the local runtime entities, and flushes the tombstones through `send`
+   * NOW (not on the throttle clock — the page is going away). Clearing the minted set also stops M2's
+   * keepalive from refreshing anything.
+   *
+   * **TTL `timeout` remains the GUARANTEED despawn on every receiver** — a delete whose tombstone shares a
+   * wall-clock ms with the key's last `set` LWW-ties and is DROPPED on receivers (M0 finding 5), so
+   * `leave()` only SHORTENS despawn latency; it is never the sole despawn mechanism. A no-op when nothing
+   * is minted (already departed, or detached — `clearRuntime` emptied the set). Runs OUTSIDE a tick by
+   * construction (an unload handler); it is not an in-system mutator and takes no iteration guard.
+   */
+  leave(): void {
+    if (this.minted.size === 0) return;
+    const seam = this.seam; // null if detached → skip the runtime despawn, still flush the source deletes
+    for (const key of [...this.minted]) {
+      this.source.delete(key); // capture the tombstone + fire the (ignored) own `local` removed echo
+      seam?.projector.remove(key); // despawn the local runtime entity + unbind its key↔handle pair
+      this.ownEntities.delete(key);
+    }
+    this.minted.clear();
+    for (const buf of this.source.encodeDeletes()) this.sendFn(buf); // ship the tombstones immediately (best-effort)
+  }
+
   // --- the own-blob codec (decision E) --------------------------------------------------------------
 
   /**
@@ -508,6 +539,20 @@ export class EphemeralStore {
     const key = entityKey(`${this.prefix}${this.counter++}`);
     this.minted.add(key);
     return key;
+  }
+
+  /**
+   * @internal Re-stage a live minted key's current blob on the source — M2's own-timeout recovery (006 B5 /
+   * M0 finding 4). Loro's `timeout` fires on the OWNER too: if the keepalive lapses, one of our OWN keys can
+   * self-expire and vanish from the source while its entity is still ALIVE in our runtime (M2 never despawns
+   * an own entity on timeout). Re-`set`ting the tracked blob revives + re-stamps the key on the real store
+   * (marking it dirty), so the next change-throttle re-broadcasts it and receivers keep seeing our live
+   * entity. A no-op for a key that is no longer a live own entity (already despawned).
+   */
+  restageMinted(key: EntityKey): void {
+    const oe = this.ownEntities.get(key);
+    if (oe === undefined) return; // not a live own entity → nothing to revive
+    this.source.set(key, encodeBlob(oe)); // re-stamp on the real store: revives the key + marks it dirty
   }
 
   /** @internal The backing source — M2 subscribes, encodes (throttle/keepalive/deletes), and applies through it. */
