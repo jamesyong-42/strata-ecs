@@ -121,6 +121,12 @@ export class DurableStore {
   private txOpen = false;
   /** Per-commit batches awaiting M2's binding drain (both own-echo and remote arrive here via applyRemote). */
   private pendingInbound: ChangeBatch[] = [];
+  /**
+   * The binding installs this at attach (M5): called after `applyRemote` enqueues remote batches, so the
+   * binding can republish `DurableSyncStatus.pendingInbound` at the ENQUEUE boundary (006 C7 — measured at
+   * enqueue). Null pre-/post-attach; the local-echo enqueue is the binding's own subscription, not this.
+   */
+  private onInboundEnqueue: (() => void) | null = null;
   /** Outbound-byte sinks (transport senders). All receive the SAME bytes per commit (decision B). */
   private readonly outboundSubscribers = new Set<(bytes: Uint8Array) => void>();
   /** The doc version as of the last outbound send — the "from" of the next increment (decision B). */
@@ -173,6 +179,23 @@ export class DurableStore {
    */
   setTxRuntime(txRuntime: TxRuntime | null): void {
     this.txRuntime = txRuntime;
+  }
+
+  /**
+   * @internal The count of undrained REMOTE batches on the store's queue — the store's half of
+   * `DurableSyncStatus.pendingInbound` (the binding adds its own local-echo queue length, 006 C7).
+   */
+  get pendingCount(): number {
+    return this.pendingInbound.length;
+  }
+
+  /**
+   * @internal Install (or clear) the enqueue listener M5's `attachDurable` sets alongside the bijection,
+   * detach clears it back to null. `applyRemote` calls it after enqueuing so the binding can republish the
+   * sync-status resource at the enqueue boundary; null means no attachment is watching (006 C7).
+   */
+  setInboundListener(cb: (() => void) | null): void {
+    this.onInboundEnqueue = cb;
   }
 
   // --- the transaction: the upward boundary (§12) --------------------------------------------------
@@ -250,6 +273,10 @@ export class DurableStore {
   applyRemote(bytes: Uint8Array): void {
     const batches = this.snapshot.applyRemote(bytes);
     for (const b of batches) this.pendingInbound.push(b);
+    // Republish DurableSyncStatus.pendingInbound at the enqueue boundary (006 C7) — but ONLY when this
+    // import actually carried new commits, so a redundant re-import (no new batches) stays a no-op and
+    // cannot flicker the panel on an idle wire.
+    if (batches.length > 0) this.onInboundEnqueue?.();
   }
 
   /**

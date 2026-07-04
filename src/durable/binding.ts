@@ -74,7 +74,18 @@
  */
 
 import { DEV, devWarn } from "../core/dev";
-import type { Component, ComponentId, Entity, EntityKey, InboundSource, Resource, World } from "../core";
+import type {
+  Component,
+  ComponentId,
+  Entity,
+  EntityKey,
+  InboundSource,
+  Relation,
+  Resource,
+  RuntimeStore,
+  Tag,
+  World,
+} from "../core";
 import {
   BaselineSnapshot,
   Projector,
@@ -90,6 +101,7 @@ import {
 import type { ChangeBatch, ChangeEvent, ComponentValue, EntityRecord, Snapshot, Unsubscribe } from "../substrate";
 import type { DurableBijection, DurableStore } from "./durable-store";
 import type { TxRuntime } from "./transaction";
+import { DurableSyncStatus, type DurableSyncStatusValue } from "./sync-status";
 
 /**
  * The detach handle `attachDurable` returns (§12.4). NOT another `DurableTarget` — attaching never
@@ -189,9 +201,65 @@ export function attachDurable(world: World, store: DurableStore): Attachment {
   store.setTxRuntime(binding.txRuntime); // M3 upward face: the recorder reaches the projector + baseline here
   world.registerInboundSource(binding);
   binding.subscribeLocalEchoes();
+  binding.wireSyncStatus(); // M5: install the enqueue listener + publish the initial DurableSyncStatus (006 C7)
   ATTACHED.add(store);
 
   return { detach: () => binding.teardown(), baseline: binding.baselineView };
+}
+
+/**
+ * A {@link Projector} that counts the runtime mutations it applies (M5). The binding reads the per-drain
+ * delta to drive `DurableSyncStatus.lastAppliedFrame`, which MUST advance only when a drain applied ≥1
+ * fact (006 C7). So it wraps EXACTLY the cell-application primitives — the runtime writes — and NOT the
+ * bijection peeks/mints (`resolveByKey`/`createPair`/`requireKey`/`handleFor`/`keyFor`), which touch no
+ * runtime column. Resource facts bypass the projector (§5.2), so the binding counts those three sites
+ * itself. `onApply` fires once per applied primitive; the binding only reads the delta across a drain, so
+ * the calls seeding attach or tearing the projector down are never observed (they fall outside any drain).
+ */
+class CountingProjector extends Projector {
+  constructor(
+    runtime: RuntimeStore,
+    mintKey: () => EntityKey,
+    private readonly onApply: () => void,
+  ) {
+    super(runtime, mintKey);
+  }
+  override applyComponent<S>(key: EntityKey, c: Component<S>, v: S): void {
+    super.applyComponent(key, c, v);
+    this.onApply();
+  }
+  override removeComponent(key: EntityKey, c: Component): void {
+    super.removeComponent(key, c);
+    this.onApply();
+  }
+  override applySpawn(key: EntityKey): void {
+    super.applySpawn(key);
+    this.onApply();
+  }
+  override applyTag(key: EntityKey, t: Tag): void {
+    super.applyTag(key, t);
+    this.onApply();
+  }
+  override removeTag(key: EntityKey, t: Tag): void {
+    super.removeTag(key, t);
+    this.onApply();
+  }
+  override applyRelationSet(key: EntityKey, r: Relation, target: EntityKey): void {
+    super.applyRelationSet(key, r, target);
+    this.onApply();
+  }
+  override applyRelationAdd(key: EntityKey, r: Relation, target: EntityKey): void {
+    super.applyRelationAdd(key, r, target);
+    this.onApply();
+  }
+  override removeRelation(key: EntityKey, r: Relation, target?: EntityKey): void {
+    super.removeRelation(key, r, target);
+    this.onApply();
+  }
+  override remove(key: EntityKey): void {
+    super.remove(key);
+    this.onApply();
+  }
 }
 
 /**
@@ -224,12 +292,31 @@ class DurableBinding implements InboundSource {
   private readonly strandedWarned = new Set<string>();
   /** True after teardown — makes `detach()` idempotent and a late `drain()` a no-op. */
   private detached = false;
+  /**
+   * Runtime mutations applied by the projector + the three resource sites, counted by {@link CountingProjector}
+   * and this binding. Reset at the top of every `drain()` and read at its end: a NON-ZERO delta is a drain
+   * that applied ≥1 fact, which is the ONLY thing that advances `lastAppliedFrame` (006 C7).
+   */
+  private applied = 0;
+  /**
+   * `DurableSyncStatus.lastAppliedFrame` (006 C7): a monotonic counter bumped once per drain that applied
+   * ≥1 fact — NEVER per-drain, so an idle network (empty drains apply nothing) leaves it fixed and the
+   * set-on-change gate suppresses the write. Tick-independent by design (a sync-only, never-ticked viewer
+   * must still see it advance), so it counts applied drains rather than reading `world.tickCount`.
+   */
+  private lastAppliedFrame = 0;
+  /** The last {@link DurableSyncStatus} value published — the producer-side set-on-change memo (006 C7). */
+  private lastSyncStatus: DurableSyncStatusValue | null = null;
 
   constructor(
     private readonly world: World,
     private readonly store: DurableStore,
   ) {
-    this.projector = new Projector(world.runtime, () => store.mintKey());
+    // A CountingProjector so `lastAppliedFrame` can advance only on real applies (006 C7): every cell
+    // primitive it runs bumps `this.applied`, which drain() reads as a per-drain delta.
+    this.projector = new CountingProjector(world.runtime, () => store.mintKey(), () => {
+      this.applied++;
+    });
   }
 
   /** @internal Read-only baseline view for the {@link Attachment} inspection seam (founding agreement). */
@@ -360,8 +447,51 @@ class DurableBinding implements InboundSource {
   /** Subscribe to the snapshot for LOCAL echoes only (decision D) — enqueue, never apply (§12.4). */
   subscribeLocalEchoes(): void {
     this.unsubscribe = this.store.snapshot.subscribe((batch) => {
-      if (batch.origin === "local") this.pendingLocal.push(batch);
+      if (batch.origin === "local") {
+        this.pendingLocal.push(batch);
+        this.publishSyncStatus(); // enqueue boundary: pendingInbound just grew (006 C7)
+      }
     });
+  }
+
+  // --- the sync-status resource (006 C7, M5) --------------------------------------------------------
+
+  /**
+   * Wire {@link DurableSyncStatus} at attach: install the store's inbound-enqueue listener (so a REMOTE
+   * `applyRemote` republishes `pendingInbound` at the enqueue boundary — the local-echo boundary is our own
+   * subscription) and publish the initial status. Called once from `attachDurable`, after the inbound source
+   * is registered and the local-echo subscription is live.
+   */
+  wireSyncStatus(): void {
+    this.store.setInboundListener(() => this.publishSyncStatus());
+    this.publishSyncStatus();
+  }
+
+  /**
+   * Publish {@link DurableSyncStatus} with PRODUCER-SIDE SET-ON-CHANGE (006 C7, mandatory): compute the
+   * activity-driven fields, compare each against the last value set, and SKIP `setResource` when nothing
+   * changed. This is what makes an IDLE network produce ZERO re-renders — `world.sync()` drains every frame,
+   * but an empty drain moves no field, so no stamp is written and no `useResource` panel re-renders. Called
+   * at the two enqueue boundaries (pendingInbound grew) and at the end of every drain (pendingInbound fell,
+   * heldCells and lastAppliedFrame settled).
+   */
+  private publishSyncStatus(): void {
+    const next: DurableSyncStatusValue = {
+      pendingInbound: this.store.pendingCount + this.pendingLocal.length,
+      heldCells: this.held.size + this.heldRes.size,
+      lastAppliedFrame: this.lastAppliedFrame,
+    };
+    const prev = this.lastSyncStatus;
+    if (
+      prev !== null &&
+      prev.pendingInbound === next.pendingInbound &&
+      prev.heldCells === next.heldCells &&
+      prev.lastAppliedFrame === next.lastAppliedFrame
+    ) {
+      return; // set-on-change: nothing moved → no setResource → no stamp → no re-render (006 C7)
+    }
+    this.lastSyncStatus = next;
+    this.world.setResource(DurableSyncStatus, next); // runtime-local — never written to the doc (006 C7)
   }
 
   // --- the downward face: drain (§13.3) -------------------------------------------------------------
@@ -383,6 +513,7 @@ class DurableBinding implements InboundSource {
         "strata: durable drain() cannot run from inside an observer or reactive callback — it would half-apply a ChangeBatch; drain at the frame boundary (005 §5.5).",
       );
     }
+    this.applied = 0; // per-drain apply tally (006 C7) — bumped by the CountingProjector + the resource sites
     const remote = this.store.drainPending();
     const local = this.pendingLocal;
     this.pendingLocal = [];
@@ -392,6 +523,11 @@ class DurableBinding implements InboundSource {
     // drag reconverges to baseline BETWEEN drains (during ticks), and `world.sync()` drains us every frame
     // (006 C5, decision G). It is the only path that catches the silent-reconverge case.
     this.sweep();
+    // DurableSyncStatus (006 C7): advance lastAppliedFrame ONLY when this drain applied ≥1 fact (never
+    // per-drain), then publish set-on-change. An empty/no-op drain leaves every field fixed, so the
+    // set-on-change gate writes nothing and no useResource panel re-renders (the idle guarantee).
+    if (this.applied > 0) this.lastAppliedFrame++;
+    this.publishSyncStatus();
   }
 
   /**
@@ -535,6 +671,7 @@ class DurableBinding implements InboundSource {
         // §13.4's "one exception" — the structural-ish resource fact. Always apply; clear the hold (c).
         this.world.runtime.removeResource(ev.res); // resources bypass the kernel (§10.8 sibling note)
         this.baseline.removeResource(ev.res);
+        this.applied++; // an applied resource fact (006 C7) — resources bypass the CountingProjector
         this.heldRes.delete(ev.res.name);
         this.resetStranded(`res:${ev.res.name}`);
         break;
@@ -601,6 +738,7 @@ class DurableBinding implements InboundSource {
       if (converged !== undefined) {
         this.world.runtime.setResource(res, converged); // resources bypass the kernel (§10.8)
         this.baseline.setResource(res, converged);
+        this.applied++; // an applied resource fact (006 C7) — resources bypass the CountingProjector
       }
       this.heldRes.delete(res.name);
       this.resetStranded(`res:${res.name}`);
@@ -733,6 +871,7 @@ class DurableBinding implements InboundSource {
       if (converged === undefined) continue; // the doc dropped the resource — drop the hold
       this.world.runtime.setResource(e.res, converged);
       this.baseline.setResource(e.res, converged);
+      this.applied++; // a swept-in resource fact (006 C7) — resources bypass the CountingProjector
     }
   }
 
@@ -841,6 +980,8 @@ class DurableBinding implements InboundSource {
     this.projector.teardown(); // 3. despawn every projected entity + clear the bijection
     this.store.setBijection(null); // handle-addressed reads return undefined between attachments (§14.3)
     this.store.setTxRuntime(null); // doc.transaction throws again once detached (no projector to mint)
+    this.store.setInboundListener(null); // stop republishing sync status on remote enqueue (006 C7)
+    this.world.removeResource(DurableSyncStatus); // runtime-local status is gone once detached (useResource → undefined)
     ATTACHED.delete(this.store); // mark re-attachable
   }
 
