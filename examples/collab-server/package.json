@@ -1,0 +1,17 @@
+{
+  "name": "@strata-ecs/collab-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A dumb WebSocket byte-relay for the strata-ecs canvas-editor collab demo. Rooms by URL path; broadcasts each frame to the other members of the room; holds no document state.",
+  "type": "module",
+  "bin": {
+    "collab-server": "src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

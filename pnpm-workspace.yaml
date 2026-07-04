@@ -4,3 +4,6 @@
 packages:
   - "bench/compare"
   - "examples/canvas-editor"
+  # The WebSocket relay for the canvas-editor collab demo — a dumb byte-relay (its only dep is `ws`),
+  # isolated the same way so the server's dep never enters strata's own graph.
+  - "examples/collab-server"

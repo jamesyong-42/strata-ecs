@@ -65,6 +65,7 @@
     "format:check": "prettier --check .",
     "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:stress:smoke",
     "example:canvas": "pnpm --filter @strata-ecs/example-canvas-editor dev",
+    "collab:server": "pnpm --filter @strata-ecs/collab-server start",
     "prepublishOnly": "pnpm run ci && pnpm build"
   },
   "pnpm": {

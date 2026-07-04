@@ -16,7 +16,13 @@ import { describeShape } from "./app/describe";
 import { startFrameLoop } from "./app/frameLoop";
 import { hitTestPoint, hitTestRegion } from "./app/hitTest";
 import { attachInput } from "./app/input";
-import { hasAutosave, loadAutosave, onRestore, saveToLocalStorage, scheduleAutosave } from "./app/persistence";
+import {
+  hasAutosave,
+  loadAutosave,
+  onRestore,
+  saveToLocalStorage,
+  scheduleAutosave,
+} from "./app/persistence";
 import { wireReactivity } from "./app/reactivity";
 import { seedBoard } from "./app/seed";
 import { isSimOn, setSimBound, setSimulate } from "./app/sim";
@@ -37,6 +43,10 @@ const params = new URLSearchParams(location.search);
 const count = Math.min(100_000, Math.max(100, Number(params.get("count") ?? 10_000) || 10_000));
 // ?collab or ?collab=<room> switches on multiplayer (default room "demo"); null = local-only mode.
 const collabRoom = params.has("collab") ? params.get("collab") || "demo" : null;
+// ?ws[=<origin>] selects the real WebSocket relay transport (across machines) instead of the
+// same-origin BroadcastChannel (tabs). Bare ?ws = "" → ws://localhost:8787; ?ws=<origin> overrides.
+// null (no ?ws) keeps the BroadcastChannel transport unchanged.
+const wsOrigin = params.has("ws") ? (params.get("ws") ?? "") : null;
 
 const content = document.getElementById("content") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLCanvasElement;
@@ -52,7 +62,11 @@ const hud = new Hud(document.getElementById("hud") as HTMLElement, {
   systemNames: SYSTEM_NAMES,
   onSimToggle(on) {
     setSimulate(on);
-    notify(on ? "simulate ON — every shape got a velocity; keep editing" : "simulate off — frozen mid-flight");
+    notify(
+      on
+        ? "simulate ON — every shape got a velocity; keep editing"
+        : "simulate off — frozen mid-flight",
+    );
   },
   onSpawn(n) {
     const r = stressSpawn(n);
@@ -76,12 +90,18 @@ const hud = new Hud(document.getElementById("hud") as HTMLElement, {
   onCullTestToggle(enabled) {
     cullFlags.viewportTest = enabled;
     dirty.doc = true;
-    notify(enabled ? "viewport cull back on" : `cull test OFF — painting all ${stats.entities.toLocaleString()} shapes`);
+    notify(
+      enabled
+        ? "viewport cull back on"
+        : `cull test OFF — painting all ${stats.entities.toLocaleString()} shapes`,
+    );
   },
   onLodToggle(enabled) {
     lodFlags.enabled = enabled;
     dirty.doc = true;
-    notify(enabled ? "LOD on (greeked text far out)" : "LOD OFF — full text + strokes at every zoom");
+    notify(
+      enabled ? "LOD on (greeked text far out)" : "LOD OFF — full text + strokes at every zoom",
+    );
   },
 });
 const notify = (msg: string): void => hud.setNote(msg);
@@ -107,7 +127,7 @@ fitCanvases();
 // ?fresh=1) always seeds; otherwise the autosave — world.export() bytes in localStorage — restores the
 // last session, viewport included; an incompatible autosave (schema drift) is quarantined, never a brick.
 if (collabRoom !== null) {
-  startCollabBoot(collabRoom, count, notify, (chips) => hud.setCollabChips(chips));
+  startCollabBoot(collabRoom, count, notify, (chips) => hud.setCollabChips(chips), wsOrigin);
   // persistence stays local-only — setOnMutate is deliberately NOT called (no autosave in collab).
 } else {
   let booted = false;
@@ -123,7 +143,9 @@ if (collabRoom !== null) {
   if (!booted) {
     const seeded = seedBoard(world, count);
     setSimBound(Math.sqrt(count) * 55 * 1.5); // fit the bounce box to the seeded spread
-    notify(`seeded ${seeded.count.toLocaleString()} shapes + ${seeded.arrows} arrows in ${seeded.ms.toFixed(1)}ms`);
+    notify(
+      `seeded ${seeded.count.toLocaleString()} shapes + ${seeded.arrows} arrows in ${seeded.ms.toFixed(1)}ms`,
+    );
     zoomToFit();
   }
   setOnMutate(scheduleAutosave); // every document mutation debounces an idle-time export
@@ -197,17 +219,32 @@ if (params.get("script") === "persist") {
 // BroadcastChannel timing) — and asserts identical final convergence, reporting PASS/FAIL to the HUD note.
 // The suite tears its bindings down, so the app's seeded board renders behind the note as local-only again.
 if (params.get("script") === "collab-smoke") {
+  // &transport=ws runs the SAME suite over a live WebSocket relay (both in-page worlds open their own
+  // socket to it) instead of the in-memory loopback, and adds a relay-drop → re-bootstrap scenario. The
+  // relay must be running (`pnpm collab:server`); default origin ws://localhost:8787, or ?ws=<origin>.
+  const wsSmoke = params.get("transport") === "ws";
   setTimeout(() => {
     void (async () => {
       try {
-        const s = await runCollabSmoke("sync");
-        const a = await runCollabSmoke("async");
-        const ok = s.passed === s.total && a.passed === a.total && s.total === a.total;
-        notify(
-          ok
-            ? `collab-smoke: PASS ${s.passed}/${s.total} (sync) · ${a.passed}/${a.total} (async) — app-ops · async-loopback · late-join · presence all converged`
-            : `collab-smoke: FAIL — sync ${s.passed}/${s.total}${s.firstFail ? ` [${s.firstFail}]` : ""} · async ${a.passed}/${a.total}${a.firstFail ? ` [${a.firstFail}]` : ""}`,
-        );
+        if (wsSmoke) {
+          const origin = params.has("ws") ? (params.get("ws") ?? "") : "";
+          const r = await runCollabSmoke({ kind: "ws", origin });
+          if (r.failed.length > 0) console.error("collab-smoke (ws) failing checks:", r.failed);
+          notify(
+            r.passed === r.total
+              ? `collab-smoke (ws): PASS ${r.passed}/${r.total} — live relay · app-ops · late-join · reconnect re-bootstrap all converged`
+              : `collab-smoke (ws): FAIL — ${r.passed}/${r.total}${r.firstFail ? ` [${r.firstFail}]` : ""}`,
+          );
+        } else {
+          const s = await runCollabSmoke({ kind: "loopback", mode: "sync" });
+          const a = await runCollabSmoke({ kind: "loopback", mode: "async" });
+          const ok = s.passed === s.total && a.passed === a.total && s.total === a.total;
+          notify(
+            ok
+              ? `collab-smoke: PASS ${s.passed}/${s.total} (sync) · ${a.passed}/${a.total} (async) — app-ops · async-loopback · late-join · presence all converged`
+              : `collab-smoke: FAIL — sync ${s.passed}/${s.total}${s.firstFail ? ` [${s.firstFail}]` : ""} · async ${a.passed}/${a.total}${a.firstFail ? ` [${a.firstFail}]` : ""}`,
+          );
+        }
         // Make two remote cursors visible in the running app (the presence-rendering demo) so the PASS
         // frame shows what a second tab looks like — the two-cursor screenshot.
         injectDemoCursors();
@@ -237,7 +274,11 @@ if (params.get("script") === "demo") {
       const dy = cam.y - (cam.h / 2 - 160) / cam.zoom;
       setTool("rect");
       pointerDown({ sx: 0, sy: 0, wx: dx, wy: dy, shift: false });
-      pointerMove({ sx: 0, sy: 0, wx: dx + 180 / cam.zoom, wy: dy + 120 / cam.zoom, shift: false }, 180, 120);
+      pointerMove(
+        { sx: 0, sy: 0, wx: dx + 180 / cam.zoom, wy: dy + 120 / cam.zoom, shift: false },
+        180,
+        120,
+      );
       pointerUp({ sx: 0, sy: 0, wx: dx + 180 / cam.zoom, wy: dy + 120 / cam.zoom, shift: false });
       const drawn = hitTestPoint(dx + 90 / cam.zoom, dy + 60 / cam.zoom);
       notify(
