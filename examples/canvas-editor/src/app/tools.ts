@@ -9,11 +9,14 @@
 
 import type { Entity } from "strata-ecs";
 import { Gesture, Selected } from "../ecs/schema";
+import { commitCreate, commitDrag } from "../collab/ops";
+import { isCollab } from "../collab/mode";
 import { cam, panBy } from "./camera";
 import {
   createShape,
   destroyShape,
   resizeShape,
+  selectedEntities,
   setSelection,
   toggleSelection,
   type ShapeKind,
@@ -182,7 +185,15 @@ export function pointerUp(p: PointerInfo): void {
           const def = interaction.tool === "ellipse" ? { w: 140, h: 140 } : interaction.tool === "note" ? { w: 180, h: 150 } : { w: 160, h: 100 };
           resizeShape(d, a.x, a.y, def.w, def.h);
         }
-        setSelection([d]);
+        if (isCollab()) {
+          // COLLAB gesture-end commit (§18.3): the draft was runtime-only (never converged — a peer must
+          // not see a half-drawn shape); promote it into its durable twin as ONE document create, and
+          // move selection to the twin (runtime-only, like local).
+          const twin = commitCreate(d);
+          setSelection(twin !== undefined ? [twin] : []);
+        } else {
+          setSelection([d]);
+        }
         setTool("select");
       }
       // No manual repaint flag: the spawn + resize during the draw already stamped
@@ -190,10 +201,21 @@ export function pointerUp(p: PointerInfo): void {
       return;
     }
     case "drag":
-      // gesture end = the future one-commit point (undo checkpoint / doc.transaction);
-      // dragEnd flushes the residual pointer delta through one more tick first — DragMove's
-      // Position stamps drove the repaints, so no manual flag is needed here either.
-      interaction.mode = "dragEnd";
+      if (isCollab()) {
+        // COLLAB gesture-end commit (§18.3): the drag wrote runtime Position every frame; seal the
+        // settled position to the document ONCE — fold in the sub-frame residual the local path defers
+        // to the dragEnd tick, so the committed value equals what the user sees (runtime == baseline, the
+        // cell never strands), then go straight to idle so nothing re-applies it. Reconcile's drag
+        // protection held remote edits off these cells until now — the framework's job, not ours (§18.5).
+        commitDrag(selectedEntities(), interaction.pendingDx, interaction.pendingDy);
+        interaction.pendingDx = 0;
+        interaction.pendingDy = 0;
+        interaction.mode = "idle";
+      } else {
+        // gesture end = the one-commit point; dragEnd flushes the residual pointer delta through one
+        // more tick first — DragMove's Position stamps drove the repaints, so no manual flag is needed.
+        interaction.mode = "dragEnd";
+      }
       return;
     default:
       interaction.mode = "idle";
@@ -203,10 +225,15 @@ export function pointerUp(p: PointerInfo): void {
 
 /** Esc: abandon whatever is in flight (an unfinished draw is destroyed, not kept). */
 export function cancelGesture(): void {
+  const wasDragging = interaction.mode === "drag";
   if (interaction.mode === "draw" && interaction.drawing !== undefined) {
     destroyShape(interaction.drawing);
     interaction.drawing = undefined;
   }
+  // A cancelled DRAG keeps the shapes where they were dragged to (local mode never reverts). In collab
+  // that runtime move diverged from the baseline, so seal it to the document here — otherwise the cell
+  // strands (runtime != baseline, no commit to reconcile it). An abort has no residual → commit as-is.
+  if (wasDragging && isCollab()) commitDrag(selectedEntities(), 0, 0);
   interaction.marquee = null;
   interaction.preview = [];
   interaction.previewRects = [];

@@ -9,6 +9,8 @@
 import type { Entity } from "strata-ecs";
 import { selectedBoxes } from "../ecs/queries";
 import { Fill, Kind, Label, Position, Selected, Size, Velocity, ZIndex } from "../ecs/schema";
+import { commitDelete, commitDuplicate } from "../collab/ops";
+import { activeCollab } from "../collab/mode";
 import { mutate, stats } from "./commands";
 import { world } from "./worldRef";
 
@@ -57,10 +59,14 @@ export function clearSelection(): void {
  *  code — relation edges cascade-clean on destroy (the framework demo moment). */
 export function deleteSelection(): number {
   const doomed = selectedEntities(); // collect BEFORE mutating
-  const w = world;
-  mutate("delete", () => {
-    for (const e of doomed) w.destroy(e);
-  });
+  if (activeCollab() !== null) {
+    commitDelete(doomed); // the document owns the delete — converges + cascades arrows on every peer
+  } else {
+    const w = world;
+    mutate("delete", () => {
+      for (const e of doomed) w.destroy(e);
+    });
+  }
   stats.entities -= doomed.length;
   return doomed.length;
 }
@@ -76,6 +82,12 @@ export function duplicateSelection(): DuplicateResult {
   const w = world;
   const originals = selectedEntities();
   const t0 = performance.now();
+  if (activeCollab() !== null) {
+    // The document owns the clones (durable, converged); selection moves to them runtime-only (§12).
+    const collabClones = commitDuplicate(originals);
+    stats.entities += collabClones.length;
+    return { count: collabClones.length, ms: performance.now() - t0 };
+  }
   const clones: Entity[] = [];
   mutate("duplicate", () => {
     for (const e of originals) {

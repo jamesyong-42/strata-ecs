@@ -290,6 +290,19 @@ export class DurableStore {
   }
 
   /**
+   * FULL SNAPSHOT for a late joiner's bootstrap (§14.2 transport wiring; docs/plan-collab-demo.md's
+   * hello/snapshot protocol). Delegates to the adapter's `export()` — the whole converged document as
+   * self-contained bytes a fresh peer imports (via `applyRemote`) BEFORE it applies any live increment,
+   * so the increments' causal base is present and none quarantines (loro-snapshot finding 11 / 006 §A5.2).
+   * This is a legitimate transport surface: an increment presupposes its base was shipped first, and a
+   * joining peer has no base — so it needs the snapshot, not the increment stream. Keep the byte-moving
+   * in the app; the store only encodes (Loro stays quarantined behind the adapter, §14.2).
+   */
+  exportSnapshot(): Uint8Array {
+    return this.snapshot.export();
+  }
+
+  /**
    * OUTBOUND wire (§14.2). `fn` receives the encoded bytes of each sealed LOCAL commit; forward them to
    * the transport. Multiple subscribers all receive the SAME bytes per commit. A subscriber attaching
    * mid-life misses commits sealed before it subscribed (decision B). Returns an `Unsubscribe`.

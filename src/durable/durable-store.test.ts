@@ -247,3 +247,35 @@ describe("exportUpdatesSince — state equivalence with a full snapshot", () => 
     expect([...bSnap.entities()].sort()).toEqual([...aSnap.entities()].sort());
   });
 });
+
+// ---------------------------------------------------------------------------------------------------
+describe("exportSnapshot — full-snapshot bootstrap for a late joiner (§14.2, plan-collab-demo)", () => {
+  it("a fresh joiner applyRemote(exportSnapshot()) converges to the source's whole document", () => {
+    const src = store(1);
+    src.store.snapshot.commit(() => src.store.snapshot.spawn(K("1-0")));
+    src.store.snapshot.commit(() => src.store.snapshot.setComponent(K("1-0"), DSPos, { x: 7, y: 8 }));
+    src.store.snapshot.commit(() => src.store.snapshot.addTag(K("1-0"), DSSel));
+
+    // A joiner bootstraps from the full snapshot through the PUBLIC inbound wire — exactly the path the
+    // collab boot takes on a `snapshot` envelope (the whole doc arrives before any live increment).
+    const joiner = store(2);
+    joiner.store.applyRemote(src.store.exportSnapshot());
+
+    // The joiner now holds the converged document (read back by key), and the state arrived as batches
+    // the binding will drain (the snapshot import is a normal `applyRemote`, not a special path).
+    expect(joiner.store.getComponentByKey(K("1-0"), DSPos)).toEqual({ x: 7, y: 8 });
+    expect(joiner.store.snapshot.hasTag(K("1-0"), DSSel)).toBe(true);
+    expect([...joiner.store.snapshot.entities()]).toEqual([K("1-0")]);
+    expect(joiner.store.drainPending().length).toBeGreaterThan(0);
+  });
+
+  it("seals staged-but-uncommitted writes before exporting (adapter export() finding 8/10)", () => {
+    const src = store(1);
+    src.store.snapshot.spawn(K("1-0")); // staged, never committed
+    src.store.snapshot.setComponent(K("1-0"), DSPos, { x: 1, y: 2 });
+
+    const joiner = store(2);
+    joiner.store.applyRemote(src.store.exportSnapshot()); // export() seals first → the write is in the bytes
+    expect(joiner.store.getComponentByKey(K("1-0"), DSPos)).toEqual({ x: 1, y: 2 });
+  });
+});

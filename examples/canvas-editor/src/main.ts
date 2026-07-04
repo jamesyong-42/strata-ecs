@@ -23,6 +23,8 @@ import { isSimOn, setSimBound, setSimulate } from "./app/sim";
 import { clearBoard, stressSpawn } from "./app/stress";
 import { interaction, pointerDown, pointerMove, pointerUp, setTool } from "./app/tools";
 import { world } from "./app/worldRef";
+import { startCollabBoot } from "./collab/boot";
+import { runCollabSmoke } from "./collab/smoke";
 import { buildPipeline, SYSTEM_NAMES, type SystemName } from "./ecs/pipeline";
 import { cullFlags } from "./ecs/systems/cull";
 import { ContentLayer, lodFlags } from "./render/contentLayer";
@@ -33,6 +35,8 @@ import { buildToolbar } from "./ui/toolbar";
 
 const params = new URLSearchParams(location.search);
 const count = Math.min(100_000, Math.max(100, Number(params.get("count") ?? 10_000) || 10_000));
+// ?collab or ?collab=<room> switches on multiplayer (default room "demo"); null = local-only mode.
+const collabRoom = params.has("collab") ? params.get("collab") || "demo" : null;
 
 const content = document.getElementById("content") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLCanvasElement;
@@ -97,26 +101,33 @@ function fitCanvases(): void {
 window.addEventListener("resize", fitCanvases);
 fitCanvases();
 
-// Boot document: an explicit ?count= (or ?fresh=1) always seeds; otherwise the autosave —
-// world.export() bytes in localStorage — restores the last session, viewport included.
-// An incompatible autosave (schema drift) is quarantined by loadAutosave, never a brick.
-let booted = false;
-if (!params.has("count") && params.get("fresh") !== "1" && hasAutosave()) {
-  const load = loadAutosave();
-  if (load === "restored") {
-    notify(`restored autosave — ${stats.entities.toLocaleString()} shapes (world.import)`);
-    booted = true;
-  } else if (load === "incompatible") {
-    notify("autosave was incompatible with the current schema — seeded a fresh board");
+// Boot document. COLLAB MODE (?collab=<room>) bootstraps the SHARED document over BroadcastChannel —
+// no autosave, no localStorage, no local seed (the first peer seeds into the document; a joiner syncs a
+// snapshot). LOCAL-ONLY MODE (the default, ?collab absent) is UNCHANGED: an explicit ?count= (or
+// ?fresh=1) always seeds; otherwise the autosave — world.export() bytes in localStorage — restores the
+// last session, viewport included; an incompatible autosave (schema drift) is quarantined, never a brick.
+if (collabRoom !== null) {
+  startCollabBoot(collabRoom, count, notify);
+  // persistence stays local-only — setOnMutate is deliberately NOT called (no autosave in collab).
+} else {
+  let booted = false;
+  if (!params.has("count") && params.get("fresh") !== "1" && hasAutosave()) {
+    const load = loadAutosave();
+    if (load === "restored") {
+      notify(`restored autosave — ${stats.entities.toLocaleString()} shapes (world.import)`);
+      booted = true;
+    } else if (load === "incompatible") {
+      notify("autosave was incompatible with the current schema — seeded a fresh board");
+    }
   }
+  if (!booted) {
+    const seeded = seedBoard(world, count);
+    setSimBound(Math.sqrt(count) * 55 * 1.5); // fit the bounce box to the seeded spread
+    notify(`seeded ${seeded.count.toLocaleString()} shapes + ${seeded.arrows} arrows in ${seeded.ms.toFixed(1)}ms`);
+    zoomToFit();
+  }
+  setOnMutate(scheduleAutosave); // every document mutation debounces an idle-time export
 }
-if (!booted) {
-  const seeded = seedBoard(world, count);
-  setSimBound(Math.sqrt(count) * 55 * 1.5); // fit the bounce box to the seeded spread
-  notify(`seeded ${seeded.count.toLocaleString()} shapes + ${seeded.arrows} arrows in ${seeded.ms.toFixed(1)}ms`);
-  zoomToFit();
-}
-setOnMutate(scheduleAutosave); // every document mutation debounces an idle-time export
 // Wire the single Tier-1 renderable observer that drives repaint + autosave. Called AFTER the
 // boot seed so the (unarmed) seed pays no stamping tax — the seeded board's first paint comes
 // from commands.ts's initial dirty.doc, not from the observer (registration never back-fires).
@@ -177,6 +188,19 @@ if (params.get("script") === "persist") {
         ? `persist test: saved ${before.toLocaleString()} → cleared ${cleared} → restored ${stats.entities.toLocaleString()} in place`
         : `persist test FAILED at restore (${load})`,
     );
+  }, 600);
+}
+
+// ?script=collab-smoke runs the D0 collab self-test in-process (two worlds + two stores over an
+// in-memory loopback channel) and reports PASS/FAIL to the HUD note — the headless verification path
+// (collab/smoke.ts). Independent of the app's world, so the local board still renders behind the note.
+if (params.get("script") === "collab-smoke") {
+  setTimeout(() => {
+    try {
+      notify(runCollabSmoke());
+    } catch (err) {
+      notify(`collab-smoke: FAIL — threw: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }, 600);
 }
 

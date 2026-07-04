@@ -22,6 +22,7 @@ export default defineConfig({
           // Exact-match regexes, subpaths BEFORE the bare name: a plain string alias uses
           // prefix semantics and would rewrite `strata-ecs/tools` into `<src/index.ts>/tools`.
           { find: /^strata-ecs\/tools$/, replacement: fileURLToPath(new URL("../../src/tools/index.ts", import.meta.url)) },
+          { find: /^strata-ecs\/durable$/, replacement: fileURLToPath(new URL("../../src/durable/index.ts", import.meta.url)) },
           { find: /^strata-ecs$/, replacement: fileURLToPath(new URL("../../src/index.ts", import.meta.url)) },
         ],
   },
