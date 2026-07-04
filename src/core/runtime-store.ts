@@ -34,6 +34,7 @@ import {
   type ResourceId,
   type Tag,
   componentById,
+  componentCount,
   encodeComponentValue,
   relationById,
   relationCount,
@@ -117,6 +118,34 @@ export class RuntimeStore implements ECSStore {
    * (0) reads as older than any observer. NOT on the stored value object (replaced wholesale per set).
    */
   private resourceFrames = new Float64Array(0);
+  /**
+   * Per-component `lastWrittenFrame` MAX (Patch Note 002 §3.2 / review-part1 R5), a dense array
+   * indexed by `ComponentId`. It is the reactive layer's quiescent fast-path gate: the Tier-2/3
+   * `notify` pass reads `componentMaxFrame[cid]` with ONE compare to decide whether an ENTIRE
+   * component's watch map can be skipped, instead of walking every watched cell each idle frame.
+   *
+   * SOUNDNESS — it MUST bump at every site that can change what a Tier-2/3 watch on `cid` observes,
+   * or the skip drops a notification. The complete enumeration (all behind the `reactiveOn` gate):
+   *
+   *   1. {@link stampComponent} — the sole owner of column value stamps: edit/writeComponent,
+   *      projection overwrite + initial, `stampWrites` blanket (001 §3.1 route 1), `invalidate`.
+   *      Every value-write path funnels here, so bumping here once covers them all.
+   *   2. {@link migrate} — bypasses stampComponent (it writes `lastWrittenFrame` slots directly), so
+   *      it bumps EXPLICITLY: (a) ADDED columns — a gained component is a value write; (b) REMOVED
+   *      components (in the source archetype, not the destination) — the fire-`undefined`-on-removal
+   *      path has NO column to stamp, so without this bump the skip would swallow the removal fire.
+   *   3. {@link reset} — bumps EVERY component id: reset bumps every entity's generation (all watched
+   *      entities go dead at once) and does NOT queue the death hook, so the dead-entity fires ride
+   *      `notifyWatches`' fallback path, which the skip gates. Covers watches on identity-only
+   *      entities too (their component is in no cleared archetype).
+   *
+   * NOT a bump site — {@link destroy}: a destroyed watched entity is queued on the reactive death
+   * hook and fired by `drainDeaths`, which runs BEFORE the Tier-2/3 pass and is never gated by this
+   * array. So per-entity death is unskippable by construction, and needs no componentMaxFrame bump.
+   *
+   * Grown lazily (copy-forward, zero-fill); a never-stamped id (0) reads older than any observer.
+   */
+  private componentMaxFrame = new Float64Array(0);
   /**
    * Master gate for ALL reactive bookkeeping (value stamps, structural bumps, tag/relation bumps) —
    * false until the world's reactive layer is first touched, so a world that never uses reactivity
@@ -392,13 +421,53 @@ export class RuntimeStore implements ECSStore {
   }
 
   /**
+   * Bump `cid`'s per-component MAX stamp to the current frame — the reactive fast-path gate (R5).
+   * Callers are already inside the `reactiveOn` gate (see the enumeration on {@link componentMaxFrame}).
+   * Grows the dense array to fit `cid` on first use (copy-forward, zero-fill).
+   */
+  private bumpComponentMax(cid: ComponentId): void {
+    if (cid >= this.componentMaxFrame.length) {
+      const next = new Float64Array(cid + 1);
+      next.set(this.componentMaxFrame);
+      this.componentMaxFrame = next;
+    }
+    this.componentMaxFrame[cid] = this.frameCounter;
+  }
+
+  /**
+   * Bump EVERY component id's max stamp (reset's wholesale-death case, R5) — see the componentMaxFrame
+   * enumeration §3. Grows to `componentCount()` so ids for components with no live column are covered
+   * too (a watch on an identity-only entity's component). Caller is inside the `reactiveOn` gate.
+   */
+  private bumpAllComponentMax(): void {
+    const n = componentCount();
+    if (n > this.componentMaxFrame.length) {
+      const next = new Float64Array(n);
+      next.set(this.componentMaxFrame);
+      this.componentMaxFrame = next;
+    }
+    this.componentMaxFrame.fill(this.frameCounter, 0, n);
+  }
+
+  /** @internal The per-component MAX stamp — 0 when never stamped/out of range. The Tier-2/3 skip gate (R5). */
+  componentFrame(cid: ComponentId): number {
+    return cid < this.componentMaxFrame.length ? this.componentMaxFrame[cid] : 0;
+  }
+
+  /**
    * Stamp `cid`'s column in `A` with the current frame (002 §2.1). No-op if `A` lacks the component,
    * so callers need not pre-check membership. A single integer store after a `componentSlot` scan.
+   * Also bumps the per-component MAX (R5 skip gate) — this is the sole owner of column value stamps,
+   * so every value-write path is covered by the one bump here (migrate stamps directly and bumps
+   * the MAX itself; see the {@link componentMaxFrame} enumeration).
    */
   private stampComponent(A: Archetype, cid: ComponentId): void {
     if (!this.reactiveOn) return;
     const slot = A.componentSlot(cid);
-    if (slot >= 0) A.lastWrittenFrame[slot] = this.frameCounter;
+    if (slot >= 0) {
+      A.lastWrittenFrame[slot] = this.frameCounter;
+      this.bumpComponentMax(cid);
+    }
   }
 
   /**
@@ -589,10 +658,19 @@ export class RuntimeStore implements ECSStore {
         const oldSlot = oldA.componentSlot(ids[slot]);
         if (oldSlot < 0) {
           lwf[slot] = this.frameCounter; // added column
+          this.bumpComponentMax(ids[slot]); // R5: a gained component is a value write — un-skip it
         } else {
           const carried = oldA.lastWrittenFrame[oldSlot];
           if (carried > lwf[slot]) lwf[slot] = carried; // carry the pre-migrate value stamp forward
+          // No MAX bump for carried columns: the original write already bumped componentMaxFrame at
+          // its frame, and that frame is what the destination stamp now carries (§ enumeration §1).
         }
+      }
+      // R5: REMOVED components (present in the source, gone in the destination) have no column left to
+      // stamp, but a Tier-2/3 watch must still fire `undefined` — bump the MAX so the skip can't eat it.
+      const oldIds = oldA.componentIds;
+      for (let i = 0; i < oldIds.length; i++) {
+        if (newA.componentSlot(oldIds[i]) < 0) this.bumpComponentMax(oldIds[i]);
       }
     }
   }
@@ -759,6 +837,10 @@ export class RuntimeStore implements ECSStore {
     this.table.reset();
     // A single tag/relation bump wakes any row-filtered / relation-seeded Tier-1 watch once (§4.2).
     if (this.reactiveOn) this.tagRelFrame = frame;
+    // R5: every watched entity just went dead (generations bumped) but reset does NOT queue the death
+    // hook, so the Tier-2/3 undefined-fires ride notifyWatches' fallback path — which the fast-path
+    // skip gates on componentMaxFrame. Bump EVERY component id so no such fire can be skipped.
+    if (this.reactiveOn) this.bumpAllComponentMax();
     // WorldObserver roster survives — one wholesale onReset AFTER teardown (never per-entity onDestroy).
     if (this.observerList !== null) this.emitReset();
   }

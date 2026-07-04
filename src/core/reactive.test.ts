@@ -387,6 +387,99 @@ describe("entity death and component removal (002 §3.4)", () => {
   });
 });
 
+describe("quiescent fast path (R5 — the per-component skip)", () => {
+  it("a churn on component A processes A's watch but SKIPS component B's map entirely", () => {
+    const w = createWorld();
+    const eA = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const eB = w.spawn({ components: [[Other, { n: 0 }]] });
+    const rt = w.runtime;
+
+    let aFires = 0;
+    let bFires = 0;
+    let bEqCalls = 0;
+    w.reactive.observeValue(eA, Pos, () => aFires++);
+    w.reactive.observeValue(
+      eB,
+      Other,
+      () => bFires++,
+      (a, b) => {
+        bEqCalls++; // eq only runs when B's cell is actually processed
+        return (a as { n: number }).n === (b as { n: number }).n;
+      },
+    );
+    w.reactive.notify(); // settle both watermarks
+
+    const spy = vi.spyOn(rt, "archetypeOf"); // called once per cell only in notifyWatches phase 2
+    for (let i = 0; i < 20; i++) {
+      w.edit(eA).set(Pos, { x: i + 1, y: 0 }); // churn A only — B is untouched
+      w.reactive.notify();
+    }
+
+    expect(aFires).toBe(20); // A fired every frame — the machinery genuinely ran
+    expect(bFires).toBe(0); // B never fired
+    expect(bEqCalls).toBe(0); // B's value was never decoded/compared
+    const aCellWork = spy.mock.calls.filter((c) => c[0] === eA).length;
+    const bCellWork = spy.mock.calls.filter((c) => c[0] === eB).length;
+    expect(aCellWork).toBe(20); // A's cell walked each frame
+    expect(bCellWork).toBe(0); // B's cell NEVER walked — the per-component skip fired
+    spy.mockRestore();
+  });
+
+  it("a migrate-away removal of B still fires undefined even while A is the churning component", () => {
+    const w = createWorld();
+    const eA = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const eB = w.spawn({ components: [[Pos, { x: 1, y: 1 }], [Other, { n: 5 }]] });
+    const seen: unknown[] = [];
+    w.reactive.observeValue(eA, Pos, () => {}); // a live watch on the churning component
+    w.reactive.observeValue(eB, Other, (v) => seen.push(v));
+    w.reactive.notify(); // settle
+
+    w.edit(eA).set(Pos, { x: 9, y: 0 }); // A churns (a different component goes dirty)
+    w.removeComponent(eB, Other); // migrate-away removes Other — must bump componentMaxFrame[Other]
+    w.reactive.notify();
+    expect(seen).toEqual([undefined]); // the removal fire was NOT swallowed by the skip
+
+    w.reactive.notify();
+    expect(seen).toEqual([undefined]); // and only once
+  });
+
+  it("a destroy of B still fires undefined while A churns (drainDeaths runs before the skip)", () => {
+    const w = createWorld();
+    const eA = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const eB = w.spawn({ components: [[Other, { n: 5 }]] });
+    const seen: unknown[] = [];
+    w.reactive.observeValue(eA, Pos, () => {});
+    w.reactive.observeValue(eB, Other, (v) => seen.push(v));
+    w.reactive.notify(); // settle
+
+    w.edit(eA).set(Pos, { x: 9, y: 0 }); // A churns
+    w.destroy(eB); // queues the eager death hook — never subject to the componentMaxFrame skip
+    w.reactive.notify();
+    expect(seen).toEqual([undefined]);
+  });
+
+  it("re-adding B's component after a removal re-fires through the skip (migrate added-column un-skips)", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Pos, { x: 5, y: 0 }]] });
+    const seen: unknown[] = [];
+    w.reactive.observeValue(e, Pos, (v) => seen.push(v));
+
+    w.removeComponent(e, Pos);
+    w.reactive.notify();
+    expect(seen).toEqual([undefined]);
+
+    // Several idle passes — the skip must hold (no spurious fire) while Pos is absent…
+    w.reactive.notify();
+    w.reactive.notify();
+    expect(seen).toEqual([undefined]);
+
+    // …and the re-add must wake it again (migrate stamps the added column → componentMaxFrame bump).
+    w.addComponent(e, Pos, { x: 7, y: 0 });
+    w.reactive.notify();
+    expect(seen).toEqual([undefined, { x: 7, y: 0 }]);
+  });
+});
+
 describe("reentrancy / robustness (002 §6)", () => {
   it("unsubscribing from inside a callback is safe and never skips a sibling", () => {
     const w = createWorld();

@@ -95,6 +95,15 @@ export class Reactive {
   private readonly queryWatches: QueryWatch[] = [];
   /** (component, entity) → the watches on that cell. An array so a second watch never evicts the first. */
   private readonly watched = new Map<ComponentId, Map<Entity, Watch[]>>();
+  /**
+   * Per-component quiescent-skip watermark (review-part1 R5): a conservative lower bound on the
+   * minimum `lastSeen` across the component's live watches. `notifyWatches` skips a whole component's
+   * map when `store.componentFrame(cid) <= componentSeen[cid]` — one compare, no per-cell walk, no
+   * allocation. Set to `frame − 1` when a component's first watch registers, and REPAIRED to `frame`
+   * (exact — every surviving watch's `lastSeen` is advanced to `frame` during a full process) after
+   * the map is walked. Removal leaves it (still a valid lower bound); it self-heals on the next walk.
+   */
+  private readonly componentSeen = new Map<ComponentId, number>();
   /** resource → its watches (003 §1.3). A collection, like the entity cells; no death path. */
   private readonly resourceWatched = new Map<ResourceId, ResourceWatch[]>();
   /** Entities the eager death hook saw destroyed, awaiting an undefined-fire at the next notify (§3.4). */
@@ -215,6 +224,9 @@ export class Reactive {
       lastSeen: this.store.frame - 1,
     };
     arr.push(watch);
+    // Seed the skip watermark on the component's FIRST watch (R5). A later watch registers at a
+    // higher frame (lastSeen ≥ the existing watermark), so it never lowers the bound — leave it.
+    if (!this.componentSeen.has(c.id)) this.componentSeen.set(c.id, watch.lastSeen);
     this.retainLifecycle(); // counts EACH watch (many per cell), not each cell
     return () => this.removeWatch(c.id, e, watch);
   }
@@ -265,16 +277,25 @@ export class Reactive {
     }
   }
 
-  /** (2) Tier 1 (§3.1/§4.2). Iterates a snapshot + the `dead` flag so a callback may unsubscribe safely. */
+  /**
+   * (2) Tier 1 (§3.1/§4.2). Two-phase so the all-clean path allocates NOTHING (R5): phase 1 scans
+   * the live array — safe because it never fires, so a callback can't mutate it — and collects the
+   * dirty watches only if any exist; phase 2 fires them off that snapshot, re-checking `dead` so a
+   * callback that unsubscribes a sibling mid-pass is honored. Semantics unchanged from the old
+   * snapshot-every-pass form.
+   */
   private notifyQueries(): void {
-    const frame = this.store.frame;
     const tagRel = this.store.lastTagRelFrame;
-    for (const w of [...this.queryWatches]) {
-      if (w.dead) continue;
-      if (queryDirty(w, tagRel)) {
-        fire0(w.cb);
-        w.lastSeen = frame;
-      }
+    let dirty: QueryWatch[] | null = null;
+    for (const w of this.queryWatches) {
+      if (!w.dead && queryDirty(w, tagRel)) (dirty ??= []).push(w);
+    }
+    if (dirty === null) return; // no matching change since last seen — zero allocation
+    const frame = this.store.frame;
+    for (const w of dirty) {
+      if (w.dead) continue; // an earlier callback in this pass may have removed it
+      fire0(w.cb);
+      w.lastSeen = frame;
     }
   }
 
@@ -303,15 +324,39 @@ export class Reactive {
     }
   }
 
-  /** (3) Tier 2/3 (§3.2/§3.3). Snapshot each cell so death-removal / self-unsub during dispatch is safe. */
+  /**
+   * (3) Tier 2/3 (§3.2/§3.3). Two-phase for the quiescent fast path (R5):
+   *
+   * Phase 1 — a live-key scan (no fire, so `this.watched` can't mutate under us) compares
+   * `store.componentFrame(cid)` against the component's skip watermark. A clean component costs ONE
+   * compare and allocates nothing; the whole map is skipped. Only components that saw a value write,
+   * a migrate add/remove of one of their columns, or a reset are collected — see the bump-site
+   * enumeration on RuntimeStore.componentMaxFrame (per-entity DEATHS are handled by drainDeaths,
+   * which ran before this pass, so they don't need the array).
+   *
+   * Phase 2 — process only dirty components, snapshotting each cell/array so a callback that
+   * registers or unsubscribes a watch mid-dispatch can't corrupt iteration. Every surviving watch's
+   * `lastSeen` is advanced to `frame` (even a clean one), which lets the watermark settle to `frame`
+   * so the next idle pass skips.
+   */
   private notifyWatches(): void {
-    const frame = this.store.frame;
-    for (const cid of [...this.watched.keys()]) {
+    const store = this.store;
+    // Phase 1 — collect dirty components without allocating on the all-clean path.
+    let dirty: ComponentId[] | null = null;
+    for (const cid of this.watched.keys()) {
+      const seen = this.componentSeen.get(cid);
+      if (seen === undefined || store.componentFrame(cid) > seen) (dirty ??= []).push(cid);
+    }
+    if (dirty === null) return; // fully quiescent — no per-cell work, no allocation
+    // Phase 2 — process the dirty components.
+    const frame = store.frame;
+    for (const cid of dirty) {
       const m = this.watched.get(cid);
-      if (m === undefined) continue;
+      if (m === undefined) continue; // emptied by a callback earlier in this pass
       for (const [e, arr] of [...m]) {
-        if (!this.store.isAlive(e)) {
-          // Fallback death path (§3.4) — eager cleanup usually removed it at drainDeaths already.
+        if (!store.isAlive(e)) {
+          // Fallback death path (§3.4) — eager cleanup usually removed it at drainDeaths already, but
+          // a reset() bumps generations without queueing the hook, so a reset-killed watch lands here.
           for (const w of [...arr]) {
             if (w.dead) continue;
             w.hadValue = false;
@@ -321,7 +366,7 @@ export class Reactive {
           }
           continue;
         }
-        const arch = this.store.archetypeOf(e);
+        const arch = store.archetypeOf(e);
         const slot = arch !== undefined ? arch.componentSlot(cid) : -1;
         const present = slot >= 0;
         const stamp = present ? (arch as Archetype).lastWrittenFrame[slot] : 0;
@@ -331,22 +376,23 @@ export class Reactive {
         for (const w of [...arr]) {
           if (w.dead) continue;
           if (present) {
-            if (stamp <= w.lastSeen) continue;
-            if (!vRead) {
-              v = this.store.get(e, w.component);
-              vRead = true;
-            }
-            if (w.tier === 2) {
-              fire(w.cb, v);
-            } else {
-              const changed = w.box === undefined || v === undefined ? w.box !== v : !w.eq(v, w.box);
-              if (changed) {
-                w.box = v;
-                fire(w.cb, v);
+            if (stamp > w.lastSeen) {
+              if (!vRead) {
+                v = store.get(e, w.component);
+                vRead = true;
               }
+              if (w.tier === 2) {
+                fire(w.cb, v);
+              } else {
+                const changed = w.box === undefined || v === undefined ? w.box !== v : !w.eq(v, w.box);
+                if (changed) {
+                  w.box = v;
+                  fire(w.cb, v);
+                }
+              }
+              w.hadValue = true;
             }
-            w.hadValue = true;
-            w.lastSeen = frame;
+            w.lastSeen = frame; // ALWAYS advance (even a clean cell) so the watermark can settle (R5)
           } else if (w.hadValue) {
             // The watched COMPONENT was removed while the entity lives — fire `undefined` once and
             // keep the watch, so a later re-add re-fires via migrate's added-column stamp (§3.4).
@@ -354,9 +400,15 @@ export class Reactive {
             w.box = undefined;
             fire(w.cb, undefined);
             w.lastSeen = frame;
+          } else {
+            w.lastSeen = frame; // absent + already fired the removal — advance so the watermark settles
           }
         }
       }
+      // The map was fully walked → every surviving watch now has lastSeen == frame, so the watermark
+      // is exactly `frame` (idle passes then skip). If death-removal emptied it, drop the entry.
+      if (this.watched.has(cid)) this.componentSeen.set(cid, frame);
+      else this.componentSeen.delete(cid);
     }
   }
 
@@ -435,7 +487,10 @@ export class Reactive {
       const i = arr.indexOf(watch);
       if (i >= 0) arr.splice(i, 1);
       if (arr.length === 0) m!.delete(e);
-      if (m!.size === 0) this.watched.delete(cid);
+      if (m!.size === 0) {
+        this.watched.delete(cid);
+        this.componentSeen.delete(cid); // no watches left on cid — drop its skip watermark (R5)
+      }
     }
     this.releaseLifecycle();
   }
