@@ -77,6 +77,12 @@ function decodeFrame(buf: ArrayBuffer): Envelope | null {
       from: PeerId;
       to?: PeerId;
     };
+    // The relay is a dumb byte pipe, so header fields are PEER-CONTROLLED: validate shape before use.
+    // A `from`-less hello would otherwise make a bootstrapped peer reply `to: undefined` — an
+    // un-addressed room-wide snapshot any hostile member could trigger at will (review finding).
+    if (typeof header.from !== "string" || header.from.length === 0) return null;
+    if (header.to !== undefined && typeof header.to !== "string") return null;
+    if (header.kind !== "durable" && header.kind !== "ephemeral" && header.kind !== "hello" && header.kind !== "snapshot") return null;
     const payloadLen = buf.byteLength - 4 - headerLen;
     const bytes = payloadLen > 0 ? new Uint8Array(buf.slice(4 + headerLen)) : undefined;
     return { kind: header.kind, from: header.from, to: header.to, bytes };

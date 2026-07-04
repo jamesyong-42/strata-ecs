@@ -134,6 +134,9 @@ export function wireCollab(opts: WireOptions): CollabWiring {
           // or they would quarantine as missing-deps. Existing peers absorb my broadcast idempotently below.
           applyDurable(env.bytes);
           become("collab: joined room — synced from a peer");
+          // SCALE NOTE: on a simultaneous whole-room reconnect every peer broadcasts its base — O(N²)
+          // snapshots. Fine for a demo-sized room; a bigger deployment wants a responder-election or a
+          // server-held base (which stops being a dumb relay). Deliberately out of demo scope.
           channel.post({ kind: "snapshot", from: peerId, bytes: doc.exportSnapshot() });
         } else if (bootstrapped && env.to === undefined) {
           // A peer sharing its base with the room (a joiner, or a resumer after reconnect) — absorb it
@@ -181,6 +184,9 @@ export function wireCollab(opts: WireOptions): CollabWiring {
   if (channel.lifecycle !== undefined) {
     channel.lifecycle.onClose(() => {
       // A dropped socket may have dropped increments: drop back to un-bootstrapped and BUFFER inbound again.
+      // Discard anything already buffered — the reconnect snapshot subsumes it, and a flapping relay must
+      // not accumulate an unbounded backlog (review finding: the buffer was only cleared on bootstrap).
+      buffer.length = 0;
       bootstrapped = false;
       if (timer !== undefined) {
         clearTimeout(timer);
