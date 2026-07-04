@@ -7,8 +7,9 @@
 import { cam } from "../app/camera";
 import { interaction } from "../app/tools";
 import { world } from "../app/worldRef";
-import { selectedBoxes } from "../ecs/queries";
-import { Position, Size } from "../ecs/schema";
+import { activeCollab } from "../collab/mode";
+import { remotePresence, selectedBoxes } from "../ecs/queries";
+import { CursorPos, Position, PresenceInfo, SelectionRef, Size } from "../ecs/schema";
 
 const SELECT_BLUE = "#58a6ff";
 
@@ -101,5 +102,97 @@ export class OverlayLayer {
       ctx.fillRect(x, y, w2, h2);
       ctx.strokeRect(x, y, w2, h2);
     }
+
+    // remote presence (collab): peers' selection outlines (world-space) + live cursors (screen-space).
+    // Read every frame off the `Not(Local)` projection — no repaint flag needed because the overlay
+    // already repaints every frame, so a moving remote cursor animates for free (never a content repaint).
+    this.paintPresence(ctx, px1);
+  }
+
+  /**
+   * Draw remote peers' presence. Two passes over `[CursorPos, PresenceInfo, Not(Local)]` (a handful of
+   * entities): (1) a `SelectionRef` facet resolves through `doc.resolve` to a colored outline in WORLD
+   * space, skipped if the referenced shape isn't on this peer yet; (2) a labeled cursor in SCREEN space
+   * so it stays a constant size at any zoom. Empty and free in local-only mode.
+   */
+  private paintPresence(ctx: CanvasRenderingContext2D, px1: number): void {
+    const collab = activeCollab();
+
+    // 1. Selection outlines — world-space (the transform the marquee block left set).
+    ctx.lineWidth = 1.5 * px1;
+    world.query(remotePresence).each((b) => {
+      for (const r of b) {
+        const e = b.entity(r);
+        const sel = world.get(e, SelectionRef);
+        if (sel === undefined || sel.targetKey === null || collab === null) continue;
+        const target = collab.doc.resolve(sel.targetKey);
+        if (target === undefined || !world.isAlive(target)) continue; // peer selected a shape we can't resolve — skip
+        const p = world.get(target, Position);
+        const s = world.get(target, Size);
+        if (p === undefined || s === undefined) continue;
+        ctx.strokeStyle = world.get(e, PresenceInfo)?.color ?? SELECT_BLUE;
+        ctx.strokeRect(p.x - s.w / 2 - 3 * px1, p.y - s.h / 2 - 3 * px1, s.w + 6 * px1, s.h + 6 * px1);
+      }
+    });
+
+    // 2. Cursors — screen-space (constant size). Convert world → screen (the inverse of screenToWorld).
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    world.query(remotePresence).each((b) => {
+      for (const r of b) {
+        const e = b.entity(r);
+        const pos = world.get(e, CursorPos);
+        const info = world.get(e, PresenceInfo);
+        if (pos === undefined || info === undefined) continue;
+        const sx = (pos.x - cam.x) * cam.zoom + cam.w / 2;
+        const sy = (pos.y - cam.y) * cam.zoom + cam.h / 2;
+        if (sx < -40 || sy < -40 || sx > cam.w + 200 || sy > cam.h + 40) continue; // off-screen cursor — skip
+        this.drawCursor(ctx, sx, sy, info.name ?? "peer", info.color ?? SELECT_BLUE);
+      }
+    });
+  }
+
+  /** One remote cursor: a filled arrow with the peer's color + a name pill, in screen (CSS) px. */
+  private drawCursor(ctx: CanvasRenderingContext2D, x: number, y: number, name: string, color: string): void {
+    ctx.save();
+    ctx.translate(x, y);
+
+    // the arrow — tip at (0,0), the true cursor position
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, 17);
+    ctx.lineTo(4.5, 12.5);
+    ctx.lineTo(7.5, 19);
+    ctx.lineTo(9.5, 18);
+    ctx.lineTo(6.5, 11.8);
+    ctx.lineTo(12, 11);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.strokeStyle = "rgba(13,17,23,.85)";
+    ctx.lineWidth = 1;
+    ctx.fill();
+    ctx.stroke();
+
+    // the name pill, offset from the tip
+    ctx.font = "600 11px ui-sans-serif, system-ui, sans-serif";
+    ctx.textBaseline = "middle";
+    const padX = 6;
+    const w = ctx.measureText(name).width + padX * 2;
+    const h = 16;
+    const lx = 13;
+    const ly = 9;
+    ctx.beginPath();
+    const rr = 4;
+    ctx.moveTo(lx + rr, ly);
+    ctx.arcTo(lx + w, ly, lx + w, ly + h, rr);
+    ctx.arcTo(lx + w, ly + h, lx, ly + h, rr);
+    ctx.arcTo(lx, ly + h, lx, ly, rr);
+    ctx.arcTo(lx, ly, lx + w, ly, rr);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.fillStyle = "#0d1117";
+    ctx.fillText(name, lx + padX, ly + h / 2 + 0.5);
+
+    ctx.restore();
   }
 }

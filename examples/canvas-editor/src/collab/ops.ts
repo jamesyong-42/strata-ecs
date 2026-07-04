@@ -28,6 +28,12 @@ import { activeCollab } from "./mode";
  * draft, and return the twin handle. The create is now ONE document change every peer converges to.
  * Reuses the draft's ZIndex so `stats.zTop` is not double-bumped; `stats.entities` already counted the
  * draft, and the twin replaces it one-for-one, so the tally is left untouched.
+ *
+ * NO promotion FLICKER (the D0-flagged concern): the draft is destroyed here, between frames, and the twin
+ * projects at the very NEXT `world.sync()` — which the frame loop runs BEFORE the paint (§16.2). Because a
+ * local durable commit projects on the local sync (no round-trip — see the D0 smoke's "A projects its own
+ * create"), the twin is already in the runtime when that frame paints, so no frame is ever painted with the
+ * shape missing. The swap is invisible; there is nothing to bridge.
  */
 export function commitCreate(draft: Entity): Entity | undefined {
   const collab = activeCollab();

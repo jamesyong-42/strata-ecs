@@ -157,3 +157,18 @@ body {
   margin-top: 4px;
   color: #8b949e;
 }
+
+/* Collab sync chips — hidden until a ?collab session sets them (set-on-change; never polled). */
+#hud .hud-collab {
+  display: none;
+  margin-bottom: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(63, 185, 80, 0.16);
+  color: #3fb950;
+  font-size: 11px;
+}
+
+#hud .hud-collab.on {
+  display: block;
+}

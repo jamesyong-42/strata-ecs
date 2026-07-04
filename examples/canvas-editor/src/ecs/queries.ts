@@ -3,8 +3,8 @@
  * store, so queries are constants you import, not something you build per frame (§6).
  */
 
-import { defineQuery, Related } from "strata-ecs";
-import { ConnectedTo, Fill, Kind, Label, Position, Selected, Size, Velocity, ZIndex } from "./schema";
+import { defineQuery, Local, Not, Related } from "strata-ecs";
+import { ConnectedTo, CursorPos, Fill, Kind, Label, Position, PresenceInfo, Selected, Size, Velocity, ZIndex } from "./schema";
 
 /** Everything CullSystem sweeps: the drawable document. */
 export const renderable = defineQuery([Position, Size, Fill, Kind, ZIndex]);
@@ -23,3 +23,8 @@ export const selectedBoxes = defineQuery([Position, Size, Selected]);
 
 /** The simulate phase integrates these (E2). */
 export const simulated = defineQuery([Position, Velocity]);
+
+/** Remote peers' live presence (collab). `Not(Local)` excludes MY own ephemeral entity — the
+ *  overlay draws a labeled cursor per match, and resolves any `SelectionRef` facet to an
+ *  outline. Empty (zero cost) in local-only mode, where nothing spawns these. */
+export const remotePresence = defineQuery([CursorPos, PresenceInfo, Not(Local)]);

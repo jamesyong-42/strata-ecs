@@ -11,6 +11,7 @@ import { selectedBoxes } from "../ecs/queries";
 import { Fill, Kind, Label, Position, Selected, Size, Velocity, ZIndex } from "../ecs/schema";
 import { commitDelete, commitDuplicate } from "../collab/ops";
 import { activeCollab } from "../collab/mode";
+import { reportSelection } from "../collab/presence";
 import { mutate, stats } from "./commands";
 import { world } from "./worldRef";
 
@@ -41,6 +42,7 @@ export function setSelection(entities: readonly Entity[], additive = false): voi
     for (const e of prev) w.removeTag(e, Selected);
     for (const e of entities) if (w.isAlive(e) && !w.hasTag(e, Selected)) w.addTag(e, Selected);
   });
+  reportSelection(selectedEntities()); // collab presence: publish the primary selection (no-op in local mode)
 }
 
 export function toggleSelection(e: Entity): void {
@@ -49,6 +51,7 @@ export function toggleSelection(e: Entity): void {
     if (w.hasTag(e, Selected)) w.removeTag(e, Selected);
     else w.addTag(e, Selected);
   });
+  reportSelection(selectedEntities());
 }
 
 export function clearSelection(): void {

@@ -33,6 +33,7 @@ export class Hud {
   private overlayEma = 0;
   private lastText = 0;
   private readonly note: HTMLDivElement;
+  private readonly collab: HTMLDivElement;
   private readonly body: HTMLDivElement;
   private readonly spark: CanvasRenderingContext2D;
   private readonly frameRing = new Float32Array(SAMPLES);
@@ -44,12 +45,14 @@ export class Hud {
   constructor(root: HTMLElement, actions: HudActions) {
     root.innerHTML =
       `<div class="hud-title">strata canvas</div>` +
+      `<div class="hud-collab"></div>` +
       `<div class="hud-body"></div>` +
       `<canvas class="hud-spark" width="${SPARK_W * 2}" height="${SPARK_H * 2}" style="width:${SPARK_W}px;height:${SPARK_H}px"></canvas>` +
       `<div class="hud-controls"></div>` +
       `<div class="hud-note"></div>`;
     this.body = root.querySelector(".hud-body") as HTMLDivElement;
     this.note = root.querySelector(".hud-note") as HTMLDivElement;
+    this.collab = root.querySelector(".hud-collab") as HTMLDivElement;
     const sparkEl = root.querySelector(".hud-spark") as HTMLCanvasElement;
     this.spark = sparkEl.getContext("2d") as CanvasRenderingContext2D;
     this.spark.scale(2, 2);
@@ -104,6 +107,13 @@ export class Hud {
 
   setNote(text: string): void {
     this.note.textContent = text;
+  }
+
+  /** Collab sync chips (room · peers · pending/held/applied). Driven by observeResource on the two
+   *  status resources — set-on-change, so an idle network never calls this (the HUD never polls). */
+  setCollabChips(text: string): void {
+    this.collab.textContent = text;
+    this.collab.classList.add("on");
   }
 
   /** Keep the button in step with the WORLD's SimMode (boot ?sim=1, autosave restore) —

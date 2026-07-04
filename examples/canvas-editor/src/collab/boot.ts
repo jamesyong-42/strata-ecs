@@ -24,6 +24,7 @@ import { zoomToFit } from "../app/camera";
 import { seedBoard } from "../app/seed";
 import { world } from "../app/worldRef";
 import { setActiveCollab } from "./mode";
+import { startPresence } from "./presence";
 import { createBroadcastChannel, type Channel } from "./transport";
 
 /** How long a joiner waits for a `snapshot` before deciding it is the first peer and seeding. */
@@ -40,6 +41,8 @@ export interface WireOptions {
   onStatus?: (msg: string) => void;
   /** Fires exactly once, the moment this peer becomes bootstrapped (seeded first, or joined via snapshot). */
   onBootstrapped?: () => void;
+  /** Inbound presence blobs (D1): the transport's `ephemeral` envelopes → the ephemeral source's `apply`. */
+  onEphemeral?: (bytes: Uint8Array) => void;
   helloTimeoutMs?: number;
 }
 
@@ -119,7 +122,11 @@ export function wireCollab(opts: WireOptions): CollabWiring {
         // joiner took the first; ignore the rest (the cheap-responder tradeoff).
         return;
       case "ephemeral":
-        return; // D1: presence
+        // Presence blobs (D1): hand the bytes to the ephemeral source (boot wires `onEphemeral` to
+        // `source.apply`). No bootstrap gating — ephemeral is TTL-self-healing, so a blob arriving before
+        // durable bootstrap simply projects a live peer; it never presupposes the document's causal base.
+        if (env.bytes !== undefined) opts.onEphemeral?.(env.bytes);
+        return;
     }
   });
 
@@ -155,25 +162,43 @@ export function wireCollab(opts: WireOptions): CollabWiring {
  * localStorage in collab mode — persistence stays a local-only concern (the caller skips `setOnMutate`).
  * The board seeds a demo-friendly count (a bootstrap snapshot ships over the wire on every join).
  */
-export function startCollabBoot(room: string, count: number, notify: (msg: string) => void): CollabWiring {
+export function startCollabBoot(
+  room: string,
+  count: number,
+  notify: (msg: string) => void,
+  renderChips: (text: string) => void,
+): CollabWiring {
   const peerId = crypto.randomUUID();
   const doc = createDurableStore(new LoroDoc()); // the ONE place a LoroDoc enters (§14.2)
   attachDurable(world, doc); // project the (empty) document in; register the drain — kept for the app's life
   setActiveCollab({ room, peerId, doc });
 
+  // ONE channel, shared by durable + presence (a single `onMessage` handler in wireCollab routes both
+  // envelope kinds — the transport's handler is replace-on-set, so the two layers cannot each register).
+  const channel = createBroadcastChannel(room, peerId);
+  // Presence rides the SAME peerId as the durable session (design §15's presence sketch) — session-unique.
+  const presence = startPresence({ peerId, room, channel, doc, renderChips });
+
   const seedCount = Math.min(count, 400); // keep the shared board + its bootstrap snapshot demo-sized
   const wiring = wireCollab({
     peerId,
-    channel: createBroadcastChannel(room, peerId),
+    channel,
     doc,
     seedFirst: () => doc.transaction((tx) => seedBoard(tx, seedCount)),
     onStatus: notify,
     // The seeded/synced entities reach the runtime via projection on the next sync()s — frame the board
     // once they are placed (two frames is safe: sync drains, then the board is queryable).
     onBootstrapped: () => requestAnimationFrame(() => requestAnimationFrame(() => zoomToFit())),
+    onEphemeral: presence.applyInbound, // inbound presence blobs → the ephemeral source's apply
     helloTimeoutMs: HELLO_TIMEOUT_MS,
   });
 
-  window.addEventListener("pagehide", () => wiring.dispose());
+  // pagehide: leave() ships MY tombstones over the channel FIRST (peers despawn me now, not on TTL), then
+  // dispose() tears down the durable channel + the ephemeral binding.
+  window.addEventListener("pagehide", () => {
+    presence.leave();
+    wiring.dispose();
+    presence.dispose();
+  });
   return wiring;
 }

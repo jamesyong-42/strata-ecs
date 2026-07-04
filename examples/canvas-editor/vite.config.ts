@@ -23,6 +23,7 @@ export default defineConfig({
           // prefix semantics and would rewrite `strata-ecs/tools` into `<src/index.ts>/tools`.
           { find: /^strata-ecs\/tools$/, replacement: fileURLToPath(new URL("../../src/tools/index.ts", import.meta.url)) },
           { find: /^strata-ecs\/durable$/, replacement: fileURLToPath(new URL("../../src/durable/index.ts", import.meta.url)) },
+          { find: /^strata-ecs\/ephemeral$/, replacement: fileURLToPath(new URL("../../src/ephemeral/index.ts", import.meta.url)) },
           { find: /^strata-ecs$/, replacement: fileURLToPath(new URL("../../src/index.ts", import.meta.url)) },
         ],
   },

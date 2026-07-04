@@ -86,6 +86,23 @@ function defineSchema() {
       on: "bool",
       bound: field("f32", { default: 4000 }),
     }),
+
+    // ── collab presence (ephemeral — Part IV, `?collab` mode only) ─────────────────────
+    // These live on EPHEMERAL entities (strata-ecs/ephemeral), never on the durable document:
+    // one per peer, self-expiring on TTL, projected in as `Not(Local)` for everyone else. They
+    // are deliberately NOT drawable columns (the `renderable` query never names them), so a
+    // moving remote cursor repaints the every-frame OVERLAY only and never wakes a content
+    // repaint (design §15.6). Unused in local-only mode — the store simply never spawns them.
+
+    /** A peer's live pointer, in WORLD coordinates (so it lands on the same shape at any zoom). */
+    CursorPos: defineComponent("CursorPos", { x: "f32", y: "f32" }),
+    /** A peer's display identity — a deterministic handle + a hashed color, derived from its
+     *  session peerId (never the key prefix, 006 B5). What the cursor label + selection tint use. */
+    PresenceInfo: defineComponent("PresenceInfo", { name: "string", color: "string" }),
+    /** Membership-as-signal (design §15.6): PRESENT while the peer has a primary selection,
+     *  ABSENT otherwise. `targetKey` is the durable `doc.keyOf` of the selected shape — a `key`
+     *  field (a cross-store reference, resolved with `doc.resolve` on the receiver, §14.3). */
+    SelectionRef: defineComponent("SelectionRef", { targetKey: "key" }),
   };
 }
 
@@ -107,6 +124,9 @@ export const {
   Gesture,
   Camera,
   SimMode,
+  CursorPos,
+  PresenceInfo,
+  SelectionRef,
 } = schema;
 
 // Editing the schema = full page reload, never a hot re-run (the registry is process-global).

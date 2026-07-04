@@ -36,6 +36,43 @@ The **observer panel** (top right) is not app code — it's `strata-ecs/tools`, 
 own dev tool, mounted with one call and an app-supplied labeling callback
 (`attachObserver(world, { describe })`).
 
+## Collab mode — the same editor, multiplayer (`?collab`)
+
+Add `?collab` (or `?collab=<room>`) to the URL and open the page in **two tabs**. There is **no
+server**: a `BroadcastChannel("strata-collab:<room>")` between same-origin tabs is the whole
+transport. The first tab seeds the board into a shared document; the second broadcasts a `hello`
+and bootstraps from a snapshot, then both edit **one live document**.
+
+```sh
+pnpm example:canvas
+# open http://localhost:5173/?collab=demo   ← then duplicate the tab
+```
+
+**What to try (two tabs, side by side):**
+
+| Do this | What you see — and who owns it |
+|---|---|
+| Both tabs grab the **same shape** and drag it at once | your drag holds locally while the other tab's edits to that same cell are held OFF; on release both tabs **converge** on the last committer's position (**drag protection**, design §18.5) |
+| Drag a shape in tab A while tab B **deletes** it | the delete converges; your drag ends against a shape that's gone, cleanly — no dangling handle, arrows cascade on both tabs |
+| Edit a shape's **fill** in A while B **drags** it | both land — fill and position are **separate components**, so they never contend (component-granular convergence, §13.4) |
+| Move your mouse; watch the **other tab** | a labeled **remote cursor** tracks you live; select a shape and a colored **selection outline** appears in the other tab (presence — ephemeral, self-expiring on TTL) |
+| Watch the green **sync chips** in the HUD | `room · peers N · pending/held/applied` — updated only when something actually changes (set-on-change; an idle room posts zero updates) |
+| Close one tab | its cursor + selection vanish in the other within a moment (`leave()` on `pagehide`, or the TTL as the guarantee) |
+
+**What the app owns vs. what the framework owns.** The app owns exactly two small, labeled things:
+the **transport** (`collab/transport.ts` — one `BroadcastChannel`, four envelope kinds, zero
+conflict code) and the **bootstrap policy** (`collab/boot.ts` — the hello/snapshot handshake and the
+seed-vs-join decision). Everything hard is the framework's: **convergence** (committer-wins,
+drag-protected, component-granular) lives behind `doc.applyRemote`; **presence** (writer-partitioned
+cursors that project as `Not(Local)` entities and self-expire) is `strata-ecs/ephemeral`. There is no
+manual dirty tracking, no conflict-resolution code, and no presence protocol anywhere in this
+example — their **absence** is the demo. Undo is **local-ops-only** by construction in the durable
+layer (proven in the framework's durable suite); the example doesn't yet bind a key to it.
+
+`?script=collab-smoke` runs the whole story headlessly in one page — two worlds over an in-memory
+loopback: bootstrap, create, drag-vs-remote-edit, delete, and presence (cursor + selection projection,
+`leave()`) — and reports `PASS n/n` to the HUD note.
+
 ## Architecture — a file per lesson
 
 ```

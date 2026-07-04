@@ -24,7 +24,7 @@ import { clearBoard, stressSpawn } from "./app/stress";
 import { interaction, pointerDown, pointerMove, pointerUp, setTool } from "./app/tools";
 import { world } from "./app/worldRef";
 import { startCollabBoot } from "./collab/boot";
-import { runCollabSmoke } from "./collab/smoke";
+import { injectDemoCursors, runCollabSmoke } from "./collab/smoke";
 import { buildPipeline, SYSTEM_NAMES, type SystemName } from "./ecs/pipeline";
 import { cullFlags } from "./ecs/systems/cull";
 import { ContentLayer, lodFlags } from "./render/contentLayer";
@@ -107,7 +107,7 @@ fitCanvases();
 // ?fresh=1) always seeds; otherwise the autosave — world.export() bytes in localStorage — restores the
 // last session, viewport included; an incompatible autosave (schema drift) is quarantined, never a brick.
 if (collabRoom !== null) {
-  startCollabBoot(collabRoom, count, notify);
+  startCollabBoot(collabRoom, count, notify, (chips) => hud.setCollabChips(chips));
   // persistence stays local-only — setOnMutate is deliberately NOT called (no autosave in collab).
 } else {
   let booted = false;
@@ -198,6 +198,9 @@ if (params.get("script") === "collab-smoke") {
   setTimeout(() => {
     try {
       notify(runCollabSmoke());
+      // Make two remote cursors visible in the running app (the presence-rendering demo) so the PASS
+      // frame shows what a second tab looks like — the foundation for D2's two-cursor screenshot.
+      injectDemoCursors();
     } catch (err) {
       notify(`collab-smoke: FAIL — threw: ${err instanceof Error ? err.message : String(err)}`);
     }

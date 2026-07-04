@@ -7,6 +7,7 @@
  * middle-drag or space-drag pan, Shift+1 zoom-to-fit.
  */
 
+import { reportCursor } from "../collab/presence";
 import { panBy, screenToWorld, zoomAt, zoomToFit } from "./camera";
 import { clearSelection, deleteSelection, duplicateSelection } from "./editorOps";
 import {
@@ -91,7 +92,9 @@ export function attachInput(target: HTMLElement, notify: (msg: string) => void):
       panBy(dx, dy);
       return;
     }
-    pointerMove(info(e), dx, dy);
+    const p = info(e);
+    reportCursor(p.wx, p.wy); // collab presence — world coords onto MY ephemeral cursor (no-op in local mode)
+    pointerMove(p, dx, dy);
   });
 
   target.addEventListener("pointerup", (e) => {

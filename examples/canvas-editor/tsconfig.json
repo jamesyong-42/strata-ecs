@@ -27,7 +27,8 @@
     "paths": {
       "strata-ecs": ["../../src/index.ts"],
       "strata-ecs/tools": ["../../src/tools/index.ts"],
-      "strata-ecs/durable": ["../../src/durable/index.ts"]
+      "strata-ecs/durable": ["../../src/durable/index.ts"],
+      "strata-ecs/ephemeral": ["../../src/ephemeral/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts"]
