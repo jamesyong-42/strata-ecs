@@ -6,7 +6,7 @@
  * bails out (no render) when `getSnapshot` returns the same boxed reference, which is exactly what the
  * Tier-3 equality box guarantees — so an equal-value write is a zero-delta render (002 §3.3 / 003 §1.3).
  */
-import { act, type ReactNode } from "react";
+import { act, StrictMode, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createWorld, defineComponent, defineResource, type Entity, type World } from "../index";
@@ -222,5 +222,77 @@ describe("useResource", () => {
 
     await render(<CameraProbe world={worldB} counter={counter} />);
     expect(text()).toBe("5");
+  });
+});
+
+describe("useComponent — StrictMode + component removal (review-part1 R7)", () => {
+  it("survives StrictMode's mount/unmount/remount churn: correct value, suppression holds, clean after unmount", async () => {
+    const world = createWorld();
+    const e = world.spawn({ components: [[RXTPos, { x: 1, y: 2 }]] });
+    const counter = { n: 0 };
+
+    // StrictMode double-invokes mount effects (mount → unmount → remount) to surface unbalanced
+    // subscribe/unsubscribe. The value must still be right and the subscription must net to one.
+    await render(
+      <StrictMode>
+        <PosProbe world={world} entity={e} counter={counter} />
+      </StrictMode>,
+    );
+    expect(text()).toBe("1,2");
+
+    // A real change re-renders (StrictMode may double the render, so assert the direction + the value,
+    // not an exact count) and the DOM reflects the new value.
+    const beforeChange = counter.n;
+    await act(async () => {
+      world.edit(e).set(RXTPos, { x: 5, y: 6 });
+      world.reactive.notify();
+    });
+    expect(text()).toBe("5,6");
+    expect(counter.n).toBeGreaterThan(beforeChange);
+
+    // An equal-value write is fully suppressed even under StrictMode — zero additional renders (the
+    // Tier-3 box's equality survives the doubled subscription).
+    const afterChange = counter.n;
+    await act(async () => {
+      world.edit(e).set(RXTPos, { x: 5, y: 6 });
+      world.reactive.notify();
+    });
+    expect(text()).toBe("5,6");
+    expect(counter.n).toBe(afterChange);
+
+    // Unmount the whole tree (runs the StrictMode-balanced cleanup) — no watch may survive.
+    await render(null);
+    const afterUnmount = counter.n;
+    await act(async () => {
+      world.edit(e).set(RXTPos, { x: 9, y: 9 });
+      world.reactive.notify();
+      world.edit(e).set(RXTPos, { x: 8, y: 8 });
+      world.reactive.notify();
+    });
+    expect(counter.n).toBe(afterUnmount); // no leaked subscription fired after unmount
+  });
+
+  it("renders undefined when the component is removed (entity still alive), then the new value on re-add", async () => {
+    const world = createWorld();
+    const e = world.spawn({ components: [[RXTPos, { x: 1, y: 2 }]] });
+    const counter = { n: 0 };
+    await render(<PosProbe world={world} entity={e} counter={counter} />);
+    expect(text()).toBe("1,2");
+
+    // removeComponent — NOT a death: the entity lives, only the watched column goes away. The Tier-3
+    // watch fires `undefined` once on the removal (002 §3.4) and keeps itself alive for a later re-add.
+    await act(async () => {
+      world.removeComponent(e, RXTPos);
+      world.reactive.notify();
+    });
+    expect(world.isAlive(e)).toBe(true);
+    expect(text()).toBe("none");
+
+    // Re-adding the component re-fires via migrate's added-column stamp — the same watch, no re-mount.
+    await act(async () => {
+      world.addComponent(e, RXTPos, { x: 7, y: 8 });
+      world.reactive.notify();
+    });
+    expect(text()).toBe("7,8");
   });
 });

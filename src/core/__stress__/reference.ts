@@ -37,6 +37,15 @@ const RMany = defineRelation("RefRMany", { arity: "many" });
 export const COMPONENT_COUNT = COMPS.length;
 export const TAG_COUNT = TAGS.length;
 
+/**
+ * The fixed component schema, exposed for the reactive fuzz oracle (fuzz-reactive.fuzz.ts): each entry
+ * carries the component handle (to register `observeValue`/`observeQuery`), the single field name, and
+ * the `key` under which {@link Harness} stores that component's value in {@link Harness.model}. The
+ * oracle reads a model value with `model[i].comps.get(REACTIVE_COMPS[c].key)` and compares it to what
+ * the real observer fired — so the two views must key identically, which reusing COMPS guarantees.
+ */
+export const REACTIVE_COMPS = COMPS;
+
 export type Op =
   | { t: "spawn" }
   | { t: "destroy"; i: number }
