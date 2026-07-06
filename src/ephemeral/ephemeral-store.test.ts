@@ -26,6 +26,7 @@ import {
 import { Projector } from "../substrate";
 import { LoroEphemeralSnapshot } from "./loro-ephemeral-snapshot";
 import { createEphemeralStore, type EphemeralStore } from "./ephemeral-store";
+import type { EphemeralSource } from "./types";
 
 // --- schema (module-scope, unique names; vitest isolates modules per file so no reset is needed) ---
 const CursorPos = defineComponent("EphCursorPos", { x: "f32", y: "f32" });
@@ -305,5 +306,46 @@ describe("config validation", () => {
     expect(() =>
       createEphemeralStore(new LoroEphemeralSnapshot(makeLoro()), { peerId: "", send: () => {} }),
     ).toThrow(/peerId/i);
+  });
+});
+
+// --- debug / observability (the tools observer's ephemeral tab) -------------------------------------
+describe("debugDump (the observer tab's read-all)", () => {
+  it("returns peerId/ttlMs/throttleMs and every partition's entry, sorted by key", () => {
+    const h = setup("alice");
+    const cursor = h.eph.spawn({ components: [[CursorPos, { x: 1, y: 2 }]] }); // this peer's OWN entity
+    const ownKey = keyOf(h, cursor);
+
+    // A remote peer's blob arriving over the wire, applied through the store's source.
+    const remote = new LoroEphemeralSnapshot(makeLoro());
+    remote.set(entityKey("zoe-0"), { name: "Zoe" });
+    h.eph.ephemeralSource.apply(remote.encodeChanged()!);
+
+    const dump = h.eph.debugDump();
+    expect(dump.peerId).toBe("alice");
+    expect(dump.ttlMs).toBe(5000); // the store's config scalar (default), not the loro store's TTL
+    expect(dump.throttleMs).toBe(16);
+    expect(dump.entries.map((e) => e.key)).toEqual([ownKey, "zoe-0"].sort()); // sorted by key
+    expect(dump.entries.find((e) => e.key === ownKey)!.blob).toEqual({
+      components: { EphCursorPos: { x: 1, y: 2 } },
+      tags: [],
+    });
+    expect(dump.entries.find((e) => e.key === "zoe-0")!.blob).toEqual({ name: "Zoe" });
+  });
+
+  it("degrades gracefully: a source WITHOUT debugEntries yields an empty list and never throws", () => {
+    // A minimal EphemeralSource test double — every required method, but NO optional debugEntries.
+    const source: EphemeralSource = {
+      set: () => {},
+      delete: () => {},
+      encodeChanged: () => null,
+      encodeKeys: () => null,
+      encodeDeletes: () => [],
+      apply: () => {},
+      subscribe: () => () => {},
+    };
+    const eph = createEphemeralStore(source, { peerId: "solo", send: () => {} });
+    const dump = eph.debugDump();
+    expect(dump).toEqual({ peerId: "solo", ttlMs: 5000, throttleMs: 16, entries: [] });
   });
 });

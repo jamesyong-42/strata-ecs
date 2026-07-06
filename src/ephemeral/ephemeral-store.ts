@@ -143,6 +143,18 @@ export interface EphemeralStoreOptions {
   ttlMs?: number;
 }
 
+/**
+ * The shape of `eph.debugDump()` — the tools observer's ephemeral-tab read (debug/observability ONLY, never
+ * a sync seam). A snapshot COPY of every partition's current blob (this peer's own included) plus the three
+ * scalars the tab shows; `entries` are sorted by key for a stable display.
+ */
+export interface EphemeralDebugDump {
+  peerId: string;
+  ttlMs: number;
+  throttleMs: number;
+  entries: Array<{ key: string; blob: EphemeralBlob }>;
+}
+
 /** Validate + clamp one duration option with a DEV warning, so a pathological value can't break the wire. */
 function clampMs(v: number | undefined, def: number, floor: number, name: string, why: string): number {
   if (v === undefined) return def;
@@ -404,6 +416,24 @@ export class EphemeralStore {
     }
     this.minted.clear();
     for (const buf of this.source.encodeDeletes()) this.sendFn(buf); // ship the tombstones immediately (best-effort)
+  }
+
+  // --- debug / observability (the tools observer's ephemeral tab) ------------------------------------
+
+  /**
+   * The observer tab's ONE read (debug/observability, NEVER a sync path). Returns a snapshot COPY of every
+   * partition's current blob — this peer's own included — through the source's OPTIONAL
+   * {@link EphemeralSource.debugEntries} (a TTL-pruned point-in-time view), sorted by key for a stable
+   * display, plus the three scalars the tab shows (peerId + the two clocks). The copy shares no state with
+   * the source, so it is safe to hold across ticks. A source WITHOUT `debugEntries` (a test double or an
+   * alternative backend) yields an empty `entries` list and NEVER throws.
+   */
+  debugDump(): EphemeralDebugDump {
+    const raw = this.source.debugEntries?.() ?? {};
+    const entries = Object.keys(raw)
+      .sort()
+      .map((key) => ({ key, blob: raw[key] }));
+    return { peerId: this.peerId, ttlMs: this.ttlMsValue, throttleMs: this.throttleMsValue, entries };
   }
 
   // --- the own-blob codec (decision E) --------------------------------------------------------------

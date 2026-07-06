@@ -216,6 +216,15 @@ export class LoroEphemeralSnapshot implements EphemeralSource {
   }
 
   /**
+   * Debug/observability read-all (NOT a sync path): loro's `getAllStates()` is a TTL-pruned point-in-time
+   * snapshot of every present key's blob — this peer's own included. The values are loro `Value`s, cast to
+   * `EphemeralBlob` (opaque app data, as everywhere here); nothing in encode/apply consults this.
+   */
+  debugEntries(): Record<string, EphemeralBlob> {
+    return this.source.getAllStates() as Record<string, EphemeralBlob>;
+  }
+
+  /**
    * Adapter-level (NOT on `EphemeralSource`): release the backing `source.subscribe` handle. M2's detach
    * calls it so a torn-down store stops translating events. Idempotent-safe for the caller to hold.
    */

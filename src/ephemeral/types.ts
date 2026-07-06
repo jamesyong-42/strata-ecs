@@ -107,4 +107,11 @@ export interface EphemeralSource {
    * blob would otherwise resurrect stale state (re-add a component the owner already removed).
    */
   subscribe(fn: (ev: EphemeralEvent) => void): Unsubscribe;
+  /**
+   * DEBUG / OBSERVABILITY ONLY (the tools observer's ephemeral tab) — a TTL-pruned point-in-time snapshot
+   * of ALL partitions' current blobs, INCLUDING this peer's own. NEVER used by the store's sync paths
+   * (encode/apply/subscribe); it is a pure read-all seam for introspection. OPTIONAL so a test double or an
+   * alternative source need not implement it — the store degrades to an empty dump when it is absent.
+   */
+  debugEntries?(): Record<string, EphemeralBlob>;
 }

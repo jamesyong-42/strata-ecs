@@ -253,3 +253,18 @@ describe("dispose", () => {
     expect(A.events).toHaveLength(0);
   });
 });
+
+describe("debugEntries (debug/observability read-all)", () => {
+  it("snapshots ALL partitions — this peer's own key AND an applied remote key — with their blobs", () => {
+    const A = adapter();
+    const B = adapter();
+    B.eph.set(k("bob-0"), { self: true }); // B's OWN partition
+    A.eph.set(k("alice-0"), { x: 1, y: 2 }); // A's partition
+    B.eph.apply(A.eph.encodeChanged()!); // A's key lands in B via the wire
+
+    const dump = B.eph.debugEntries();
+    expect(Object.keys(dump).sort()).toEqual(["alice-0", "bob-0"]); // own + applied remote, both present
+    expect(dump["bob-0"]).toEqual({ self: true });
+    expect(dump["alice-0"]).toEqual({ x: 1, y: 2 });
+  });
+});

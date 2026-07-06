@@ -28,7 +28,9 @@
  * blob-diff cache, key minting) stay unexported.
  *
  * The surface is deliberately MINIMAL. `EphemeralStore` is exported TYPE-ONLY (the `DurableStore` precedent —
- * you get one from `createEphemeralStore`, never `new` the class; the constructor is not API). `Local` is
+ * you get one from `createEphemeralStore`, never `new` the class; the constructor is not API). `EphemeralDebugDump`
+ * — the read-all shape `eph.debugDump()` returns for the tools observer's ephemeral tab — is likewise TYPE-ONLY
+ * (a debug/observability seam, never a sync path). `Local` is
  * NOT re-exported here — its canonical home is the core barrel (`strata-ecs`; design §20, one home per
  * symbol); a presence query is `defineQuery([PresenceInfo, Not(Local)])` with both imported from `strata-ecs`.
  * `Attachment` is the ephemeral layer's OWN handle (`{ detach() }`, no `baseline` seam — the writer-partitioned
@@ -44,6 +46,10 @@ export { LoroEphemeralSnapshot } from "./loro-ephemeral-snapshot";
 // binding, the Projector seam, and key minting stay unexported.
 export { createEphemeralStore } from "./ephemeral-store";
 export type { EphemeralStore } from "./ephemeral-store";
+
+// The read-all shape `eph.debugDump()` returns for the tools observer's ephemeral tab — TYPE-ONLY
+// (debug/observability, never a sync seam).
+export type { EphemeralDebugDump } from "./ephemeral-store";
 
 // Attach / detach (a package-level function, not `world.attachEphemeral` — the core names no ephemeral type).
 export { attachEphemeral } from "./attach";
