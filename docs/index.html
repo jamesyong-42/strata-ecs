@@ -6,7 +6,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>strata-ecs — a collaborative ECS for editors and canvas apps</title>
-<meta name="description" content="strata-ecs is an entity-component-system for TypeScript apps that edit documents — whiteboards, node graphs, design tools. Typed-array iteration, built-in reactivity, and multiplayer as opt-in layers." />
+<meta name="description" content="strata-ecs is an entity-component-system for TypeScript apps that edit documents — whiteboards, node graphs, design tools. Typed-array iteration, built-in reactivity, and CRDT-backed multiplayer (Loro) as opt-in layers." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
@@ -424,11 +424,13 @@
     <p class="lede">
       strata-ecs is an entity-component-system for TypeScript apps that edit documents —
       whiteboards, node graphs, design tools. Model the document as entities and components,
-      query it at typed-array speed, and add multiplayer later as a layer — not a rewrite.
+      query it at typed-array speed, and add CRDT-backed multiplayer later as a layer — not
+      a rewrite.
     </p>
     <div class="chips">
       <span class="chip pre"><b>npm i strata-ecs</b></span>
       <span class="chip"><b>zero</b> dependencies</span>
+      <span class="chip">CRDT-backed · <b>Loro</b></span>
       <span class="chip"><b>MIT</b></span>
     </div>
     <p class="prenote">// pre-release — not yet published to npm; the API may move before 0.1.</p>
@@ -502,13 +504,17 @@
       every frame.
     </p>
 
-    <h3>Multiplayer that never touches the hot path</h3>
+    <h3>CRDT-backed multiplayer that never touches the hot path</h3>
     <p>
-      Persistence and live presence are separate imports — <code>strata-ecs/durable</code> and
+      Convergence is not code you write. The collaborative layers are backed by a
+      <strong>CRDT</strong> — currently <a href="https://loro.dev">Loro</a> — so concurrent edits
+      merge automatically on every peer, offline peers catch up from increments, and no server has
+      to arbitrate conflicts: any channel that moves bytes is a valid transport. Persistence and
+      live presence are separate imports — <code>strata-ecs/durable</code> and
       <code>strata-ecs/ephemeral</code> — that project into <a href="#collab">the same runtime</a>
       your systems already read. Your render loop and your systems don't change when a second
-      person opens the document; the CRDT is quarantined behind two adapter classes and the core
-      never imports it.
+      person opens the document: Loro is an optional peer dependency, quarantined behind two
+      adapter classes, and the core never imports it.
     </p>
   </section>
 
@@ -1051,8 +1057,13 @@
     </div>
     <p>
       Both project into the same runtime your systems already read — document content as ordinary
-      entities, other peers as <code>Not(Local)</code> entities. Where a piece of state lives is a
-      per-component decision, made by <em>how you create it</em>:
+      entities, other peers as <code>Not(Local)</code> entities. Under the hood, both ride on
+      <strong><a href="https://loro.dev">Loro</a></strong>, a production CRDT engine — the document
+      on its CRDT document, presence on its lightweight ephemeral store — so convergence, causal
+      ordering, and undo come from the engine, not from code you write. Loro is an optional peer
+      dependency (it enters your bundle only when you attach a layer), and the adapter seam it sits
+      behind is deliberately small. Where a piece of state lives is a per-component decision, made
+      by <em>how you create it</em>:
     </p>
     <div class="tbl"><table>
       <thead><tr><th>Tier</th><th>Lives in</th><th>Lifetime</th><th>Who writes</th><th>Example</th></tr></thead>
@@ -1071,7 +1082,7 @@
     <!-- ---------- DURABLE ---------- -->
     <h3 id="durable">The document layer</h3>
     <p>
-      <code>createDurableStore(loroDoc)</code> is the one place the underlying CRDT document enters —
+      <code>createDurableStore(loroDoc)</code> is the one place the Loro document enters —
       you own the document and its transport. <code>attachDurable(world, doc)</code> projects it into
       the runtime and registers the drain that <code>sync()</code> pumps. You change the document only
       inside <code>doc.transaction</code>, which records a batch of mutations and seals them as one
