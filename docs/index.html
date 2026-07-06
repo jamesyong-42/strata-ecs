@@ -3,7 +3,7 @@
 <!--
   strata-ecs — the guide (docs/index.html), one of a two-page site (api.html is separate).
   Self-contained, GitHub-Pages ready. Only external fetch is Google Fonts.
-  Repo URL used for source links: https://github.com/jamesyong/strata-ecs  (from package.json)
+  Repo URL used for source links: https://github.com/jamesyong-42/strata-ecs  (from package.json)
 -->
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -376,7 +376,7 @@
 
 <nav class="sidebar" id="sidebar">
   <a class="brand" href="#top"><b>strata<span class="dash">·</span>ecs</b></a>
-  <div class="ver">v0 · pre-release</div>
+  <div class="ver">v0.1 · pre-release</div>
   <a class="api-link" href="api.html">API reference →</a>
 
   <div class="nav-group g-start">
@@ -415,7 +415,7 @@
   </div>
 
   <div class="nav-foot">
-    <a href="https://github.com/jamesyong/strata-ecs">GitHub ↗</a>
+    <a href="https://github.com/jamesyong-42/strata-ecs">GitHub ↗</a>
     <a href="api.html">API reference ↗</a>
   </div>
 </nav>
@@ -434,12 +434,12 @@
       a rewrite.
     </p>
     <div class="chips">
-      <span class="chip pre"><b>npm i strata-ecs</b></span>
+      <span class="chip pre"><b>npm i @vibecook/strata-ecs</b></span>
       <span class="chip"><b>zero</b> dependencies</span>
       <span class="chip">CRDT-backed · <b>Loro</b></span>
       <span class="chip"><b>MIT</b></span>
     </div>
-    <p class="prenote">// pre-release — not yet published to npm; the API may move before 0.1.</p>
+    <p class="prenote">// pre-1.0 — minor versions may break APIs; pin your version.</p>
 
     <!-- the whole model in one file -->
     <h3 style="margin-top:38px">The whole model in 20 lines</h3>
@@ -497,7 +497,7 @@
       <a href="https://github.com/NateTheGreatt/bitECS">bitecs</a>, the flat-array specialist, and
       is fastest on entity-lifecycle churn. The trade is the archetype model's usual one: adding or
       removing a component migrates the row between tables. See
-      <a href="https://github.com/jamesyong/strata-ecs/blob/main/BENCHMARKS.md">BENCHMARKS.md</a>
+      <a href="https://github.com/jamesyong-42/strata-ecs/blob/main/BENCHMARKS.md">BENCHMARKS.md</a>
       for the full cross-library table, losses included.
     </p>
 
@@ -516,8 +516,8 @@
       <strong>CRDT</strong> — currently <a href="https://loro.dev">Loro</a> — so concurrent edits
       merge automatically on every peer, offline peers catch up from increments, and no server has
       to arbitrate conflicts: any channel that moves bytes is a valid transport. Persistence and
-      live presence are separate imports — <code>strata-ecs/durable</code> and
-      <code>strata-ecs/ephemeral</code> — that project into <a href="#collab">the same runtime</a>
+      live presence are separate imports — <code>@vibecook/strata-ecs/durable</code> and
+      <code>@vibecook/strata-ecs/ephemeral</code> — that project into <a href="#collab">the same runtime</a>
       your systems already read. Your render loop and your systems don't change when a second
       person opens the document: Loro is an optional peer dependency, quarantined behind two
       adapter classes, and the core never imports it.
@@ -1007,7 +1007,7 @@
 
     <h3 id="react">React binding</h3>
     <p>
-      <code>strata-ecs/react</code> is two hooks over <code>useSyncExternalStore</code>: they subscribe to
+      <code>@vibecook/strata-ecs/react</code> is two hooks over <code>useSyncExternalStore</code>: they subscribe to
       the value channel and re-render exactly once per real change at your next <code>notify()</code>. An
       equal-value write does not re-render.
     </p>
@@ -1052,13 +1052,13 @@
         <span class="nm">Document</span><span class="adj">durable</span>
         <p>The board itself — shapes, edges, styles. Permanently stored, edited concurrently, merges
         without conflicts. No changes are lost.</p>
-        <p><code>strata-ecs/durable</code></p>
+        <p><code>@vibecook/strata-ecs/durable</code></p>
       </div>
       <div class="duo-card d-pres">
         <span class="nm">Presence</span><span class="adj">ephemeral</span>
         <p>The people on the board — cursors, selections, live previews. Broadcast at cursor rate,
         self-expiring: a peer's presence resets when they disconnect.</p>
-        <p><code>strata-ecs/ephemeral</code></p>
+        <p><code>@vibecook/strata-ecs/ephemeral</code></p>
       </div>
     </div>
     <p>
@@ -1272,7 +1272,7 @@
     </p>
     <figure class="code" data-file="observer.ts"></figure>
     <p>
-      Built on that contract is <code>strata-ecs/tools</code> — a zero-dependency vanilla-DOM inspector
+      Built on that contract is <code>@vibecook/strata-ecs/tools</code> — a zero-dependency vanilla-DOM inspector
       panel you mount with one call. Three tabs are always there: <strong>entities</strong> (a live,
       virtualized list with a component/tag/relation detail pane), <strong>systems</strong> (per-system
       microseconds, run/skip idle percentage, per-phase flush timings), and <strong>timeline</strong>
@@ -1291,12 +1291,12 @@
     <h2><svg class="glyph" data-band="1" data-hue="neutral"></svg>The example app<a class="anchor" href="#example">#</a></h2>
     <p>
       <code>examples/canvas-editor</code> is an infinite-canvas whiteboard in vanilla TypeScript and
-      Canvas2D whose only runtime dependency is <code>strata-ecs</code>. The ECS <em>is</em> the state
+      Canvas2D whose only runtime dependency is <code>@vibecook/strata-ecs</code>. The ECS <em>is</em> the state
       manager; the frame is the subscription. It demonstrates, end to end:
     </p>
     <ul>
       <li><strong>10k+ shapes with brute-force culling</strong> — no spatial index; the typed-array column sweep does what an R-tree usually would, sub-millisecond.</li>
-      <li><strong>A HUD and the inspector panel</strong> — the framework's own <code>strata-ecs/tools</code>, mounted with one call, splitting ECS time from paint time honestly.</li>
+      <li><strong>A HUD and the inspector panel</strong> — the framework's own <code>@vibecook/strata-ecs/tools</code>, mounted with one call, splitting ECS time from paint time honestly.</li>
       <li><strong>Reactive repaint + autosave</strong> from a single <code>observeQuery</code> — no hand-set dirty flags; watch the console stay silent at idle, then drag.</li>
       <li><strong><code>?collab</code> mode</strong> — the same editor, multiplayer, over a same-origin <code>BroadcastChannel</code> between tabs, or a real WebSocket relay across machines with <code>?ws</code>.</li>
       <li><strong>Headless smoke suites</strong> — <code>?script=collab-smoke</code> runs bootstrap, create/duplicate/delete, edit-vs-drag convergence, late-join, and presence as an acceptance suite in one page.</li>
@@ -1319,13 +1319,13 @@
 
     <h3>Further reading</h3>
     <ul>
-      <li><a href="https://github.com/jamesyong/strata-ecs/blob/main/BENCHMARKS.md">BENCHMARKS.md</a> — the cross-library comparison, losses included.</li>
+      <li><a href="https://github.com/jamesyong-42/strata-ecs/blob/main/BENCHMARKS.md">BENCHMARKS.md</a> — the cross-library comparison, losses included.</li>
       <li><a href="api.html">API reference →</a> — every export, signature by signature.</li>
     </ul>
     <div class="note">
       <span class="tag">Status</span>
       <p>
-        strata-ecs is <strong>pre-release</strong>: not yet on npm, and the API may move before 0.1.
+        strata-ecs is <strong>pre-1.0</strong>: minor versions may still break APIs.
         The core, the layers, the devtools, and the example app are complete and green under the full
         test suite; the docs on this page describe what is built, not what is planned.
       </p>
@@ -1334,7 +1334,7 @@
 
   <footer>
     <span>strata-ecs · v0 pre-release · MIT</span>
-    <span><a href="api.html">API reference</a> · <a href="https://github.com/jamesyong/strata-ecs">GitHub</a></span>
+    <span><a href="api.html">API reference</a> · <a href="https://github.com/jamesyong-42/strata-ecs">GitHub</a></span>
   </footer>
 
 </div>
@@ -1343,7 +1343,7 @@
 <!-- ============================================================= CODE SNIPPETS -->
 <!-- Raw code lives here as text/plain templates; the highlighter reads textContent,
      tokenizes real characters, and injects spans. Keeps the markup above clean. -->
-<script type="text/plain" data-code="hello.ts">import { createWorld, defineComponent, defineQuery, defineSystem, phase } from "strata-ecs";
+<script type="text/plain" data-code="hello.ts">import { createWorld, defineComponent, defineQuery, defineSystem, phase } from "@vibecook/strata-ecs";
 
 const Position = defineComponent("Position", { x: "f32", y: "f32" });
 const Velocity = defineComponent("Velocity", { x: "f32", y: "f32" });
@@ -1366,7 +1366,7 @@ world.tick([phase("sim", [Movement])]);
 world.read(e, Position); // { x: 1, y: 2 }
 </script>
 
-<script type="text/plain" data-code="schema.ts">import { defineComponent, defineTag, defineRelation, defineResource, enumOf, field } from "strata-ecs";
+<script type="text/plain" data-code="schema.ts">import { defineComponent, defineTag, defineRelation, defineResource, enumOf, field } from "@vibecook/strata-ecs";
 
 const Position = defineComponent("Position", { x: "f32", y: "f32" });
 const Fill = defineComponent("Fill", {
@@ -1409,7 +1409,7 @@ const Spawner = defineSystem(defineQuery([Position]), (batch, ctx) => {
 });
 </script>
 
-<script type="text/plain" data-code="queries.ts">import { defineQuery, Not, Any, All, Related } from "strata-ecs";
+<script type="text/plain" data-code="queries.ts">import { defineQuery, Not, Any, All, Related } from "@vibecook/strata-ecs";
 
 const renderable  = defineQuery([Position, Size, Fill]);         // AND of components
 const idle        = defineQuery([Position, Not(Velocity)]);      // exclude a component
@@ -1427,7 +1427,7 @@ const children    = defineQuery([Position, Related(ChildOf, parent)]); // a spec
 });
 </script>
 
-<script type="text/plain" data-code="systems.ts">import { defineSystem, defineQuery, phase } from "strata-ecs";
+<script type="text/plain" data-code="systems.ts">import { defineSystem, defineQuery, phase } from "@vibecook/strata-ecs";
 
 const DragMove = defineSystem(
   defineQuery([Position, Selected]),
@@ -1481,7 +1481,7 @@ world.reactive.observeResource(Camera, () => { repaint = true; });
 world.reactive.notify(); // once per frame, after all ticks
 </script>
 
-<script type="text/plain" data-code="ShapeInspector.tsx">import { useComponent, useResource } from "strata-ecs/react";
+<script type="text/plain" data-code="ShapeInspector.tsx">import { useComponent, useResource } from "@vibecook/strata-ecs/react";
 
 function ShapeInspector({ world, entity }: { world: World; entity: Entity }) {
   const pos = useComponent(world, entity, Position); // re-renders once per real change
@@ -1490,7 +1490,7 @@ function ShapeInspector({ world, entity }: { world: World; entity: Entity }) {
 }
 </script>
 
-<script type="text/plain" data-code="observer.ts">import type { WorldObserver } from "strata-ecs";
+<script type="text/plain" data-code="observer.ts">import type { WorldObserver } from "@vibecook/strata-ecs";
 
 const detach = world.observe({
   onSpawn(e)        { /* an entity came into existence */ },
@@ -1503,7 +1503,7 @@ const detach = world.observe({
 detach();
 </script>
 
-<script type="text/plain" data-code="panel.ts">import { attachObserver } from "strata-ecs/tools";
+<script type="text/plain" data-code="panel.ts">import { attachObserver } from "@vibecook/strata-ecs/tools";
 
 const obs = attachObserver(world, {
   describe: (world, e) => ({ label: labelFor(world, e) }), // your domain naming
@@ -1525,7 +1525,7 @@ fresh.import(bytes);
 </script>
 
 <script type="text/plain" data-code="durable-setup.ts">import { LoroDoc } from "loro-crdt";
-import { createDurableStore, attachDurable } from "strata-ecs/durable";
+import { createDurableStore, attachDurable } from "@vibecook/strata-ecs/durable";
 
 const doc = createDurableStore(new LoroDoc());   // the ONE place the CRDT enters
 const attachment = attachDurable(world, doc);    // project it in; register the drain
@@ -1545,9 +1545,9 @@ doc.transaction((tx) => {
 });
 </script>
 
-<script type="text/plain" data-code="presence.ts">import { LoroEphemeralSnapshot, createEphemeralStore, attachEphemeral } from "strata-ecs/ephemeral";
+<script type="text/plain" data-code="presence.ts">import { LoroEphemeralSnapshot, createEphemeralStore, attachEphemeral } from "@vibecook/strata-ecs/ephemeral";
 import { EphemeralStore as LoroEphemeralStore } from "loro-crdt";
-import { Local, Not, defineQuery } from "strata-ecs";
+import { Local, Not, defineQuery } from "@vibecook/strata-ecs";
 
 const source = new LoroEphemeralSnapshot(new LoroEphemeralStore(5000));  // 5s TTL
 const eph = createEphemeralStore(source, {

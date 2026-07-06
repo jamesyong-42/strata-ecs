@@ -6,8 +6,8 @@
  * costs zero while off, everything while on, and the observer's systems tab shows both.
  */
 
-import type { Pipeline } from "strata-ecs";
-import { phase } from "strata-ecs";
+import type { Pipeline } from "@vibecook/strata-ecs";
+import { phase } from "@vibecook/strata-ecs";
 import { SimMode } from "./schema";
 import { CullSystem } from "./systems/cull";
 import { DragMoveSystem } from "./systems/dragMove";

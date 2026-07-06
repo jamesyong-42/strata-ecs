@@ -6,7 +6,7 @@
  * remote cursor's numbers tick live underneath.
  *
  * It reaches the dump through {@link ObserverEphemeralSource}, a structural interface the host's live
- * `EphemeralStore` satisfies — the tools package never imports `strata-ecs/ephemeral` (design §0; see
+ * `EphemeralStore` satisfies — the tools package never imports `@vibecook/strata-ecs/ephemeral` (design §0; see
  * index.ts). The getter is re-read every poll and returns null before an ephemeral store is attached.
  *
  * WRITER SPLIT (load-bearing): ephemeral keys are minted `"<peerId>-<int>"` (ephemeral-store.ts §15.3),

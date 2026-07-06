@@ -9,7 +9,7 @@
  * the bottleneck long before the ECS is, and the split keeps that visible and honest.
  */
 
-import type { Pipeline } from "strata-ecs";
+import type { Pipeline } from "@vibecook/strata-ecs";
 import { drawBuffer } from "../render/drawBuffer";
 import { dirty } from "./commands";
 import { repaint } from "./reactivity";

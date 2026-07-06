@@ -70,7 +70,7 @@ export interface Scenario {
 }
 
 export interface LibraryBench {
-  /** Display name, e.g. "strata-ecs". */
+  /** Display name, e.g. "@vibecook/strata-ecs". */
   readonly name: string;
   /** Exact version benchmarked, e.g. "0.4.0". */
   readonly version: string;

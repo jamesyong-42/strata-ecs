@@ -181,7 +181,7 @@ export function defineTag(name: string): Tag {
  * @internal Mint the handle for a framework-RESERVED tag (§3.4) — the path the framework itself uses,
  * since {@link defineTag} rejects reserved names (they are import-only for USER schema). Currently used
  * exactly once, for the ephemeral store's `Local` partition marker (design §15.4/§20 — `import { Local }
- * from "strata-ecs"`). Registers the handle in both tag maps so it behaves like any tag for the runtime's
+ * from "@vibecook/strata-ecs"`). Registers the handle in both tag maps so it behaves like any tag for the runtime's
  * `TagStore` and queries; the name is already interned by {@link initSchemaState}'s reservation, so this
  * does NOT call `names.define` (which would reject it). Requires the name to be reserved, so it can never
  * be used to shadow a user tag. Idempotent within a schema epoch (returns the existing handle) so a stray

@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "strata-ecs": "workspace:*"
+    "@vibecook/strata-ecs": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

@@ -8,8 +8,8 @@
  * retained), and paint consumes the buffer after tick() returns (design.md §16.2).
  */
 
-import type { Batch } from "strata-ecs";
-import { defineSystem } from "strata-ecs";
+import type { Batch } from "@vibecook/strata-ecs";
+import { defineSystem } from "@vibecook/strata-ecs";
 import { drawBuffer } from "../../render/drawBuffer";
 import { renderable } from "../queries";
 import { Camera, Fill, Kind, Position, Size, ZIndex } from "../schema";

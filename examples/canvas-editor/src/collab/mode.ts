@@ -8,8 +8,8 @@
  * the rest of interaction state stay runtime-only in BOTH modes — the schema drew that line on day one.
  */
 
-import type { Attachment, DurableStore } from "strata-ecs/durable";
-import type { EphemeralStore } from "strata-ecs/ephemeral";
+import type { Attachment, DurableStore } from "@vibecook/strata-ecs/durable";
+import type { EphemeralStore } from "@vibecook/strata-ecs/ephemeral";
 
 export interface CollabSession {
   readonly room: string;

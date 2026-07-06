@@ -5,7 +5,7 @@
   Self-contained, GitHub-Pages ready. Only external fetch is Google Fonts.
   Shell (fonts, :root tokens, sidebar/code/callout/glyph components, tok-* highlighter) is shared
   with index.html verbatim. Signatures are transcribed from the emitted d.ts (dist/*.d.ts).
-  Repo URL used for source links: https://github.com/jamesyong/strata-ecs  (from package.json)
+  Repo URL used for source links: https://github.com/jamesyong-42/strata-ecs  (from package.json)
 -->
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -374,7 +374,7 @@
 
 <nav class="sidebar" id="sidebar">
   <a class="brand" href="#top"><b>strata<span class="dash">·</span>ecs</b></a>
-  <div class="ver">v0 · pre-release</div>
+  <div class="ver">v0.1 · pre-release</div>
   <a class="api-link" href="index.html">← Guide</a>
 
   <div class="nav-group g-core">
@@ -420,7 +420,7 @@
 
   <div class="nav-foot">
     <a href="index.html">Concept guide ↗</a>
-    <a href="https://github.com/jamesyong/strata-ecs">GitHub ↗</a>
+    <a href="https://github.com/jamesyong-42/strata-ecs">GitHub ↗</a>
   </div>
 </nav>
 
@@ -437,7 +437,7 @@
     <div class="chips">
       <span class="chip"><b>v0</b> · pre-release</span>
       <span class="chip">94 exports</span>
-      <span class="chip pre"><b>import</b> "strata-ecs"</span>
+      <span class="chip pre"><b>import</b> "@vibecook/strata-ecs"</span>
     </div>
     <nav class="switch" aria-label="Modules">
       <a class="s-core"    href="#mod-core">strata-ecs</a>
@@ -459,7 +459,7 @@
       re-explained here.
     </p>
 
-    <h3 class="grp"><code>strata-ecs</code> — 66 exports</h3>
+    <h3 class="grp"><code>@vibecook/strata-ecs</code> — 66 exports</h3>
     <div class="tbl"><table>
       <thead><tr><th>Export</th><th>Kind</th><th>Role</th></tr></thead>
       <tbody>
@@ -501,7 +501,7 @@
       </tbody>
     </table></div>
 
-    <h3 class="grp"><code>strata-ecs/react</code> — 2 exports</h3>
+    <h3 class="grp"><code>@vibecook/strata-ecs/react</code> — 2 exports</h3>
     <div class="tbl"><table>
       <thead><tr><th>Export</th><th>Kind</th><th>Role</th></tr></thead>
       <tbody>
@@ -510,7 +510,7 @@
       </tbody>
     </table></div>
 
-    <h3 class="grp"><code>strata-ecs/tools</code> — 9 exports</h3>
+    <h3 class="grp"><code>@vibecook/strata-ecs/tools</code> — 9 exports</h3>
     <div class="tbl"><table>
       <thead><tr><th>Export</th><th>Kind</th><th>Role</th></tr></thead>
       <tbody>
@@ -522,7 +522,7 @@
       </tbody>
     </table></div>
 
-    <h3 class="grp"><code>strata-ecs/durable</code> — 9 exports</h3>
+    <h3 class="grp"><code>@vibecook/strata-ecs/durable</code> — 9 exports</h3>
     <div class="tbl"><table>
       <thead><tr><th>Export</th><th>Kind</th><th>Role</th></tr></thead>
       <tbody>
@@ -536,7 +536,7 @@
       </tbody>
     </table></div>
 
-    <h3 class="grp"><code>strata-ecs/ephemeral</code> — 8 exports</h3>
+    <h3 class="grp"><code>@vibecook/strata-ecs/ephemeral</code> — 8 exports</h3>
     <div class="tbl"><table>
       <thead><tr><th>Export</th><th>Kind</th><th>Role</th></tr></thead>
       <tbody>
@@ -554,7 +554,7 @@
   <!-- ============================================================= CORE -->
   <section id="mod-core">
     <p class="sec-eyebrow l-core">strata-ecs · the runtime core</p>
-    <h2><svg class="glyph" data-band="1" data-hue="core"></svg>Runtime core <code>"strata-ecs"</code><a class="anchor" href="#mod-core">#</a></h2>
+    <h2><svg class="glyph" data-band="1" data-hue="core"></svg>Runtime core <code>"@vibecook/strata-ecs"</code><a class="anchor" href="#mod-core">#</a></h2>
     <p>
       The default barrel: the schema definers, the query and system APIs, the <code>World</code> facade,
       the reactive layer, and the storage seam. A complete, fast, local ECS — usable with none of the
@@ -942,7 +942,7 @@
       <ul class="notes">
         <li><span class="nl">Contract</span> Callbacks must not mutate the world and must not throw — a throwing callback is swallowed and reported via <code>devError</code>, never propagated. A structural mutation from inside one is dev-diagnosed.</li>
         <li><span class="nl">Timing</span> <code>onSpawn</code> fires once per entity (after placement for <code>world.spawn</code>; at the eager mint for <code>ctx.spawn</code>). <code>onDestroy</code> fires <em>before</em> teardown — the dying entity is still fully readable. A wholesale reset fires one <code>onReset</code> after teardown, not per-entity <code>onDestroy</code>.</li>
-        <li><span class="nl">See</span> <a href="index.html#tools">Observability &amp; tools</a> · <a href="#mod-tools"><code>strata-ecs/tools</code></a></li>
+        <li><span class="nl">See</span> <a href="index.html#tools">Observability &amp; tools</a> · <a href="#mod-tools"><code>@vibecook/strata-ecs/tools</code></a></li>
       </ul>
     </article>
 
@@ -996,7 +996,7 @@
   <!-- ============================================================= REACT -->
   <section id="mod-react">
     <p class="sec-eyebrow l-react">strata-ecs/react · the react binding</p>
-    <h2><svg class="glyph" data-band="1" data-hue="react"></svg>React binding <code>"strata-ecs/react"</code><a class="anchor" href="#mod-react">#</a></h2>
+    <h2><svg class="glyph" data-band="1" data-hue="react"></svg>React binding <code>"@vibecook/strata-ecs/react"</code><a class="anchor" href="#mod-react">#</a></h2>
     <p>
       Two hooks, each a <code>useSyncExternalStore</code> adapter over <code>world.reactive</code>'s Tier-3
       channel: they subscribe to the value channel and re-render exactly once per real change at your next
@@ -1041,7 +1041,7 @@
   <!-- ============================================================= TOOLS -->
   <section id="mod-tools">
     <p class="sec-eyebrow l-neutral">strata-ecs/tools · observability</p>
-    <h2><svg class="glyph" data-band="1" data-hue="neutral"></svg>Observability <code>"strata-ecs/tools"</code><a class="anchor" href="#mod-tools">#</a></h2>
+    <h2><svg class="glyph" data-band="1" data-hue="neutral"></svg>Observability <code>"@vibecook/strata-ecs/tools"</code><a class="anchor" href="#mod-tools">#</a></h2>
     <p>
       A zero-dependency vanilla-DOM inspector built on the core's <a href="#core-WorldObserver"><code>WorldObserver</code></a>
       contract, usable from any host app. The world pays the attached-telemetry path only while attached
@@ -1087,7 +1087,7 @@
   <!-- ============================================================= DURABLE -->
   <section id="mod-durable">
     <p class="sec-eyebrow l-durable">strata-ecs/durable · persistence + multiplayer</p>
-    <h2><svg class="glyph" data-band="3" data-hue="durable"></svg>Durable layer <code>"strata-ecs/durable"</code><a class="anchor" href="#mod-durable">#</a></h2>
+    <h2><svg class="glyph" data-band="3" data-hue="durable"></svg>Durable layer <code>"@vibecook/strata-ecs/durable"</code><a class="anchor" href="#mod-durable">#</a></h2>
     <p>
       The converging document: persistence and multiplayer as one Loro-CRDT-backed layer that projects into
       the same runtime your systems read. The CRDT is quarantined behind a single adapter; the app owns the
@@ -1206,7 +1206,7 @@
   <!-- ============================================================= EPHEMERAL -->
   <section id="mod-ephem">
     <p class="sec-eyebrow l-ephem">strata-ecs/ephemeral · presence</p>
-    <h2><svg class="glyph" data-band="4" data-hue="ephem"></svg>Ephemeral layer <code>"strata-ecs/ephemeral"</code><a class="anchor" href="#mod-ephem">#</a></h2>
+    <h2><svg class="glyph" data-band="4" data-hue="ephem"></svg>Ephemeral layer <code>"@vibecook/strata-ecs/ephemeral"</code><a class="anchor" href="#mod-ephem">#</a></h2>
     <p>
       Presence — cursors, selection highlights, live previews — modelled as entities on a
       writer-partitioned, self-expiring store. Each peer owns its own partition and writes only there; the
@@ -1309,7 +1309,7 @@
 
   <footer>
     <span>strata-ecs · v0 pre-release · MIT</span>
-    <span><a href="index.html">Concept guide</a> · <a href="https://github.com/jamesyong/strata-ecs">GitHub</a></span>
+    <span><a href="index.html">Concept guide</a> · <a href="https://github.com/jamesyong-42/strata-ecs">GitHub</a></span>
   </footer>
 
 </div>

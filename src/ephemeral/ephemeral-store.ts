@@ -23,7 +23,7 @@
  *
  * NOT M1 (the seam this file installs for M2 to wire): `attachEphemeral` / inbound blob-diff projection /
  * the two outbound timers (change-throttle + keepalive) / `EphemeralSyncStatus` (M2, all in attach.ts); the
- * public `strata-ecs/ephemeral` barrel (M3 — `src/ephemeral/index.ts` keeps throwing until then). TWO M2
+ * public `@vibecook/strata-ecs/ephemeral` barrel (M3 — `src/ephemeral/index.ts` keeps throwing until then). TWO M2
  * pieces are folded HERE, where they need this store's private partition state: the public `leave()`
  * (best-effort departure — deletes minted keys + flushes tombstones; needs `minted`/`ownEntities`/`send`)
  * and the `@internal restageMinted` (own-timeout recovery — re-stages a live blob; needs `ownEntities`).

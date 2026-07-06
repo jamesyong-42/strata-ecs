@@ -16,7 +16,7 @@
  * the tag is safe and the components migrate onto it at the next `sync()`).
  */
 
-import type { Entity } from "strata-ecs";
+import type { Entity } from "@vibecook/strata-ecs";
 import { Fill, Kind, Label, Position, Selected, Size, Velocity, ZIndex } from "../ecs/schema";
 import { stats } from "../app/commands";
 import { world } from "../app/worldRef";

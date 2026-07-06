@@ -5,13 +5,13 @@
  * product). Same seed + same ?count= → identical board, byte for byte.
  */
 
-import type { Entity, World } from "strata-ecs";
+import type { Entity, World } from "@vibecook/strata-ecs";
 import { ConnectedTo, Fill, Kind, Label, Position, Size, Velocity, ZIndex } from "../ecs/schema";
 import { stats } from "./commands";
 
 /**
  * The minimal spawn surface `seedBoard` needs. `world` satisfies it (local-mode boot + stress), and so
- * does a `tx` {@link import("strata-ecs/durable").Mutator} — so the collab first-peer seeds the board
+ * does a `tx` {@link import("@vibecook/strata-ecs/durable").Mutator} — so the collab first-peer seeds the board
  * straight into the DOCUMENT with `doc.transaction(tx => seedBoard(tx, count))`, one commit, converged
  * to every joiner via the bootstrap snapshot. ONE board generator, two targets.
  */

@@ -1,9 +1,9 @@
 /**
- * `strata-ecs/react` — the React binding for the reactive layer (Patch Note 002 §5, amended by 003 §2).
+ * `@vibecook/strata-ecs/react` — the React binding for the reactive layer (Patch Note 002 §5, amended by 003 §2).
  *
  * Two hooks, each a `useSyncExternalStore` adapter over `world.reactive`'s Tier-3 channel:
  *
- *   import { useComponent, useResource } from "strata-ecs/react";
+ *   import { useComponent, useResource } from "@vibecook/strata-ecs/react";
  *   const pos = useComponent(world, entity, Position);   // S | undefined
  *   const cam = useResource(world, Camera);              // S | undefined
  *

@@ -16,7 +16,7 @@ import {
   defineSystem,
   defineTag,
   phase,
-} from "strata-ecs";
+} from "@vibecook/strata-ecs";
 import { type LibraryBench, N, RANDOM_ACCESS, type Scenario, accessIndex } from "../contract.ts";
 
 const VALUE = { value: "f64" } as const;
@@ -415,7 +415,7 @@ const toggle_frame: Scenario = {
 };
 
 const bench: LibraryBench = {
-  name: "strata-ecs",
+  name: "@vibecook/strata-ecs",
   version: "0.0.0",
   scenarios: [packed_5, simple_iter, frag_iter, entity_cycle, add_remove],
   frames: [sim_frame, spawn_reap_frame, toggle_frame],

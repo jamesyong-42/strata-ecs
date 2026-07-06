@@ -8,7 +8,7 @@
     "bench": "node run.mjs"
   },
   "dependencies": {
-    "strata-ecs": "workspace:*"
+    "@vibecook/strata-ecs": "workspace:*"
   },
   "devDependencies": {
     "@lastolivegames/becsy": "0.16.0",

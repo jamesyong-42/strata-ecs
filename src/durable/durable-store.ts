@@ -23,7 +23,7 @@
  *   - **`subscribeOutbound`** (§14.2): the OUTBOUND wire — on each sealed LOCAL commit, ship the update
  *     increment since the last send to every subscriber.
  *
- * NOT M1: `attachDurable`/the binding/projection/reconcile (M2/M4), the public `strata-ecs/durable`
+ * NOT M1: `attachDurable`/the binding/projection/reconcile (M2/M4), the public `@vibecook/strata-ecs/durable`
  * barrel (M5 — `src/durable/index.ts` keeps throwing until then). **M3 adds `transaction`** (the
  * upward boundary, §12) — recorder + executor in `transaction.ts`, reached through the `TxRuntime`
  * seam M2's attach installs here; legal only on an attached store.

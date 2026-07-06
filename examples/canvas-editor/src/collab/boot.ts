@@ -19,7 +19,7 @@
  */
 
 import { LoroDoc } from "loro-crdt";
-import { attachDurable, createDurableStore, PendingImportError } from "strata-ecs/durable";
+import { attachDurable, createDurableStore, PendingImportError } from "@vibecook/strata-ecs/durable";
 import { zoomToFit } from "../app/camera";
 import { seedBoard } from "../app/seed";
 import { world } from "../app/worldRef";

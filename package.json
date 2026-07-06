@@ -1,17 +1,17 @@
 {
-  "name": "strata-ecs",
-  "version": "0.0.0",
+  "name": "@vibecook/strata-ecs",
+  "version": "0.1.0",
   "description": "An entity-component-system for TypeScript apps that edit documents \u2014 typed-array fast, reactive, with CRDT-backed multiplayer (Loro) as opt-in layers.",
   "type": "module",
   "license": "MIT",
   "author": "James Yong",
-  "homepage": "https://github.com/jamesyong/strata-ecs#readme",
+  "homepage": "https://github.com/jamesyong-42/strata-ecs#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jamesyong/strata-ecs.git"
+    "url": "git+https://github.com/jamesyong-42/strata-ecs.git"
   },
   "bugs": {
-    "url": "https://github.com/jamesyong/strata-ecs/issues"
+    "url": "https://github.com/jamesyong-42/strata-ecs/issues"
   },
   "keywords": [
     "ecs",
@@ -107,5 +107,8 @@
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.0.0",
     "vitest": "^3.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

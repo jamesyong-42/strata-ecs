@@ -8,7 +8,7 @@
  * absence of a spatial index IS the demo — the HUD shows the full-world sweep staying sub-ms.
  */
 
-import type { Entity } from "strata-ecs";
+import type { Entity } from "@vibecook/strata-ecs";
 
 export class DrawBuffer {
   count = 0;

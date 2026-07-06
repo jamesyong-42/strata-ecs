@@ -7,7 +7,7 @@
  * doc.transaction land.
  */
 
-import type { Entity } from "strata-ecs";
+import type { Entity } from "@vibecook/strata-ecs";
 import { Gesture, Selected } from "../ecs/schema";
 import { commitCreate, commitDrag } from "../collab/ops";
 import { isCollab } from "../collab/mode";

@@ -173,7 +173,7 @@
  *
  * WHAT THIS FILE IS NOT: it is not the DurableStore, the binding, reconcile, or the transaction (M1–M5).
  * It is the medium adapter — it reports what the document says (origin-tagged doc-facts) and applies
- * cell writes; it makes NO apply/skip decision (005 §1.4). The `strata-ecs/durable` subpath keeps its
+ * cell writes; it makes NO apply/skip decision (005 §1.4). The `@vibecook/strata-ecs/durable` subpath keeps its
  * loud placeholder until M5.
  */
 

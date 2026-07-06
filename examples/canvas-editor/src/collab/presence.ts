@@ -3,7 +3,7 @@
  * DURABLE document, this module moves PRESENCE: one live cursor + selection highlight per peer, over
  * the SAME transport channel, but on the ephemeral store instead of the durable one.
  *
- * The whole of it is app glue over `strata-ecs/ephemeral`; there is NO presence protocol here — no
+ * The whole of it is app glue over `@vibecook/strata-ecs/ephemeral`; there is NO presence protocol here — no
  * join/leave handshake, no TTL bookkeeping, no per-peer diffing. The framework owns all of that:
  *  - `eph.spawn` / `eph.edit().set` — write MY presence into MY partition; it applies to my runtime
  *    immediately and rides the store's own change-throttle onto the wire (design §15.2, Option A).
@@ -17,9 +17,9 @@
  * layers call — both no-op in local-only mode (no active presence), so those call sites stay mode-blind.
  */
 
-import type { Entity } from "strata-ecs";
-import type { DurableStore } from "strata-ecs/durable";
-import { DurableSyncStatus } from "strata-ecs/durable";
+import type { Entity } from "@vibecook/strata-ecs";
+import type { DurableStore } from "@vibecook/strata-ecs/durable";
+import { DurableSyncStatus } from "@vibecook/strata-ecs/durable";
 import {
   attachEphemeral,
   createEphemeralStore,
@@ -27,7 +27,7 @@ import {
   LoroEphemeralSnapshot,
   type Attachment,
   type EphemeralStore,
-} from "strata-ecs/ephemeral";
+} from "@vibecook/strata-ecs/ephemeral";
 import { EphemeralStore as LoroEphemeralStore } from "loro-crdt";
 import { world } from "../app/worldRef";
 import { CursorPos, PresenceInfo, SelectionRef } from "../ecs/schema";

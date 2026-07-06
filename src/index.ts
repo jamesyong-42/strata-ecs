@@ -5,8 +5,8 @@
  * local ECS with zero durability and zero sync. The optional layers are separate
  * subpath exports so you only pay for what you import:
  *
- *   - `strata-ecs/durable`   — Part III, collaborative persistence over a Loro CRDT
- *   - `strata-ecs/ephemeral` — Part IV, transient writer-partitioned presence state
+ *   - `@vibecook/strata-ecs/durable`   — Part III, collaborative persistence over a Loro CRDT
+ *   - `@vibecook/strata-ecs/ephemeral` — Part IV, transient writer-partitioned presence state
  *
  * See `docs/design.md` for the full architecture and `docs/plan-part1.md` for
  * the Part I build plan.

@@ -6,6 +6,8 @@
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![status](https://img.shields.io/badge/status-pre--release-orange)
 ![collab](https://img.shields.io/badge/CRDT-Loro-0f766e)
+[![ci](https://github.com/jamesyong-42/strata-ecs/actions/workflows/ci.yml/badge.svg)](https://github.com/jamesyong-42/strata-ecs/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/%40vibecook%2Fstrata-ecs)](https://www.npmjs.com/package/@vibecook/strata-ecs)
 
 strata-ecs is an entity-component-system for TypeScript apps that edit documents —
 whiteboards, node graphs, design tools. Model the document as entities and components,
@@ -34,10 +36,10 @@ haven't turned on.
 - **Transport-agnostic** — the framework converges documents; your app moves bytes.
   Any channel that carries a `Uint8Array` works: WebSocket, `BroadcastChannel`, WebRTC.
 - **First-party devtools and React binding** — a drop-in inspector panel
-  (`strata-ecs/tools`) and two `useSyncExternalStore` hooks (`strata-ecs/react`).
+  (`@vibecook/strata-ecs/tools`) and two `useSyncExternalStore` hooks (`@vibecook/strata-ecs/react`).
 
-**Documentation:** [the guide](https://jamesyong.github.io/strata-ecs/) ·
-[API reference](https://jamesyong.github.io/strata-ecs/api.html) ·
+**Documentation:** [the guide](https://jamesyong-42.github.io/strata-ecs/) ·
+[API reference](https://jamesyong-42.github.io/strata-ecs/api.html) ·
 [benchmarks](BENCHMARKS.md)
 
 ---
@@ -62,12 +64,11 @@ haven't turned on.
 ## Install
 
 ```sh
-npm install strata-ecs
+npm install @vibecook/strata-ecs
 ```
 
-> **Pre-release:** strata-ecs is not yet published to npm and the API may move before
-> 0.1. Until then, clone the repository and build locally (see
-> [Development](#development)).
+> **Pre-1.0:** the API may still move between minor versions — pin your version and read
+> the [changelog](CHANGELOG.md) when bumping.
 
 `loro-crdt` and `react` are **optional** peer dependencies — you install them only if
 you use the collaboration layers or the React binding. The core has zero dependencies.
@@ -78,7 +79,7 @@ Components hold typed data. Entities carry components. Systems run over queries.
 world ticks:
 
 ```ts
-import { createWorld, defineComponent, defineQuery, defineSystem, phase } from "strata-ecs";
+import { createWorld, defineComponent, defineQuery, defineSystem, phase } from "@vibecook/strata-ecs";
 
 const Position = defineComponent("Position", { x: "f32", y: "f32" });
 const Velocity = defineComponent("Velocity", { x: "f32", y: "f32" });
@@ -119,11 +120,11 @@ requestAnimationFrame(frame);
 
 | Term | One line | Guide |
 |---|---|---|
-| **Entity** | a stable handle naming one thing in the world — a shape, a node, an edge | [Entities](https://jamesyong.github.io/strata-ecs/#entities) |
-| **Component** | typed fields attached to an entity; entities with the same set share storage | [Components](https://jamesyong.github.io/strata-ecs/#components) |
-| **System** | a function that runs over every entity matching a query, once per tick | [Systems](https://jamesyong.github.io/strata-ecs/#systems) |
-| **Query** | a compiled description of "entities with these components" — define once, reuse | [Queries](https://jamesyong.github.io/strata-ecs/#queries) |
-| **World** | the container that holds it all; `world.tick()` runs your systems over it | [The frame loop](https://jamesyong.github.io/strata-ecs/#frame) |
+| **Entity** | a stable handle naming one thing in the world — a shape, a node, an edge | [Entities](https://jamesyong-42.github.io/strata-ecs/#entities) |
+| **Component** | typed fields attached to an entity; entities with the same set share storage | [Components](https://jamesyong-42.github.io/strata-ecs/#components) |
+| **System** | a function that runs over every entity matching a query, once per tick | [Systems](https://jamesyong-42.github.io/strata-ecs/#systems) |
+| **Query** | a compiled description of "entities with these components" — define once, reuse | [Queries](https://jamesyong-42.github.io/strata-ecs/#queries) |
+| **World** | the container that holds it all; `world.tick()` runs your systems over it | [The frame loop](https://jamesyong-42.github.io/strata-ecs/#frame) |
 
 Tags (zero-data markers), relations (indexed edges with cascade-on-despawn), and
 resources (world singletons) round out the data model.
@@ -183,7 +184,7 @@ world.reactive.observeResource(Camera, () => { repaint = true; });
 React components subscribe with two hooks — re-rendering exactly once per real change:
 
 ```tsx
-import { useComponent, useResource } from "strata-ecs/react";
+import { useComponent, useResource } from "@vibecook/strata-ecs/react";
 
 function ShapeInspector({ world, entity }: { world: World; entity: Entity }) {
   const pos = useComponent(world, entity, Position);
@@ -207,7 +208,7 @@ world.import(bytes, { replace: true });     // validates, then resets the SAME w
 Everything above runs entirely local. When you want other people in the same document,
 two layers attach:
 
-|  | **Document** (`strata-ecs/durable`) | **Presence** (`strata-ecs/ephemeral`) |
+|  | **Document** (`@vibecook/strata-ecs/durable`) | **Presence** (`@vibecook/strata-ecs/ephemeral`) |
 |---|---|---|
 | Holds | the board itself — shapes, edges, styles | the people on it — cursors, selections |
 | Lifetime | permanently stored, merges without conflicts | self-expiring; resets when a peer disconnects |
@@ -215,7 +216,7 @@ two layers attach:
 
 ```ts
 import { LoroDoc } from "loro-crdt";
-import { createDurableStore, attachDurable } from "strata-ecs/durable";
+import { createDurableStore, attachDurable } from "@vibecook/strata-ecs/durable";
 
 const doc = createDurableStore(new LoroDoc());   // the ONE place the CRDT enters
 attachDurable(world, doc);                       // project it into the runtime
@@ -238,14 +239,14 @@ conflicting remote edits off while your gesture is in flight, then everyone conv
 Presence is the same idea for people: each peer owns a partition, writes it immediately,
 and every other peer projects in as a live `Not(Local)` entity that self-expires on TTL.
 
-See [Going multiplayer](https://jamesyong.github.io/strata-ecs/#collab) in the guide for
+See [Going multiplayer](https://jamesyong-42.github.io/strata-ecs/#collab) in the guide for
 the full story — the visibility rules, entity keys vs. handles, and the transport
 bootstrap protocol.
 
 ## Devtools
 
 ```ts
-import { attachObserver } from "strata-ecs/tools";
+import { attachObserver } from "@vibecook/strata-ecs/tools";
 const obs = attachObserver(world, { describe });
 ```
 
@@ -288,11 +289,11 @@ Full cross-library tables, methodology, and the losses included:
 
 | Import | What | Requires |
 |---|---|---|
-| `strata-ecs` | the core ECS + reactivity | nothing |
-| `strata-ecs/durable` | the Document (durable) layer | `loro-crdt` |
-| `strata-ecs/ephemeral` | the Presence (ephemeral) layer | `loro-crdt` |
-| `strata-ecs/react` | `useComponent` / `useResource` hooks | `react >= 18` |
-| `strata-ecs/tools` | the inspector panel | nothing |
+| `@vibecook/strata-ecs` | the core ECS + reactivity | nothing |
+| `@vibecook/strata-ecs/durable` | the Document (durable) layer | `loro-crdt` |
+| `@vibecook/strata-ecs/ephemeral` | the Presence (ephemeral) layer | `loro-crdt` |
+| `@vibecook/strata-ecs/react` | `useComponent` / `useResource` hooks | `react >= 18` |
+| `@vibecook/strata-ecs/tools` | the inspector panel | nothing |
 
 ESM-only. `loro-crdt` and `react` are optional peer dependencies — never bundled, only
 needed for the entry points that use them.
@@ -320,10 +321,11 @@ React binding), [`examples/canvas-editor`](examples/canvas-editor) (the flagship
 
 ## Status
 
-**Pre-release.** The core, the reactivity tier, both collaboration layers, the devtools,
+**Pre-1.0.** The core, the reactivity tier, both collaboration layers, the devtools,
 and the example app are complete, benchmarked, and green under the full test suite —
-this README describes what is built, not what is planned. Not yet published to npm; the
-API may move before 0.1.
+this README describes what is built, not what is planned. Published to npm as
+[`@vibecook/strata-ecs`](https://www.npmjs.com/package/@vibecook/strata-ecs); minor
+versions may still break APIs before 1.0.
 
 ## License
 

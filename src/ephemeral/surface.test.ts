@@ -1,5 +1,5 @@
 /**
- * `strata-ecs/ephemeral` — the public barrel (Part IV **M3**; design.md §15 API reference, 006 C7 as
+ * `@vibecook/strata-ecs/ephemeral` — the public barrel (Part IV **M3**; design.md §15 API reference, 006 C7 as
  * amended). Imports come THROUGH THE BARREL (`./index`) so the test doubles as proof the public entry
  * resolves and wires end-to-end (the durable-M5 precedent: test the `./index` entry, not the built dist).
  * The exhaustive presence / blob-diff / TTL behaviours live in attach.test.ts; this file guards the SURFACE:

@@ -5,8 +5,8 @@
  * from birth (default 0), toggling simulation is a `runIf` gate costing ZERO migrations.
  */
 
-import type { Batch } from "strata-ecs";
-import { defineSystem } from "strata-ecs";
+import type { Batch } from "@vibecook/strata-ecs";
+import { defineSystem } from "@vibecook/strata-ecs";
 import { simulated } from "../queries";
 import { Position, SimMode, Velocity } from "../schema";
 

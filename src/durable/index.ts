@@ -1,5 +1,5 @@
 /**
- * `strata-ecs/durable` — the durable layer's public surface (Part III; docs/design.md §11–§14 as
+ * `@vibecook/strata-ecs/durable` — the durable layer's public surface (Part III; docs/design.md §11–§14 as
  * amended by 006, and the Part III API reference).
  *
  * Opt-in collaborative persistence and sync over a Loro CRDT: a document you change at explicit
@@ -7,7 +7,7 @@
  * by a lagging baseline. Built entirely on Part II. `loro-crdt` is an OPTIONAL peer dependency — it is
  * named in exactly one place (the `LoroSnapshot` adapter behind `createDurableStore`) and never bundled.
  *
- *   import { createDurableStore, attachDurable, DurableSyncStatus } from "strata-ecs/durable";
+ *   import { createDurableStore, attachDurable, DurableSyncStatus } from "@vibecook/strata-ecs/durable";
  *   const doc = createDurableStore(loroDoc);        // the ONE place a LoroDoc enters (§14.2)
  *   const attachment = attachDurable(world, doc);   // project the document in; register the drain (§12.4)
  *   doc.subscribeOutbound(bytes => transport.send(bytes));   // OUTBOUND wire

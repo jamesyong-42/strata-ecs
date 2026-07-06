@@ -8,7 +8,7 @@
  * flight, a dropped-then-held remote value, §13.3) — the highlighted Δ is the whole point of the tab.
  *
  * It reaches BOTH views through {@link ObserverDurableSource}, a structural interface the host's live
- * `DurableStore` + durable `Attachment` satisfy — the tools package never imports `strata-ecs/durable`
+ * `DurableStore` + durable `Attachment` satisfy — the tools package never imports `@vibecook/strata-ecs/durable`
  * (design §0; see index.ts). The getter is re-read every poll and returns null before a collab store is
  * attached, so the tab exists (a placeholder) from first mount and lights up when sync begins.
  *

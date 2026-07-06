@@ -31,7 +31,7 @@ export class Registry {
   define(name: string): number {
     if (this.reserved.has(name)) {
       throw new Error(
-        `strata: "${name}" is a reserved framework identifier — import it from "strata-ecs" rather than defining it yourself (§3.4).`,
+        `strata: "${name}" is a reserved framework identifier — import it from "@vibecook/strata-ecs" rather than defining it yourself (§3.4).`,
       );
     }
     if (this.ids.has(name)) {

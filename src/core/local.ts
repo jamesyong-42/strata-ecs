@@ -5,7 +5,7 @@
  * a query distinguishes your own ephemeral entities from remote peers' projected ones:
  *
  * ```ts
- * import { Local, Not } from "strata-ecs";
+ * import { Local, Not } from "@vibecook/strata-ecs";
  * const remoteCursors = defineQuery([CursorPos, Not(Local)]); // everyone but me
  * ```
  *

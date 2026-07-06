@@ -30,14 +30,14 @@
  * the runtime; the framework did the converging.
  */
 
-import { createWorld, type Entity } from "strata-ecs";
+import { createWorld, type Entity } from "@vibecook/strata-ecs";
 import {
   attachDurable,
   createDurableStore,
   type Attachment,
   type Mutator,
-} from "strata-ecs/durable";
-import { attachEphemeral, createEphemeralStore, LoroEphemeralSnapshot } from "strata-ecs/ephemeral";
+} from "@vibecook/strata-ecs/durable";
+import { attachEphemeral, createEphemeralStore, LoroEphemeralSnapshot } from "@vibecook/strata-ecs/ephemeral";
 import { EphemeralStore as LoroEphemeralStore, LoroDoc } from "loro-crdt";
 import { cam } from "../app/camera";
 import { world as appWorld } from "../app/worldRef";

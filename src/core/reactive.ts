@@ -16,7 +16,7 @@
  * the observer at `frame − 1`, so a change made in the SAME frame as registration is observed at the
  * very next `notify()` while nothing stamped before the subscription ever fires — no priming needed.
  *
- * The core stays framework-agnostic — it is built over a {@link RuntimeStore} alone; `strata-ecs/react`
+ * The core stays framework-agnostic — it is built over a {@link RuntimeStore} alone; `@vibecook/strata-ecs/react`
  * is a thin `useSyncExternalStore` adapter over Tier 3 + {@link Reactive.peek} (002 §5).
  */
 

@@ -3,7 +3,7 @@ import { defineConfig } from "vite";
 import wasm from "vite-plugin-wasm";
 import topLevelAwait from "vite-plugin-top-level-await";
 
-// Live-source mode (default): `strata-ecs` resolves straight to ../../src so framework edits
+// Live-source mode (default): `@vibecook/strata-ecs` resolves straight to ../../src so framework edits
 // hot-reload the example instantly — this example exists to drive strata-ecs's development.
 // Set STRATA_DIST=1 to drop the alias and exercise the built dist through the exports map
 // (requires `pnpm build` at the repo root first).
@@ -31,11 +31,11 @@ export default defineConfig({
       ? []
       : [
           // Exact-match regexes, subpaths BEFORE the bare name: a plain string alias uses
-          // prefix semantics and would rewrite `strata-ecs/tools` into `<src/index.ts>/tools`.
-          { find: /^strata-ecs\/tools$/, replacement: fileURLToPath(new URL("../../src/tools/index.ts", import.meta.url)) },
-          { find: /^strata-ecs\/durable$/, replacement: fileURLToPath(new URL("../../src/durable/index.ts", import.meta.url)) },
-          { find: /^strata-ecs\/ephemeral$/, replacement: fileURLToPath(new URL("../../src/ephemeral/index.ts", import.meta.url)) },
-          { find: /^strata-ecs$/, replacement: fileURLToPath(new URL("../../src/index.ts", import.meta.url)) },
+          // prefix semantics and would rewrite `@vibecook/strata-ecs/tools` into `<src/index.ts>/tools`.
+          { find: /^@vibecook\/strata-ecs\/tools$/, replacement: fileURLToPath(new URL("../../src/tools/index.ts", import.meta.url)) },
+          { find: /^@vibecook\/strata-ecs\/durable$/, replacement: fileURLToPath(new URL("../../src/durable/index.ts", import.meta.url)) },
+          { find: /^@vibecook\/strata-ecs\/ephemeral$/, replacement: fileURLToPath(new URL("../../src/ephemeral/index.ts", import.meta.url)) },
+          { find: /^@vibecook\/strata-ecs$/, replacement: fileURLToPath(new URL("../../src/index.ts", import.meta.url)) },
         ],
   },
   server: { headers: isolationHeaders },

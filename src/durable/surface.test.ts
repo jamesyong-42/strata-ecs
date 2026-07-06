@@ -1,5 +1,5 @@
 /**
- * `strata-ecs/durable` — the public surface + `DurableSyncStatus` (Part III **M5**; design.md Part III
+ * `@vibecook/strata-ecs/durable` — the public surface + `DurableSyncStatus` (Part III **M5**; design.md Part III
  * API reference, 006 C7 as amended). Imports come THROUGH THE BARREL (`./index`) so the test doubles as
  * proof the public entry resolves and wires end-to-end (the react/tools precedent: test the `./index`
  * entry, not the built dist). Coverage:
@@ -11,7 +11,7 @@
  *     ≥1 fact advances `lastAppliedFrame` and drops `pendingInbound` back to 0; a live drag-drop shows in
  *     `heldCells`, and ending the drag clears it;
  *   - useResource-shaped consumption: a Tier-3 `observeResource` + `peekResource` watch (the exact shape
- *     `strata-ecs/react`'s `useResource` is built on) sees a real change once and reads the current value.
+ *     `@vibecook/strata-ecs/react`'s `useResource` is built on) sees a real change once and reads the current value.
  */
 
 import { describe, expect, it } from "vitest";

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 /**
- * `strata-ecs/tools` observer collab tabs (durable + ephemeral, TASK A2). These tabs are the ONLY
+ * `@vibecook/strata-ecs/tools` observer collab tabs (durable + ephemeral, TASK A2). These tabs are the ONLY
  * observer surface fed by structural interfaces the host satisfies with live collab stores — the tools
- * package never imports `strata-ecs/durable`/`ephemeral` (design §0), so these tests stub the interfaces
+ * package never imports `@vibecook/strata-ecs/durable`/`ephemeral` (design §0), so these tests stub the interfaces
  * directly (a plain object with `entities()`/`readEntity()`, a plain `debugDump()`), exactly as the
  * package's own typecheck sees them. Setup mirrors lifecycle.test.ts: happy-dom, fake timers, the panel's
  * internal POLL_MS drives every render.

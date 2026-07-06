@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * `strata-ecs/tools` observer lifecycle smoke (review-part1 R7). The recorder is unit-tested next door;
+ * `@vibecook/strata-ecs/tools` observer lifecycle smoke (review-part1 R7). The recorder is unit-tested next door;
  * this pins the OTHER ~90% — the DOM panel's full attach→render→dispose teardown, which nothing
  * exercised. dispose() is a 5-part teardown (interval, timeline, recorder, loop-detach, panel/DOM);
  * a leak here is invisible until a host app mounts the panel twice.

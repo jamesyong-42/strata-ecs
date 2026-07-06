@@ -3,7 +3,7 @@
  * store, so queries are constants you import, not something you build per frame (§6).
  */
 
-import { defineQuery, Local, Not, Related } from "strata-ecs";
+import { defineQuery, Local, Not, Related } from "@vibecook/strata-ecs";
 import { ConnectedTo, CursorPos, Fill, Kind, Label, Position, PresenceInfo, Selected, Size, Velocity, ZIndex } from "./schema";
 
 /** Everything CullSystem sweeps: the drawable document. */

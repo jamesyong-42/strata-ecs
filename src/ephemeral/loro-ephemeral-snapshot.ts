@@ -96,7 +96,7 @@
  * ============================================================================================
  *
  * WHAT THIS FILE IS NOT: not the `EphemeralStore` (the Entity-level Mutator, M1), not `attachEphemeral`
- * / inbound projection / the timers / status (M2), not the public `strata-ecs/ephemeral` barrel (M3 —
+ * / inbound projection / the timers / status (M2), not the public `@vibecook/strata-ecs/ephemeral` barrel (M3 —
  * `src/ephemeral/index.ts` keeps throwing until then). It is the medium adapter: it moves blobs and
  * reports the three events, and makes no apply/skip/partition decision.
  */

@@ -3,7 +3,7 @@
  * knows HOW to display entities; only the app knows what they mean (design.md §18).
  */
 
-import type { DescribeFn } from "strata-ecs/tools";
+import type { DescribeFn } from "@vibecook/strata-ecs/tools";
 import { Kind, Label, Selected } from "../ecs/schema";
 
 const KIND_COLORS: Record<string, string> = {

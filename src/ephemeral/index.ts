@@ -1,5 +1,5 @@
 /**
- * `strata-ecs/ephemeral` — the ephemeral layer's public surface (Part IV; docs/design.md §15 as amended by
+ * `@vibecook/strata-ecs/ephemeral` — the ephemeral layer's public surface (Part IV; docs/design.md §15 as amended by
  * 006, and the Part IV API reference).
  *
  * A writable, writer-partitioned, LWW/TTL ephemeral entity store over Loro's `EphemeralStore` (presence,
@@ -8,7 +8,7 @@
  * entirely on Part II. `loro-crdt` is an OPTIONAL peer dependency — it is named in exactly one place (the
  * `LoroEphemeralSnapshot` adapter) and never bundled.
  *
- *   import { LoroEphemeralSnapshot, createEphemeralStore, attachEphemeral } from "strata-ecs/ephemeral";
+ *   import { LoroEphemeralSnapshot, createEphemeralStore, attachEphemeral } from "@vibecook/strata-ecs/ephemeral";
  *   import { EphemeralStore as LoroEphemeralStore } from "loro-crdt";
  *   const loro = new LoroEphemeralStore(5000);                 // the backing Loro store — you own its lifecycle
  *   const source = new LoroEphemeralSnapshot(loro);            // the ONE place loro-crdt enters this layer
@@ -31,8 +31,8 @@
  * you get one from `createEphemeralStore`, never `new` the class; the constructor is not API). `EphemeralDebugDump`
  * — the read-all shape `eph.debugDump()` returns for the tools observer's ephemeral tab — is likewise TYPE-ONLY
  * (a debug/observability seam, never a sync path). `Local` is
- * NOT re-exported here — its canonical home is the core barrel (`strata-ecs`; design §20, one home per
- * symbol); a presence query is `defineQuery([PresenceInfo, Not(Local)])` with both imported from `strata-ecs`.
+ * NOT re-exported here — its canonical home is the core barrel (`@vibecook/strata-ecs`; design §20, one home per
+ * symbol); a presence query is `defineQuery([PresenceInfo, Not(Local)])` with both imported from `@vibecook/strata-ecs`.
  * `Attachment` is the ephemeral layer's OWN handle (`{ detach() }`, no `baseline` seam — the writer-partitioned
  * layer keeps no baseline), deliberately distinct from durable's identically-named handle; the two never
  * collide (separate entry points) and are structurally compatible at the public surface.

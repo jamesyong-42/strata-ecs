@@ -1,9 +1,9 @@
 /**
- * `strata-ecs/tools` — first-party dev tools (docs/plan-tools-observer.md).
+ * `@vibecook/strata-ecs/tools` — first-party dev tools (docs/plan-tools-observer.md).
  *
  * The Observer is a zero-dependency vanilla-DOM panel usable from ANY host app:
  *
- *   import { attachObserver } from "strata-ecs/tools";
+ *   import { attachObserver } from "@vibecook/strata-ecs/tools";
  *   const obs = attachObserver(world, { describe });   // …later: obs.dispose()
  *
  * Base tabs: **entities** (virtualized live list + component/tag/relation detail pane),
@@ -40,7 +40,7 @@ export { createLifecycleRecorder, defaultDescribe };
  * The collab-store inspection surface — STRUCTURAL interfaces the host satisfies with live objects.
  * ════════════════════════════════════════════════════════════════════════════════════════════
  *
- * `strata-ecs/tools` MUST NOT import `strata-ecs/durable` or `strata-ecs/ephemeral` — not even
+ * `@vibecook/strata-ecs/tools` MUST NOT import `@vibecook/strata-ecs/durable` or `@vibecook/strata-ecs/ephemeral` — not even
  * type-only: the tools ship as a standalone browser panel and the package must stay installable
  * and typecheckable WITHOUT `loro-crdt` present (design §0). So the observer declares its OWN
  * minimal read shapes here, and the host passes its live `DurableStore` / `EphemeralStore` (which

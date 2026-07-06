@@ -8,7 +8,7 @@
  * verification screenshots; also a handy smoke test after refactors).
  */
 
-import { attachObserver, type ObserverOptions } from "strata-ecs/tools";
+import { attachObserver, type ObserverOptions } from "@vibecook/strata-ecs/tools";
 import { cam, panBy, setViewportSize, zoomToFit } from "./app/camera";
 import { dirty, setOnMutate, stats } from "./app/commands";
 import { duplicateSelection, setSelection } from "./app/editorOps";

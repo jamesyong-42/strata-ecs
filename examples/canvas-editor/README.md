@@ -1,7 +1,7 @@
 # strata canvas — the flagship example
 
 An infinite-canvas whiteboard built on [strata-ecs](../../README.md)'s Part I runtime core, in
-**vanilla TypeScript + Canvas2D**. The only runtime dependency is `strata-ecs` itself — no UI
+**vanilla TypeScript + Canvas2D**. The only runtime dependency is `@vibecook/strata-ecs` itself — no UI
 framework, no renderer library, no state manager. The ECS _is_ the state manager; the frame
 is the subscription.
 
@@ -32,7 +32,7 @@ exercises the built dist through the real exports map instead.
 | Untick `Cull` (or `cull test`) in the HUD                      | the schedule is a plain array — and self-inflicted jank shows what the sweep saves                                                                                   |
 | Open the console and watch nothing repaint at idle — then drag | the repaint is driven by `world.reactive.observeQuery`, not hand-set dirty flags                                                                                     |
 
-The **observer panel** (top right) is not app code — it's `strata-ecs/tools`, the framework's
+The **observer panel** (top right) is not app code — it's `@vibecook/strata-ecs/tools`, the framework's
 own dev tool, mounted with one call and an app-supplied labeling callback
 (`attachObserver(world, { describe })`).
 
@@ -66,7 +66,7 @@ either a `BroadcastChannel` or the `collab/transport-ws.ts` WebSocket relay clie
 the **bootstrap policy** (`collab/boot.ts` — the hello/snapshot handshake, the seed-vs-join decision, and
 the reconnect re-bootstrap). Everything hard is the framework's: **convergence** (committer-wins,
 drag-protected, component-granular) lives behind `doc.applyRemote`; **presence** (writer-partitioned
-cursors that project as `Not(Local)` entities and self-expire) is `strata-ecs/ephemeral`. There is no
+cursors that project as `Not(Local)` entities and self-expire) is `@vibecook/strata-ecs/ephemeral`. There is no
 manual dirty tracking, no conflict-resolution code, and no presence protocol anywhere in this
 example — their **absence** is the demo. Undo is **local-ops-only** by construction in the durable
 layer (proven in the framework's durable suite); the example doesn't yet bind a key to it.

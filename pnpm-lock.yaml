@@ -56,7 +56,7 @@ importers:
 
   bench/compare:
     dependencies:
-      strata-ecs:
+      '@vibecook/strata-ecs':
         specifier: workspace:*
         version: link:../..
     devDependencies:
@@ -78,7 +78,7 @@ importers:
 
   examples/canvas-editor:
     dependencies:
-      strata-ecs:
+      '@vibecook/strata-ecs':
         specifier: workspace:*
         version: link:../..
     devDependencies:

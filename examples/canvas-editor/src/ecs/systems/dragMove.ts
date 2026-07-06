@@ -9,8 +9,8 @@
  * frames (§18.4) — systems read resources, they never own DOM state.
  */
 
-import type { Batch } from "strata-ecs";
-import { defineSystem } from "strata-ecs";
+import type { Batch } from "@vibecook/strata-ecs";
+import { defineSystem } from "@vibecook/strata-ecs";
 import { movableSelected } from "../queries";
 import { Gesture, Position } from "../schema";
 
