@@ -169,6 +169,8 @@
   }
   .chip b { color: var(--ink); font-weight: 600; }
   .chip.pre { border-style: dashed; }
+  a.chip-link { text-decoration: none; color: var(--core-deep); border-color: rgba(59,91,219,.4); }
+  a.chip-link:hover { border-color: var(--core); background: var(--core-wash); }
   .prenote { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--faint); margin: 12px 0 0; }
 
   /* glossary strip — the five words, one line each */
@@ -412,11 +414,15 @@
     <a href="#tools">Devtools</a>
     <a href="#example">The example app</a>
     <a href="#notes">The rules</a>
+    <a href="benchmarks.html">Benchmarks</a>
+    <a href="demo/">Live demo ↗</a>
   </div>
 
   <div class="nav-foot">
     <a href="https://github.com/jamesyong-42/strata-ecs">GitHub ↗</a>
     <a href="api.html">API reference ↗</a>
+    <a href="benchmarks.html">Benchmarks ↗</a>
+    <a href="demo/">Live demo ↗</a>
   </div>
 </nav>
 
@@ -438,6 +444,7 @@
       <span class="chip"><b>zero</b> dependencies</span>
       <span class="chip">CRDT-backed · <b>Loro</b></span>
       <span class="chip"><b>MIT</b></span>
+      <a class="chip chip-link" href="demo/">try the live demo ↗</a>
     </div>
     <p class="prenote">// pre-1.0 — minor versions may break APIs; pin your version.</p>
 
@@ -497,7 +504,7 @@
       <a href="https://github.com/NateTheGreatt/bitECS">bitecs</a>, the flat-array specialist, and
       is fastest on entity-lifecycle churn. The trade is the archetype model's usual one: adding or
       removing a component migrates the row between tables. See
-      <a href="https://github.com/jamesyong-42/strata-ecs/blob/main/BENCHMARKS.md">BENCHMARKS.md</a>
+      <a href="benchmarks.html">the benchmarks page</a>
       for the full cross-library table, losses included.
     </p>
 
@@ -1291,7 +1298,9 @@
     <h2><svg class="glyph" data-band="1" data-hue="neutral"></svg>The example app<a class="anchor" href="#example">#</a></h2>
     <p>
       <code>examples/canvas-editor</code> is an infinite-canvas whiteboard in vanilla TypeScript and
-      Canvas2D whose only runtime dependency is <code>@vibecook/strata-ecs</code>. The ECS <em>is</em> the state
+      Canvas2D whose only runtime dependency is <code>@vibecook/strata-ecs</code> — and it runs
+      <a href="demo/">live, right here</a> (open <a href="demo/?collab=demo">two tabs of
+      <code>?collab=demo</code></a> for multiplayer between them). The ECS <em>is</em> the state
       manager; the frame is the subscription. It demonstrates, end to end:
     </p>
     <ul>
@@ -1319,7 +1328,7 @@
 
     <h3>Further reading</h3>
     <ul>
-      <li><a href="https://github.com/jamesyong-42/strata-ecs/blob/main/BENCHMARKS.md">BENCHMARKS.md</a> — the cross-library comparison, losses included.</li>
+      <li><a href="benchmarks.html">Benchmarks</a> — the cross-library comparison, losses included.</li>
       <li><a href="api.html">API reference →</a> — every export, signature by signature.</li>
     </ul>
     <div class="note">

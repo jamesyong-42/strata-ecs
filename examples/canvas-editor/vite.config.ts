@@ -17,6 +17,9 @@ const isolationHeaders = {
 };
 
 export default defineConfig({
+  // The Pages deploy serves the built demo under a subpath (…github.io/strata-ecs/demo/), so
+  // asset URLs need the prefix there; local dev and plain builds stay at root.
+  base: process.env.DEMO_BASE ?? "/",
   // loro-crdt (the collab layers' CRDT engine) ships a wasm-bindgen module whose glue uses a
   // top-level await; Vite's dev server rejects the ESM-integration wasm import without these.
   // The collab boot is statically imported by main.ts, so loro is in the browser graph in BOTH

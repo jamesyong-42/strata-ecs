@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<!--
+  strata-ecs — benchmarks (docs/benchmarks.html), one of a three-page site (index.html is the guide,
+  api.html the reference). Content mirrors BENCHMARKS.md in the repo; regenerate the raw numbers with
+  `pnpm build && cd bench/compare && node run.mjs`.
+-->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta property="og:title" content="strata-ecs — benchmarks" />
+<meta property="og:description" content="strata-ecs vs bitecs, becsy, miniplex, koota — realistic frames, the canonical micro-scenarios, and editor-centric extensions. Every scenario published, losses included." />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary" />
+<title>strata-ecs — benchmarks</title>
+<meta name="description" content="strata-ecs vs the four most-used TypeScript ECS libraries: realistic frames, canonical micro-scenarios, and editor-centric extensions — with the losses included and equal work proven by checksums." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #fbfbf9;
+    --ink: #16181d;
+    --muted: #5c6470;
+    --faint: #8b93a0;
+    --line: #e3e5e1;
+    --line-soft: #edeeea;
+    --panel: #f3f3ef;
+    --core: #3b5bdb;      --core-deep: #2f47b0;  --core-wash: #eef1fd;
+    --durable: #0f766e;   --durable-deep: #0b5951;
+    --sidebar-w: 260px;
+    --measure: 780px;
+    --radius: 7px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  html, body { max-width: 100%; overflow-x: hidden; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Source Serif 4", Georgia, serif; font-size: 16.5px; line-height: 1.7;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  ::selection { background: #d9e0f7; color: var(--ink); }
+
+  .sidebar {
+    position: fixed; inset: 0 auto 0 0; width: var(--sidebar-w);
+    padding: 30px 22px 44px 26px; overflow-y: auto;
+    border-right: 1px solid var(--line); background: var(--bg); z-index: 40; scrollbar-width: thin;
+  }
+  .brand { display: flex; align-items: baseline; gap: 9px; text-decoration: none; color: var(--ink); }
+  .brand b { font-family: "Archivo", sans-serif; font-weight: 700; font-size: 20px; letter-spacing: -0.02em; }
+  .brand .dash { color: var(--core); font-weight: 700; }
+  .ver {
+    font-family: "JetBrains Mono", monospace; font-size: 10.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--faint); margin: 7px 0 4px;
+  }
+  .back-link {
+    display: inline-block; margin: 6px 0 24px;
+    font-family: "JetBrains Mono", monospace; font-size: 11.5px;
+    color: var(--core-deep); text-decoration: none;
+    border-bottom: 1px solid rgba(59,91,219,.3); padding-bottom: 1px;
+  }
+  .back-link:hover { border-bottom-color: var(--core); }
+  .nav-group { margin-bottom: 18px; padding-left: 11px; border-left: 2px solid var(--core); }
+  .nav-group > .lbl {
+    display: block; font-family: "JetBrains Mono", monospace; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.15em; color: var(--faint); margin-bottom: 7px;
+  }
+  .nav-group a {
+    display: block; padding: 3px 0; font-family: "Archivo", sans-serif; font-size: 13.5px;
+    font-weight: 600; color: var(--muted); text-decoration: none; line-height: 1.35; transition: color .12s;
+  }
+  .nav-group a:hover { color: var(--ink); }
+  .nav-foot {
+    margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line);
+    font-family: "JetBrains Mono", monospace; font-size: 12px;
+  }
+  .nav-foot a { display: block; padding: 3px 0; color: var(--muted); text-decoration: none; }
+  .nav-foot a:hover { color: var(--core-deep); }
+  .nav-toggle {
+    display: none; position: fixed; top: 12px; left: 12px; z-index: 60;
+    font-family: "JetBrains Mono", monospace; font-size: 12px; padding: 8px 13px;
+    background: var(--ink); color: var(--bg); border: none; border-radius: var(--radius); cursor: pointer;
+  }
+
+  main { margin-left: var(--sidebar-w); padding: 0 56px 140px; }
+  .measure { max-width: var(--measure); margin: 0 auto; }
+  section { margin-bottom: 70px; scroll-margin-top: 24px; }
+
+  .hero { padding: 92px 0 40px; border-bottom: 1px solid var(--line); margin-bottom: 54px; }
+  .eyebrow {
+    font-family: "JetBrains Mono", monospace; font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.18em; color: var(--core-deep); margin: 0 0 18px;
+  }
+  .hero h1 {
+    font-family: "Archivo", sans-serif; font-weight: 700;
+    font-size: clamp(30px, 4.6vw, 46px); letter-spacing: -0.028em; line-height: 1.06; margin: 0 0 18px;
+  }
+  .hero .lede { font-size: 19px; line-height: 1.55; color: var(--muted); max-width: 680px; margin: 0 0 24px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 9px; }
+  .chip {
+    font-family: "JetBrains Mono", monospace; font-size: 12px; padding: 5px 12px;
+    border: 1px solid var(--line); background: var(--panel); border-radius: 100px; color: var(--muted);
+  }
+  .chip b { color: var(--ink); font-weight: 600; }
+
+  h2 {
+    font-family: "Archivo", sans-serif; font-weight: 700; font-size: 27px;
+    letter-spacing: -0.02em; line-height: 1.15; margin: 0 0 8px; padding-top: 6px; scroll-margin-top: 24px;
+  }
+  p { margin: 0 0 15px; }
+  a { color: var(--core-deep); text-decoration: underline; text-decoration-color: rgba(59,91,219,.32); text-underline-offset: 2px; }
+  a:hover { text-decoration-color: var(--core); }
+  strong { font-weight: 600; }
+  ul { padding-left: 22px; margin: 0 0 16px; }
+  li { margin-bottom: 8px; }
+  code {
+    font-family: "JetBrains Mono", monospace; font-size: 0.85em;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; white-space: nowrap;
+  }
+
+  .note {
+    margin: 20px 0 22px; padding: 13px 16px 13px 17px;
+    border: 1px solid var(--line); border-left: 3px solid var(--faint);
+    border-radius: 0 var(--radius) var(--radius) 0; background: var(--panel); font-size: 15px;
+  }
+  .note > :last-child { margin-bottom: 0; }
+  .tag {
+    display: inline-block; font-family: "JetBrains Mono", monospace; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.13em; margin-bottom: 4px; color: var(--muted);
+  }
+  .rule { border-left: 3px solid var(--core); background: var(--core-wash); }
+  .rule .tag { color: var(--core-deep); }
+
+  .tbl { overflow-x: auto; margin: 20px 0 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th {
+    font-family: "JetBrains Mono", monospace; font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em; text-align: right; color: var(--faint);
+    padding: 9px 13px; border-bottom: 1px solid var(--line); background: var(--panel); white-space: nowrap;
+  }
+  th:first-child { text-align: left; }
+  th.strata { color: var(--core-deep); }
+  td { padding: 9px 13px; border-bottom: 1px solid var(--line-soft); line-height: 1.5; text-align: right; font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
+  td:first-child { text-align: left; font-family: "JetBrains Mono", monospace; font-weight: 600; color: var(--ink); }
+  tr:last-child td { border-bottom: none; }
+  td.win { font-weight: 700; color: var(--core-deep); background: var(--core-wash); }
+  td.na { color: var(--faint); }
+
+  footer {
+    border-top: 1px solid var(--line); margin-top: 90px; padding-top: 26px;
+    font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--faint);
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  }
+  footer a { color: var(--muted); }
+
+  @media (max-width: 960px) {
+    .sidebar { transform: translateX(-100%); transition: transform .22s ease; box-shadow: 12px 0 40px -22px rgba(22,24,29,.4); }
+    body.nav-open .sidebar { transform: none; }
+    .nav-toggle { display: block; }
+    main { margin-left: 0; padding: 64px 20px 100px; }
+    .hero { padding-top: 20px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+</style>
+
+<button type="button" class="nav-toggle" id="navToggle" aria-label="Toggle navigation">menu</button>
+
+<nav class="sidebar" id="sidebar">
+  <a class="brand" href="index.html"><b>strata<span class="dash">·</span>ecs</b></a>
+  <div class="ver">v0.1 · benchmarks</div>
+  <a class="back-link" href="index.html">← Guide</a>
+
+  <div class="nav-group">
+    <span class="lbl">On this page</span>
+    <a href="#honesty">Read this first</a>
+    <a href="#frames">Realistic frames</a>
+    <a href="#micro">Micro-scenarios</a>
+    <a href="#extensions">Extensions</a>
+    <a href="#methodology">Methodology</a>
+    <a href="#bottom-line">Bottom line</a>
+  </div>
+
+  <div class="nav-foot">
+    <a href="index.html">Guide ↗</a>
+    <a href="api.html">API reference ↗</a>
+    <a href="demo/">Live demo ↗</a>
+    <a href="https://github.com/jamesyong-42/strata-ecs">GitHub ↗</a>
+  </div>
+</nav>
+
+<main id="top">
+<div class="measure">
+
+  <header class="hero">
+    <p class="eyebrow">comparative benchmarks · losses included</p>
+    <h1>strata-ecs vs the four most-used TypeScript ECS libraries.</h1>
+    <p class="lede">
+      Three scenario families — realistic frames through each library's real system pipeline, the
+      canonical <code>ecs_bench_suite</code> micro-scenarios, and editor-centric extensions. Every
+      scenario returns a checksum and all five libraries must produce the identical one from a fresh
+      setup: equal work, proven. Reproduce with <code>pnpm build && cd bench/compare && node run.mjs</code>
+      (<a href="https://github.com/jamesyong-42/strata-ecs/tree/main/bench/compare">suite source</a>).
+    </p>
+    <div class="chips">
+      <span class="chip">Apple <b>M1 Max</b> · arm64</span>
+      <span class="chip">Node <b>24.14.1</b></span>
+      <span class="chip">mitata <b>1.0.34</b></span>
+      <span class="chip">one process per library</span>
+    </div>
+  </header>
+
+  <!-- =============================================== honesty -->
+  <section id="honesty">
+    <h2>Read this first — honesty about what changed</h2>
+    <p>
+      An earlier cut of this suite showed strata trailing on iteration. Profiling found the cause was
+      <strong>our own benchmark instrumentation, not strata</strong>: the checksum reductions accumulated
+      into a callback-captured scalar (<code>sum += col[r]</code> inside <code>.each(...)</code>), which
+      V8 stores in a heap Context slot and writes <strong>every row</strong> (~7ns/row) — a penalty the
+      callback-based libraries (strata, koota) paid but the in-scope-loop libraries (bitecs, miniplex)
+      did not. Fixing it (accumulate per-chunk into a local, add once — the correct idiom for all
+      libraries) is the bulk of strata's improvement below. On top of that sit three genuine
+      <strong>runtime</strong> optimizations: generator-free query iteration, row-filter hoisting, and
+      the allocation-free <code>readField</code> for random access.
+    </p>
+    <p>
+      Separating the two matters: most of the headline movement is a <strong>measurement
+      correction</strong> that un-penalized callback iteration; the runtime changes are real but
+      smaller. Both are disclosed.
+    </p>
+    <div class="note rule">
+      <span class="tag">Positioning</span>
+      <p>
+        strata targets editor/collaboration workloads: structural change through a scheduled pipeline,
+        save/load, undo-redo. Expect it to <strong>win entity-lifecycle churn</strong>, be
+        <strong>top-tier on dense iteration</strong>, <strong>uniquely ship serialization</strong>, and
+        <strong>pay real cost on component add/remove and random-access-by-handle</strong> — the
+        archetype-migration and handle→row-indirection tradeoffs. Every scenario is published,
+        including strata's losses.
+      </p>
+    </div>
+    <p>
+      Versions pinned: <strong>bitecs 0.4.0</strong>, <strong>becsy 0.16.0</strong> (perf build),
+      <strong>miniplex 2.0.0</strong>, <strong>koota 0.6.6</strong>. Numbers are machine-specific and
+      ±few-percent run-to-run — within a few percent is a tie.
+    </p>
+  </section>
+
+  <!-- =============================================== frames -->
+  <section id="frames">
+    <h2>1 · Realistic frames — µs/op, lower is better</h2>
+    <p>A full frame through each library's real system pipeline. Highlighted = fastest.</p>
+    <div class="tbl"><table>
+      <thead><tr><th>frame</th><th class="strata">strata</th><th>bitecs</th><th>becsy</th><th>miniplex</th><th>koota</th></tr></thead>
+      <tbody>
+        <tr><td>sim_frame</td><td>101.3</td><td class="win">47.5</td><td>1193</td><td>630</td><td>85.8</td></tr>
+        <tr><td>spawn_reap_frame</td><td class="win">2616</td><td>3651</td><td>5447</td><td>4589</td><td>13640</td></tr>
+        <tr><td>toggle_frame</td><td>12462</td><td>11271</td><td class="win">5390</td><td>24412</td><td>39191</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li><strong><code>sim_frame</code></strong> — 4 systems over a mixed 10k-entity world: <code>Movement</code> (excludes <code>Frozen</code>), <code>Regen</code>, <code>ApplyDamage</code> (join <code>[Health, Damage]</code>), <code>Render</code> (join <code>[Renderable, Position]</code>, reads Position after Movement). strata is 3rd: the filtered <code>Movement</code> materializes matched rows each frame (~68µs of strata's number); bitecs's flat bitmask iteration and koota's plain-array stores edge it.</li>
+      <li><strong><code>spawn_reap_frame</code></strong> — systems <strong>spawn then destroy</strong> 5k entities in-frame. <strong>strata wins</strong> — deferring in-system entity churn through the command buffer and applying it in a batch at the phase boundary is the command-buffer design's home turf.</li>
+      <li><strong><code>toggle_frame</code></strong> — a system <strong>adds then removes</strong> a component on 10k entities in-frame (20k archetype migrations for strata). becsy's defer-to-frame-boundary model wins; strata ≈ bitecs.</li>
+    </ul>
+  </section>
+
+  <!-- =============================================== micro -->
+  <section id="micro">
+    <h2>2 · Canonical micro-scenarios — µs/op</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>scenario</th><th class="strata">strata</th><th>bitecs</th><th>becsy</th><th>miniplex</th><th>koota</th></tr></thead>
+      <tbody>
+        <tr><td>packed_5</td><td class="win">8.99</td><td>9.07</td><td>75.95</td><td>52.58</td><td>18.79</td></tr>
+        <tr><td>simple_iter</td><td class="win">12.64</td><td>16.08</td><td>210.39</td><td>90.14</td><td>29.15</td></tr>
+        <tr><td>frag_iter</td><td>7.43</td><td class="win">7.42</td><td>76.08</td><td>53.10</td><td>22.21</td></tr>
+        <tr><td>entity_cycle</td><td class="win">255.1</td><td>297.9</td><td>477.3</td><td>613.3</td><td>2212</td></tr>
+        <tr><td>add_remove</td><td>473.1</td><td class="win">217.9</td><td>225.6</td><td>1035</td><td>717.4</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li><strong>Iteration</strong> (<code>packed_5</code> / <code>simple_iter</code> / <code>frag_iter</code>): strata is <strong>top-tier</strong> — a tie with bitecs on <code>packed_5</code>/<code>frag_iter</code> and a clear lead on <code>simple_iter</code>. The contiguous per-archetype column loop (<code>b.rows[0..count)</code> over a typed array) has no eid-gather indirection, so it matches or beats bitecs's flat-array-by-eid on dense workloads. koota (plain <code>number[]</code>) trails; miniplex (AoS) and becsy (proxy accessors + async) trail further.</li>
+      <li><strong><code>entity_cycle</code></strong>: strata <strong>fastest</strong> — the generational free-list + swap-and-pop lead on entity construction/teardown (koota's per-entity spawn/destroy is ~9× slower).</li>
+      <li><strong><code>add_remove</code></strong>: bitecs (bitmask flip, no data move) and becsy (deferred) win; strata pays a real <strong>archetype migration</strong> — relocating the row on each add and remove. The archetype tradeoff.</li>
+    </ul>
+    <p>
+      Throughput and p99 tables:
+      <a href="https://github.com/jamesyong-42/strata-ecs/blob/main/bench/compare/RESULTS.md">bench/compare/RESULTS.md</a>.
+    </p>
+  </section>
+
+  <!-- =============================================== extensions -->
+  <section id="extensions">
+    <h2>3 · Extensions — µs/op</h2>
+    <div class="tbl"><table>
+      <thead><tr><th>scenario</th><th class="strata">strata</th><th>bitecs</th><th>becsy</th><th>miniplex</th><th>koota</th></tr></thead>
+      <tbody>
+        <tr><td>serialize</td><td class="win">11345</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td></tr>
+        <tr><td>random_access</td><td>816</td><td class="win">466</td><td class="na">N/A</td><td>540</td><td>1020</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li><strong><code>serialize</code></strong> — whole-world save+load round-trip (5k entities, components/tags/relations). A strata built-in; rivals ship none → N/A.</li>
+      <li><strong><code>random_access</code></strong> — read one component for 10k random entities by handle. <code>readField</code> removed the per-read object allocation (989 → 816µs), but strata still trails bitecs/miniplex: the bottleneck is the archetype <strong>handle→slot→archetype→row→column</strong> indirection per read, inherent to the model — a flat eid-indexed array is fundamentally faster for scattered by-id reads. An honest, structural tradeoff.</li>
+    </ul>
+  </section>
+
+  <!-- =============================================== methodology -->
+  <section id="methodology">
+    <h2>Methodology &amp; fairness</h2>
+    <ul>
+      <li><strong>Same work, proven.</strong> Every scenario returns a checksum (a summed value or processed count); the runner asserts all libraries produce the identical checksum from a fresh setup. mitata's <code>do_not_optimize</code> consumes it to defeat dead-code elimination.</li>
+      <li><strong>Efficient in-idiom reductions everywhere.</strong> All libraries accumulate the checksum without a per-row captured write — chunk-local then add-once for the callback libs (strata, koota), in-scope for the loop libs (bitecs, miniplex), a system-local for becsy. This measures the workload, not accumulator-capture quirks.</li>
+      <li><strong>Real pipeline per library.</strong> Frames run through each library's actual system model: strata <code>world.tick</code> with deferred <code>ctx</code>; becsy <code>world.execute</code> (native scheduler, structural change at frame boundaries → two <code>execute()</code>s for its structural frames); bitecs/miniplex/koota compose system functions with immediate structural ops.</li>
+      <li><strong>Each library in its idiomatic fastest form</strong>; one process per library (no inline-cache contamination); warmup to steady state; <code>--expose-gc</code>; p99 published.</li>
+      <li><strong>One adaptation:</strong> iteration ops are additive/swap-based (not the canonical <code>*= 2</code>) so values stay finite over mitata's iterations. All fields are f64.</li>
+    </ul>
+  </section>
+
+  <!-- =============================================== bottom line -->
+  <section id="bottom-line">
+    <h2>Bottom line</h2>
+    <p>
+      On a fair measurement, strata is <strong>top-tier for dense iteration</strong> (ties/beats the
+      flat-array specialist bitecs), <strong>fastest on entity-lifecycle churn</strong>
+      (<code>entity_cycle</code>, <code>spawn_reap_frame</code>) — its target editor workload —
+      <strong>uniquely ships serialization</strong>, and pays honest, structural cost on component
+      add/remove, in-system toggling, and random-access-by-handle. The single biggest lesson was a
+      benchmarking one: a captured-accumulator in the checksum had been masking strata's real iteration
+      speed. Measured correctly, strata is exactly where its archetype-SoA design says it should be.
+    </p>
+  </section>
+
+  <footer>
+    <span>strata-ecs · benchmarks · MIT</span>
+    <span><a href="index.html">Guide</a> · <a href="api.html">API reference</a> · <a href="demo/">Live demo</a> · <a href="https://github.com/jamesyong-42/strata-ecs">GitHub</a></span>
+  </footer>
+
+</div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var toggle = document.getElementById("navToggle");
+  toggle && toggle.addEventListener("click", function () { document.body.classList.toggle("nav-open"); });
+  document.querySelectorAll(".sidebar a").forEach(function (a) {
+    a.addEventListener("click", function () { document.body.classList.remove("nav-open"); });
+  });
+})();
+</script>
+</html>

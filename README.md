@@ -40,7 +40,8 @@ haven't turned on.
 
 **Documentation:** [the guide](https://jamesyong-42.github.io/strata-ecs/) ·
 [API reference](https://jamesyong-42.github.io/strata-ecs/api.html) ·
-[benchmarks](BENCHMARKS.md)
+[live demo](https://jamesyong-42.github.io/strata-ecs/demo/) ·
+[benchmarks](https://jamesyong-42.github.io/strata-ecs/benchmarks.html)
 
 ---
 
@@ -258,7 +259,9 @@ document side by side; highlighted rows are the un-reconciled sync delta) and an
 ## The example app
 
 [`examples/canvas-editor`](examples/canvas-editor) — an infinite-canvas whiteboard in
-vanilla TypeScript + Canvas2D whose only runtime dependency is strata-ecs. 10k+ shapes
+vanilla TypeScript + Canvas2D whose only runtime dependency is strata-ecs. **Try it live:
+[the hosted demo](https://jamesyong-42.github.io/strata-ecs/demo/)** — open two tabs at
+[`?collab=demo`](https://jamesyong-42.github.io/strata-ecs/demo/?collab=demo) for multiplayer. 10k+ shapes
 with brute-force culling, reactive repaint and autosave from one `observeQuery`, and the
 full collaboration stack:
 
