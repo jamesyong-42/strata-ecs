@@ -38,7 +38,7 @@ haven't turned on.
 
 **Documentation:** [the guide](https://jamesyong.github.io/strata-ecs/) ·
 [API reference](https://jamesyong.github.io/strata-ecs/api.html) ·
-[design rationale](docs/design.md) · [benchmarks](BENCHMARKS.md)
+[benchmarks](BENCHMARKS.md)
 
 ---
 
@@ -316,7 +316,7 @@ Repository layout: [`src/core`](src/core) (the runtime), [`src/substrate`](src/s
 (the internal reconcile layer), [`src/durable`](src/durable) + [`src/ephemeral`](src/ephemeral)
 (the collaboration layers), [`src/tools`](src/tools) + [`src/react`](src/react) (devtools,
 React binding), [`examples/canvas-editor`](examples/canvas-editor) (the flagship demo),
-[`docs/`](docs) (the guide, API reference, and design documents).
+[`docs/`](docs) (the docs site: the guide + the API reference).
 
 ## Status
 
