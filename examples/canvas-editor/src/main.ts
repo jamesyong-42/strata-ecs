@@ -243,6 +243,15 @@ if (params.get("script") === "collab-smoke") {
   // socket to it) instead of the in-memory loopback, and adds a relay-drop → re-bootstrap scenario. The
   // relay must be running (`pnpm collab:server`); default origin ws://localhost:8787, or ?ws=<origin>.
   const wsSmoke = params.get("transport") === "ws";
+  // The verdict is the page's deliverable, but the app's OWN collab boot also posts to the note —
+  // its first-peer hello window times out at ~800ms and its "seeded the board" message would STOMP
+  // a verdict posted earlier (the fast loopback suite finishes in milliseconds; this looked like a
+  // hang for weeks). Two guards: start AFTER the boot's hello window has resolved, and re-assert
+  // the verdict once after posting so no straggling status message can bury it.
+  const postVerdict = (msg: string): void => {
+    notify(msg);
+    setTimeout(() => notify(msg), 1500);
+  };
   setTimeout(() => {
     void (async () => {
       try {
@@ -250,7 +259,7 @@ if (params.get("script") === "collab-smoke") {
           const origin = params.has("ws") ? (params.get("ws") ?? "") : "";
           const r = await runCollabSmoke({ kind: "ws", origin });
           if (r.failed.length > 0) console.error("collab-smoke (ws) failing checks:", r.failed);
-          notify(
+          postVerdict(
             r.passed === r.total
               ? `collab-smoke (ws): PASS ${r.passed}/${r.total} — live relay · app-ops · late-join · reconnect re-bootstrap all converged`
               : `collab-smoke (ws): FAIL — ${r.passed}/${r.total}${r.firstFail ? ` [${r.firstFail}]` : ""}`,
@@ -258,8 +267,10 @@ if (params.get("script") === "collab-smoke") {
         } else {
           const s = await runCollabSmoke({ kind: "loopback", mode: "sync" });
           const a = await runCollabSmoke({ kind: "loopback", mode: "async" });
+          if (s.failed.length > 0) console.error("collab-smoke (sync) failing checks:", s.failed);
+          if (a.failed.length > 0) console.error("collab-smoke (async) failing checks:", a.failed);
           const ok = s.passed === s.total && a.passed === a.total && s.total === a.total;
-          notify(
+          postVerdict(
             ok
               ? `collab-smoke: PASS ${s.passed}/${s.total} (sync) · ${a.passed}/${a.total} (async) — app-ops · async-loopback · late-join · presence all converged`
               : `collab-smoke: FAIL — sync ${s.passed}/${s.total}${s.firstFail ? ` [${s.firstFail}]` : ""} · async ${a.passed}/${a.total}${a.firstFail ? ` [${a.firstFail}]` : ""}`,
@@ -269,10 +280,10 @@ if (params.get("script") === "collab-smoke") {
         // frame shows what a second tab looks like — the two-cursor screenshot.
         injectDemoCursors();
       } catch (err) {
-        notify(`collab-smoke: FAIL — threw: ${err instanceof Error ? err.message : String(err)}`);
+        postVerdict(`collab-smoke: FAIL — threw: ${err instanceof Error ? err.message : String(err)}`);
       }
     })();
-  }, 600);
+  }, 1300); // after the app boot's own hello window (~800ms) so its status note lands FIRST
 }
 
 // Scripted interaction demo — the same code paths real input drives, minus the DOM events.
