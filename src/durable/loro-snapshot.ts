@@ -90,8 +90,8 @@
  *           lamport-latest, so it wins LWW over the peer's newer value (not "leaves peer edits untouched");
  *       (b) undoing a SPAWN commit despawns the entity, and (with the three-part contract) drops the
  *           entity's cells — including components a peer added AFTER the spawn. So an undo can erase remote
- *           work. Whether to accept that or gate it is a Part III M3 decision (TODO(M3-design)); this
- *           adapter only surfaces faithful `UndoManager` behaviour. Both cases are pinned in the tests.
+ *           work. The shipped M3 decision is to ACCEPT that: undo is faithful
+ *           `UndoManager` behaviour, surfaced as-is by this adapter. Both cases are pinned in the tests.
  *     COMMIT-BOUNDARY: `undo()`/`redo()` self-commit with NO message by default, so consecutive undos (or
  *     an undo+redo pair) COALESCE into one oplog change — the receiver then sees the wrong batch count (an
  *     undo+redo can net to ZERO batches). We call `doc.setNextCommitMessage(strata:<n>)` right before the
@@ -111,7 +111,7 @@
  *     the loss; (b) per-commit replay dropped EVERY fact of a commit whose container a later buffered commit
  *     deleted (`getPathToContainer` resolves against the post-import head — `[spawn+set][set][despawn]` gave
  *     ONE batch, not three). With no-delete, every child pair resolves and (b) is impossible.
- *     POLICY FLIP (record for 006, TODO(006-amendment)): despawn-vs-concurrent-edit is now PER-CELL LWW, not
+ *     POLICY FLIP (recorded in the 006 as-built addenda): despawn-vs-concurrent-edit is now PER-CELL LWW, not
  *     container-delete-wins. A remote `set` concurrent with a local despawn leaves THAT ONE CELL alive — so
  *     an entity can converge RESURRECTED with only partial cells; reconcile classifies it as a structural
  *     add (absent baseline). First-creation races still mint two containers if two peers create the SAME key
@@ -241,7 +241,7 @@ function parseJsonOpId(id: string): { peer: `${number}`; counter: number } {
 
 /**
  * The reserved commit ORIGIN for the durable layer's meta writes (docId etc. — the `meta` root map,
- * TODO(005-§10-amendment)). It is passed to `commit({ origin })` on a meta write and matched by the
+ * per the 005 §10 as-built amendments). It is passed to `commit({ origin })` on a meta write and matched by the
  * UndoManager's `excludeOriginPrefixes`, so a meta write is NEVER an undo step (a user's undo must not
  * roll back the document id). Distinct from the `strata:` MESSAGE channel (finding 3), which sequences
  * commits; origin and message are independent loro commit fields.
@@ -281,7 +281,7 @@ export class PendingImportError extends Error {
  * LoroSnapshot.version} → {@link LoroSnapshot.exportUpdatesSince} without interpreting. Re-exported
  * from the adapter (not `loro-crdt`) so `DurableStore` can hold a "last sent" cursor while keeping its
  * only `loro-crdt` import the `LoroDoc` parameter type — Loro stays quarantined behind this file (§14.2).
- * TODO(005-§10-amendment): the orchestrator amends 005 §10 for this adapter-level outbound surface.
+ * This adapter-level outbound surface is recorded in the 005 §10 as-built amendments.
  */
 export type OutboundCursor = VersionVector;
 
@@ -304,7 +304,7 @@ export class LoroSnapshot implements CRDTSnapshot {
    * "entities"/"resources" so it never collides with an entity key or resource name, and TRANSPARENT to
    * batch translation: a `meta` diff resolves to the path `["meta"]` (length 1), which `translatePairs`'
    * child-map guard (`path.length !== 2`) skips, so a meta write surfaces NO ChangeEvent. Owned here
-   * (not the store) to keep every loro handle inside this file. TODO(005-§10-amendment).
+   * (not the store) to keep every loro handle inside this file (005 §10 as-built amendments).
    */
   private readonly metaMap: LoroMap;
   private readonly entitiesRootId: string;
@@ -522,7 +522,7 @@ export class LoroSnapshot implements CRDTSnapshot {
    * (hasEntity/entities gate on `keys().length > 0`); the `exists` deletion surfaces on the CHILD diff and
    * `translateChildKey` maps it to the despawn fact. POLICY FLIP (see header): despawn-vs-concurrent-edit is
    * now PER-CELL LWW, so a remote set concurrent with a local despawn leaves that one cell alive — a legal
-   * partial-cell resurrection. TODO(006-amendment): the orchestrator amends 006 for that reconcile case.
+   * partial-cell resurrection — recorded in the 006 as-built addenda.
    */
   despawn(key: EntityKey): void {
     // Part 3: sever every INCOMING edge `* --rel--> key` on every other entity (correctness-first scan;
@@ -758,8 +758,8 @@ export class LoroSnapshot implements CRDTSnapshot {
    * SEMANTICS (corrected, finding 7 — the earlier "never touches a peer's edit" claim was FALSE): undo
    * re-asserts the pre-op state as NEW lamport-latest ops. So undoing a cell CLOBBERS a causally-newer
    * REMOTE overwrite of that same cell, and undoing a spawn commit despawns the entity — taking peers'
-   * later components with it (both probe-pinned in the tests). Whether to accept or gate that is the M3
-   * design decision (TODO(M3-design)); at this layer undo is faithful loro `UndoManager` behaviour.
+   * later components with it (both probe-pinned in the tests). The shipped M3 decision ACCEPTS that:
+   * at this layer undo is faithful loro `UndoManager` behaviour.
    */
   undo(): void {
     if (this.committing) throw new Error("strata: undo() during commit() is not allowed.");
@@ -776,7 +776,7 @@ export class LoroSnapshot implements CRDTSnapshot {
   // --- Part III M1 store-support surface (adapter-level; NOT on the frozen CRDTSnapshot) ------------
   // These exist so `createDurableStore` (§14.2) can mint keys, hold a docId, and ship outbound
   // increments while keeping EVERY loro call inside this file — the store speaks only these plus the
-  // frozen CRDTSnapshot. TODO(005-§10-amendment): the orchestrator amends 005 §10 for this surface.
+  // frozen CRDTSnapshot (this surface is recorded in the 005 §10 as-built amendments).
 
   /** This doc's peer id string — the `${peerIdStr}-<counter>` key prefix the store mints from (§14.1). */
   peerIdStr(): string {
@@ -797,7 +797,7 @@ export class LoroSnapshot implements CRDTSnapshot {
    * resolve; the caller filters + gates). Attach uses this to SEED the baseline + runtime from a cold-loaded
    * doc's pre-existing resources (§13.1 founding agreement): a resource has no entity to hang off, so it has
    * no other enumerator on the frozen Snapshot interface — the resource sibling of {@link entityKeysRaw}.
-   * TODO(005-§10.8-amendment): the orchestrator amends 005 §10.8 for this store-support surface.
+   * This store-support surface is recorded in 005 §10.8 (as-built amendments).
    */
   resourceNamesRaw(): string[] {
     return this.resourcesMap.keys().map(String);
