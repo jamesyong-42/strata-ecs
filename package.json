@@ -1,7 +1,7 @@
 {
   "name": "strata-ecs",
   "version": "0.0.0",
-  "description": "A collaborative ECS framework for editors and infinite-canvas apps, in TypeScript.",
+  "description": "An entity-component-system for TypeScript apps that edit documents \u2014 typed-array fast, reactive, with CRDT-backed multiplayer (Loro) as opt-in layers.",
   "type": "module",
   "license": "MIT",
   "author": "James Yong",
@@ -9,6 +9,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/jamesyong/strata-ecs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jamesyong/strata-ecs/issues"
   },
   "keywords": [
     "ecs",
@@ -20,6 +23,9 @@
     "local-first",
     "reactivity"
   ],
+  "engines": {
+    "node": ">=20"
+  },
   "packageManager": "pnpm@10.33.0",
   "sideEffects": false,
   "files": [
