@@ -9,7 +9,7 @@ const LS_KEY = "strata-obs:layout";
 const MARGIN = 8;
 const KEEP = 90; // px that must stay on screen so the header is always grabbable
 
-export type TabId = "entities" | "systems" | "timeline";
+export type TabId = "entities" | "systems" | "timeline" | "durable" | "ephemeral";
 
 interface Layout {
   x?: number;
@@ -46,7 +46,9 @@ function clampPos(x: number, y: number, w: number): { x: number; y: number } {
 export class Panel {
   readonly el: HTMLDivElement;
   readonly summaryEl: HTMLSpanElement;
-  readonly panes: Record<TabId, HTMLDivElement>;
+  /** Built EXACTLY for the rendered tab list — a tab absent from `opts.tabs` has no pane (Partial). */
+  readonly panes: Partial<Record<TabId, HTMLDivElement>>;
+  private readonly tabs: readonly TabId[];
   private tab: TabId;
   private open: boolean;
   private onTabChange: (t: TabId, open: boolean) => void = () => {};
@@ -58,15 +60,22 @@ export class Panel {
     this.el.style.top = `${p.y}px`;
   };
 
-  constructor(container: HTMLElement, opts?: { defaultTab?: TabId; tab?: TabId }) {
+  constructor(container: HTMLElement, opts: { tabs: TabId[]; defaultTab?: TabId; tab?: TabId }) {
+    // At least the base three are always passed; index 0 is the guaranteed fallback target below.
+    this.tabs = opts.tabs.length > 0 ? [...opts.tabs] : (["entities"] as TabId[]);
     const l = loadLayout();
-    // an explicit `tab` (e.g. from a shareable ?obs= link) beats the persisted layout;
-    // `defaultTab` only fills in when nothing is persisted
-    this.tab = opts?.tab ?? l.tab ?? opts?.defaultTab ?? "entities";
+    // an explicit `tab` (e.g. from a shareable ?obs= link) beats the persisted layout; `defaultTab`
+    // only fills in when nothing is persisted — but ANY of the three can name a tab this build does not
+    // render (a persisted `durable` on an app that dropped the option), so fall back to the first tab.
+    const wanted = opts.tab ?? l.tab ?? opts.defaultTab ?? this.tabs[0];
+    this.tab = this.tabs.includes(wanted) ? wanted : this.tabs[0];
     this.open = l.open ?? true;
 
     this.el = document.createElement("div");
     this.el.className = "strata-obs";
+    // The SHELL is a static markup literal (no data); the per-tab buttons/panes are generated below via
+    // createElement + textContent (the tab id is a fixed union literal, never user/peer data — but it goes
+    // through textContent regardless, so this stays clean of any innerHTML-with-data path).
     this.el.innerHTML =
       `<div class="strata-obs-head">` +
       `<span class="strata-obs-grip" aria-hidden="true">⠿</span>` +
@@ -75,24 +84,35 @@ export class Panel {
       `<span class="strata-obs-summary"></span>` +
       `<button type="button" class="strata-obs-btn" data-collapse title="Collapse">▾</button>` +
       `</div>` +
-      `<div class="strata-obs-tabs" data-nodrag>` +
-      `<button type="button" class="strata-obs-tab" data-tab="entities">entities</button>` +
-      `<button type="button" class="strata-obs-tab" data-tab="systems">systems</button>` +
-      `<button type="button" class="strata-obs-tab" data-tab="timeline">timeline</button>` +
-      `</div>` +
-      `<div class="strata-obs-body">` +
-      `<div class="strata-obs-pane" data-pane="entities"></div>` +
-      `<div class="strata-obs-pane" data-pane="systems"><div class="strata-obs-loop"></div></div>` +
-      `<div class="strata-obs-pane" data-pane="timeline"></div>` +
-      `</div>`;
+      `<div class="strata-obs-tabs" data-nodrag></div>` +
+      `<div class="strata-obs-body"></div>`;
     container.appendChild(this.el);
 
     this.summaryEl = this.el.querySelector(".strata-obs-summary") as HTMLSpanElement;
-    this.panes = {
-      entities: this.el.querySelector(`[data-pane="entities"]`) as HTMLDivElement,
-      systems: this.el.querySelector(`[data-pane="systems"]`) as HTMLDivElement,
-      timeline: this.el.querySelector(`[data-pane="timeline"]`) as HTMLDivElement,
-    };
+    const doc = this.el.ownerDocument;
+    const strip = this.el.querySelector(".strata-obs-tabs") as HTMLDivElement;
+    const body = this.el.querySelector(".strata-obs-body") as HTMLDivElement;
+    this.panes = {};
+    for (const id of this.tabs) {
+      const btn = doc.createElement("button");
+      btn.type = "button";
+      btn.className = "strata-obs-tab";
+      btn.dataset.tab = id;
+      btn.textContent = id;
+      strip.appendChild(btn);
+
+      const pane = doc.createElement("div");
+      pane.className = "strata-obs-pane";
+      pane.dataset.pane = id;
+      // systems' pane hosts the loop readout root the LoopStats renders into (index.ts queries it).
+      if (id === "systems") {
+        const loopRoot = doc.createElement("div");
+        loopRoot.className = "strata-obs-loop";
+        pane.appendChild(loopRoot);
+      }
+      body.appendChild(pane);
+      this.panes[id] = pane;
+    }
 
     // restore size, then position (clamped to the viewport)
     if (typeof l.w === "number") this.el.style.width = `${l.w}px`;
@@ -159,8 +179,8 @@ export class Panel {
     for (const b of this.el.querySelectorAll<HTMLButtonElement>("[data-tab]")) {
       b.classList.toggle("active", b.dataset.tab === this.tab);
     }
-    for (const [id, pane] of Object.entries(this.panes)) {
-      pane.classList.toggle("active", id === this.tab);
+    for (const id of this.tabs) {
+      this.panes[id]?.classList.toggle("active", id === this.tab);
     }
     this.onTabChange(this.tab, this.open);
   }

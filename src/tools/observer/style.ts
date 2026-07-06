@@ -75,6 +75,20 @@ export const CSS = `
 .strata-obs-tltip { position: absolute; display: none; pointer-events: none; background: rgba(13,17,23,.96);
   border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; font-size: 11px; z-index: 2; }
 .strata-obs-tltip .k { color: #8b949e; }
+
+/* durable + ephemeral (collab stores) */
+.strata-obs-storehead { flex: none; padding: 6px 10px; color: #8b949e; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; border-bottom: 1px solid #21262d; }
+.strata-obs-durbody, .strata-obs-ephbody { flex: 1; min-height: 0; overflow: auto; }
+.strata-obs-durrow { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; padding: 5px 10px;
+  border-bottom: 1px solid #21262d; }
+.strata-obs-durkey { grid-column: 1 / -1; color: #79c0ff; overflow: hidden; text-overflow: ellipsis; }
+.strata-obs-durcol { color: #e6edf3; white-space: pre-wrap; word-break: break-word; }
+.strata-obs-durrow.diff { background: rgba(248,81,73,.10); }
+.strata-obs-durrow.diff .strata-obs-durkey { color: #f0883e; }
+.strata-obs-ephgroup { padding: 6px 10px 2px; color: #d2a8ff; font-weight: 700; }
+.strata-obs-ephentry { padding: 1px 10px 4px 16px; }
+.strata-obs-ephkey { color: #79c0ff; }
 `;
 
 export function injectStyle(doc: Document): void {
