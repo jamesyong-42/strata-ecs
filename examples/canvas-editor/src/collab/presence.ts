@@ -64,6 +64,11 @@ export interface PresenceOptions {
 }
 
 export interface Presence {
+  /**
+   * The ephemeral store this presence session drives. boot.ts threads it into the collab session so the
+   * observer's ephemeral tab can read its `debugDump()`; nothing else reaches past the write hooks.
+   */
+  readonly eph: EphemeralStore;
   /** Feed an inbound ephemeral blob to the store's source (wired from the transport by boot.ts). */
   applyInbound(bytes: Uint8Array): void;
   /** Best-effort departure (pagehide): despawn MY presence on every peer NOW, don't wait the TTL. */
@@ -108,6 +113,7 @@ export function startPresence(opts: PresenceOptions): Presence {
   renderChips(); // initial paint — registration is a frame boundary and never back-fires (002 §4.1a)
 
   return {
+    eph,
     applyInbound: (bytes) => source.apply(bytes),
     leave: () => {
       active = null; // stop reportCursor/reportSelection touching a departing store

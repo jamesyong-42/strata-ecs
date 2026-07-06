@@ -8,7 +8,8 @@
  * the rest of interaction state stay runtime-only in BOTH modes — the schema drew that line on day one.
  */
 
-import type { DurableStore } from "strata-ecs/durable";
+import type { Attachment, DurableStore } from "strata-ecs/durable";
+import type { EphemeralStore } from "strata-ecs/ephemeral";
 
 export interface CollabSession {
   readonly room: string;
@@ -16,6 +17,19 @@ export interface CollabSession {
   readonly peerId: string;
   /** The attached durable store: `doc.transaction` is the one way the app changes the shared document. */
   readonly doc: DurableStore;
+  /**
+   * The durable {@link Attachment} — its `.baseline` seam feeds the observer's DURABLE tab (the
+   * un-agreed sync delta, baseline vs converged doc). OPTIONAL so smoke.ts's `setActiveCollab` calls,
+   * which install a bare `{ room, peerId, doc }` session, still satisfy the type; only the browser boot
+   * (which owns the attachment) supplies it, so the tab shows a placeholder under the self-test.
+   */
+  readonly attachment?: Attachment;
+  /**
+   * The presence store's ephemeral handle — its `debugDump()` feeds the observer's EPHEMERAL tab (live
+   * per-peer presence blobs). OPTIONAL for the same reason as {@link attachment}: presence only exists in
+   * the browser boot, never in the smoke suite's hand-wired sessions.
+   */
+  readonly eph?: EphemeralStore;
 }
 
 let active: CollabSession | null = null;

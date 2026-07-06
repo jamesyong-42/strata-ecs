@@ -30,6 +30,7 @@ import { clearBoard, stressSpawn } from "./app/stress";
 import { interaction, pointerDown, pointerMove, pointerUp, setTool } from "./app/tools";
 import { world } from "./app/worldRef";
 import { startCollabBoot } from "./collab/boot";
+import { activeCollab } from "./collab/mode";
 import { injectDemoCursors, runCollabSmoke } from "./collab/smoke";
 import { buildPipeline, SYSTEM_NAMES, type SystemName } from "./ecs/pipeline";
 import { cullFlags } from "./ecs/systems/cull";
@@ -163,8 +164,27 @@ attachInput(overlay, notify);
 const obsTab = params.get("obs");
 const obsOpts: ObserverOptions = {
   describe: describeShape,
-  // `tab` (not defaultTab): a shared ?obs= link must win over this browser's persisted layout
-  tab: obsTab === "systems" || obsTab === "timeline" || obsTab === "entities" ? obsTab : undefined,
+  // `tab` (not defaultTab): a shared ?obs= link must win over this browser's persisted layout. The two
+  // collab tabs are shareable too — `?obs=durable` / `?obs=ephemeral` force-open them in collab mode.
+  tab:
+    obsTab === "systems" ||
+    obsTab === "timeline" ||
+    obsTab === "entities" ||
+    obsTab === "durable" ||
+    obsTab === "ephemeral"
+      ? obsTab
+      : undefined,
+  // The collab tabs light up ONLY in collab mode: each getter re-reads the active session per poll and
+  // returns null in local-only mode (the tab shows its placeholder). These getters ARE ALSO the
+  // compile-time proof that the observer's structural read shapes (ObserverDurableSource /
+  // ObserverEphemeralSource, tools/index.ts §0) match the real store classes — the tools package cannot
+  // import durable/ephemeral, so this collab example's typecheck is what catches drift. If tsc accepts
+  // these, the shapes agree; NO as-casts — a mismatch must surface here, never be papered over.
+  durable: () => {
+    const s = activeCollab();
+    return s?.attachment ? { store: s.doc, attachment: s.attachment } : null;
+  },
+  ephemeral: () => activeCollab()?.eph ?? null,
 };
 attachObserver(world, obsOpts); // mounted for the app's life — no dispose (the World never swaps, R3)
 // Restore clears the World in place (R3): the observer panel and the reactive repaint watch both

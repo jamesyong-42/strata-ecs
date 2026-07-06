@@ -243,8 +243,9 @@ export function startCollabBoot(
 ): CollabWiring {
   const peerId = crypto.randomUUID();
   const doc = createDurableStore(new LoroDoc()); // the ONE place a LoroDoc enters (§14.2)
-  attachDurable(world, doc); // project the (empty) document in; register the drain — kept for the app's life
-  setActiveCollab({ room, peerId, doc });
+  // Keep the attachment: it is kept for the app's life anyway (the projection drain never unregisters), and
+  // its `.baseline` seam is what the observer's durable tab diffs against the converged doc (§A3, tools §0).
+  const attachment = attachDurable(world, doc); // project the (empty) document in; register the drain
 
   // ONE channel, shared by durable + presence (a single `onMessage` handler in wireCollab routes both
   // envelope kinds — the transport's handler is replace-on-set, so the two layers cannot each register).
@@ -258,6 +259,11 @@ export function startCollabBoot(
   }
   // Presence rides the SAME peerId as the durable session (design §15's presence sketch) — session-unique.
   const presence = startPresence({ peerId, room, channel, doc, renderChips });
+
+  // Install the session only now — boot is synchronous and no op fires during it, so the position within
+  // this function is immaterial to routing; deferring past `startPresence` is what lets the session carry
+  // BOTH observer inspection handles (durable `attachment`, ephemeral `presence.eph`) alongside `doc`.
+  setActiveCollab({ room, peerId, doc, attachment, eph: presence.eph });
 
   const seedCount = Math.min(count, 400); // keep the shared board + its bootstrap snapshot demo-sized
   const wiring = wireCollab({
