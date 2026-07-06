@@ -2,6 +2,8 @@
  * The ephemeral tab — every peer's LIVE PRESENCE, grouped by writer. It reads the store's one
  * debug/observability seam (`eph.debugDump()`, ephemeral-store.ts — never a sync path) and lays out every
  * partition's current blob: your own first (labeled "(you)"), then each remote peer's, one entry per key.
+ * Each blob field renders as a collapsible TREE (json-tree.ts) — expand `components` once and watch a
+ * remote cursor's numbers tick live underneath.
  *
  * It reaches the dump through {@link ObserverEphemeralSource}, a structural interface the host's live
  * `EphemeralStore` satisfies — the tools package never imports `strata-ecs/ephemeral` (design §0; see
@@ -12,21 +14,31 @@
  * `-<digits>` segment stripped (`key.replace(/-\d+$/, "")`), never a split on the first dash. Getting this
  * wrong would scatter one peer's entities across bogus groups.
  *
+ * Refresh discipline (mirrors the durable tab; json-tree.ts header has the WHY): rows reconcile per
+ * group-header/per-entry via {@link syncKeyedRows}, so one peer's cursor stream (its blob re-arrives at
+ * the sender's throttle rate) rebuilds ONLY that entry's row; tree expansion lives in a tab-owned path
+ * set, so the rebuilt entry re-renders with your expanded nodes still open, showing the fresh values.
+ *
  * Rendering discipline: blob values are PEER-CONTROLLED, so every dynamic string goes through
- * `textContent` (never innerHTML-with-data). A blob field that is a string array (`tags`) renders as a
- * plain joined list; every other field renders as compact key-sorted JSON. The body is only re-rendered
- * when the dump's content signature changes, so a text selection survives the ~8 Hz poll.
+ * `textContent` (never innerHTML-with-data). Blob fields render in sorted order; each is a tree node
+ * (collapsed = inline preview; a primitive field is just a leaf line).
  */
 
 import type { ObserverEphemeralSource } from "../index";
-import { stableStringify } from "./durable-tab";
+import { PATH_SEP, stableStringify, syncKeyedRows, treeNode, type KeyedRow } from "./json-tree";
+
+/** Synthetic row ids (PATH_SEP-prefixed, collision-safe vs minted keys — durable-tab.ts precedent). */
+const ROW_PLACEHOLDER = `${PATH_SEP}ph`;
+const ROW_EMPTY = `${PATH_SEP}empty`;
 
 export class EphemeralTab {
   private readonly doc: Document;
   private readonly head: HTMLDivElement;
   private readonly body: HTMLDivElement;
-  /** Content signature of the last body render — the diff-before-replace guard (preserves text selection). */
-  private lastSig = "";
+  /** Per-row DOM cache for {@link syncKeyedRows} — row identity survives polls; content changes rebuild. */
+  private readonly rowCache = new Map<string, { sig: string; el: HTMLElement }>();
+  /** Open tree paths (json-tree.ts header) — survives entry rebuilds as the live blobs stream through. */
+  private readonly expanded = new Set<string>();
 
   constructor(
     root: HTMLElement,
@@ -44,12 +56,11 @@ export class EphemeralTab {
     const src = this.source();
     if (src === null) {
       this.head.textContent = "";
-      this.renderBodyOnce(" null", (body) => {
-        const ph = this.doc.createElement("div");
-        ph.className = "strata-obs-empty";
-        ph.textContent = "no ephemeral store attached — pass ephemeral to attachObserver / start collab";
-        body.appendChild(ph);
-      });
+      syncKeyedRows(
+        this.body,
+        [{ id: ROW_PLACEHOLDER, sig: "", build: () => this.noteEl("no ephemeral store attached — pass ephemeral to attachObserver / start collab") }],
+        this.rowCache,
+      );
       return;
     }
 
@@ -73,28 +84,30 @@ export class EphemeralTab {
     const remotes = [...groups.keys()].filter((w) => w !== dump.peerId).sort();
     const ordered = groups.has(dump.peerId) ? [dump.peerId, ...remotes] : remotes;
 
-    const sig = `${dump.peerId}${dump.ttlMs}${dump.throttleMs}${ordered
-      .map((w) => `${w}:${(groups.get(w) ?? []).map((e) => `${e.key}=${stableStringify(e.blob)}`).join(",")}`)
-      .join("|")}`;
-    this.renderBodyOnce(sig, (body) => {
-      if (ordered.length === 0) {
-        const empty = this.doc.createElement("div");
-        empty.className = "strata-obs-empty";
-        empty.textContent = "no presence — no peers (including you) have live entities";
-        body.appendChild(empty);
-        return;
+    // One keyed row per group header + per entry, so a re-blobbed cursor rebuilds only its own entry row.
+    const rows: KeyedRow[] = [];
+    for (const writer of ordered) {
+      const label = writer === dump.peerId ? `${writer} (you)` : writer;
+      rows.push({ id: `g${PATH_SEP}${writer}`, sig: label, build: () => this.groupEl(label) });
+      for (const entry of groups.get(writer) ?? []) {
+        rows.push({ id: `e${PATH_SEP}${entry.key}`, sig: stableStringify(entry.blob), build: () => this.entryEl(entry) });
       }
-      for (const writer of ordered) {
-        const groupHead = this.doc.createElement("div");
-        groupHead.className = "strata-obs-ephgroup";
-        groupHead.textContent = writer === dump.peerId ? `${writer} (you)` : writer;
-        body.appendChild(groupHead);
-        for (const entry of groups.get(writer) ?? []) body.appendChild(this.entryEl(entry));
-      }
-    });
+    }
+    if (rows.length === 0) {
+      rows.push({ id: ROW_EMPTY, sig: "", build: () => this.noteEl("no presence — no peers (including you) have live entities") });
+    }
+    syncKeyedRows(this.body, rows, this.rowCache);
   }
 
-  /** One entry: its key, then one line per blob field (a `tags` string array joins to a list; else JSON). */
+  /** One group header (a writer peer, "(you)" for the local partition). */
+  private groupEl(label: string): HTMLDivElement {
+    const el = this.doc.createElement("div");
+    el.className = "strata-obs-ephgroup";
+    el.textContent = label;
+    return el;
+  }
+
+  /** One entry: its key, then one collapsible tree node per blob field (sorted; primitives are leaves). */
   private entryEl(entry: { key: string; blob: Record<string, unknown> }): HTMLDivElement {
     const el = this.doc.createElement("div");
     el.className = "strata-obs-ephentry";
@@ -102,32 +115,26 @@ export class EphemeralTab {
     key.className = "strata-obs-ephkey";
     key.textContent = entry.key;
     el.appendChild(key);
-    for (const [field, value] of Object.entries(entry.blob)) {
-      const line = this.doc.createElement("div");
-      line.className = "strata-obs-comp";
-      const name = this.doc.createElement("span");
-      name.className = "strata-obs-cname";
-      name.textContent = field;
-      const val = this.doc.createElement("span");
-      val.className = "strata-obs-cval";
-      // A string-array field (the blob's `tags`) reads better as a plain joined list than as JSON.
-      val.textContent = isStringArray(value) ? value.join(", ") : stableStringify(value);
-      line.append(name, val);
-      el.appendChild(line);
+    // Object.entries tolerates a hostile non-object blob (yields nothing → just the key line).
+    for (const field of Object.keys(entry.blob).sort()) {
+      el.appendChild(
+        treeNode({
+          doc: this.doc,
+          path: `${entry.key}${PATH_SEP}${field}`,
+          label: field,
+          value: entry.blob[field],
+          expanded: this.expanded,
+        }),
+      );
     }
     return el;
   }
 
-  /** Rebuild the body via `fill` only when `sig` differs from the last render (the diff-before-replace gate). */
-  private renderBodyOnce(sig: string, fill: (body: HTMLDivElement) => void): void {
-    if (sig === this.lastSig) return;
-    this.lastSig = sig;
-    this.body.textContent = "";
-    fill(this.body);
+  /** A muted note row (placeholder / empty state). */
+  private noteEl(text: string): HTMLDivElement {
+    const el = this.doc.createElement("div");
+    el.className = "strata-obs-empty";
+    el.textContent = text;
+    return el;
   }
-}
-
-/** A value that is an array of only strings — the `tags` blob field renders as a joined list, not JSON. */
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((x) => typeof x === "string");
 }

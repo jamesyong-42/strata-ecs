@@ -2,22 +2,28 @@
  * The durable tab — the un-agreed SYNC DELTA, made visible. It walks the union of the attachment's
  * founding-agreement BASELINE (binding.ts §13.1 — the converged value every reconcile compares against)
  * and the store's converged LORO document (durable-store.ts `.snapshot`), and shows each entity's two
- * records SIDE BY SIDE. Rows where the two disagree are the cells the runtime and the document have NOT
- * yet reconciled (a local drag in flight, a dropped-then-held remote value, §13.3) — the highlighted Δ is
- * the whole point of the tab.
+ * records SIDE BY SIDE as collapsible TREES (json-tree.ts): collapsed, a row is one preview line per
+ * side; expanded, you drill into components/tags/relations with type-colored leaves. Rows where the two
+ * records disagree are the cells the runtime and the document have NOT yet reconciled (a local drag in
+ * flight, a dropped-then-held remote value, §13.3) — the highlighted Δ is the whole point of the tab.
  *
  * It reaches BOTH views through {@link ObserverDurableSource}, a structural interface the host's live
  * `DurableStore` + durable `Attachment` satisfy — the tools package never imports `strata-ecs/durable`
  * (design §0; see index.ts). The getter is re-read every poll and returns null before a collab store is
  * attached, so the tab exists (a placeholder) from first mount and lights up when sync begins.
  *
+ * Refresh discipline (json-tree.ts owns the machinery, this header owns the WHY):
+ *  - Rows reconcile per-key via {@link syncKeyedRows} — a row's DOM is rebuilt only when ITS record pair
+ *    changes, so a drag streaming through one entity never disturbs the row you are inspecting, and the
+ *    filter input (built once, never rebuilt) keeps its value/caret through every poll.
+ *  - Tree expansion lives in a tab-owned path set, NOT in the DOM — a changed row re-renders with your
+ *    expanded nodes still open, now showing the fresh values (that is what makes the tree usable at all
+ *    against live sync traffic).
+ *
  * Rendering discipline: entity records carry PEER-CONTROLLED component/relation values, so every dynamic
  * string goes through `textContent` (never innerHTML-with-data — an XSS in a dev panel is still an XSS).
- * Records are compared/printed via a KEY-SORTED stable stringify so two structurally-equal records
- * stringify identically (else every poll would false-flag a Δ from key-order noise). The filter input is
- * built ONCE and never rebuilt, and the body is only re-rendered when its content signature actually
- * changes (diff-before-replace) — so a focused filter keeps its value/caret and a text selection in the
- * body survives the ~8 Hz poll.
+ * Records are compared via the KEY-SORTED {@link stableStringify} so equal records never false-flag a Δ
+ * from key-order noise.
  *
  * Cost discipline (load-bearing on a large shared board): both `readEntity()` and the stable stringify are
  * O(cell-count) PER ENTITY, so a naïve "read+stringify every union key every poll" pass is O(n) on BOTH
@@ -33,6 +39,9 @@
  */
 
 import type { ObserverDurableSource, ObserverEntityRecord } from "../index";
+import { PATH_SEP, stableStringify, syncKeyedRows, treeNode, type KeyedRow } from "./json-tree";
+
+export { stableStringify }; // canonical home is json-tree.ts; re-exported for source compatibility
 
 /** Rendered-row cap — a 100k-entity doc must not build 100k DOM rows; the footer points at the filter. */
 const MAX_ROWS = 200;
@@ -48,39 +57,19 @@ const DELTA_SCAN_MS = 1000;
 const MISSING = "—";
 
 /**
- * Compact, KEY-SORTED JSON — the canonical form both stores' records are printed and compared in. Object
- * keys are sorted recursively so two records with the same cells but different insertion order stringify
- * equal (arrays keep order — a relation-target or tag list IS ordered). Shared with the ephemeral tab.
- *
- * Non-finite floats are emitted as their legible token ("NaN"/"Infinity"/"-Infinity") rather than left to
- * `JSON.stringify`, which collapses ALL of NaN/±Infinity to the literal `null`. Float columns legitimately
- * hold non-finite values (canon.ts §2.4 — f32/f64 keep NaN/±Inf so they survive the round-trip), and the
- * `null` collapse both hides them (indistinguishable from an absent field) AND — the real bug this tab
- * exists to avoid — makes a genuine `NaN`-vs-`Infinity` runtime/document divergence stringify identically,
- * so the Δ would report a real disagreement as agreement (no `.diff`, not counted). The token keeps distinct
- * non-finite values unequal and legible; a string cell literally spelling "NaN" is a far narrower collision
- * than the four-way null collapse it replaces.
+ * Synthetic row ids for the placeholder/empty/footer rows, PATH_SEP-prefixed so they cannot collide with a
+ * strata-minted entity key (a hostile wire key COULD embed the separator — worst case one row renders with
+ * the wrong signature semantics, cosmetic).
  */
-export function stableStringify(value: unknown): string {
-  return JSON.stringify(sortKeys(value));
-}
+const ROW_PLACEHOLDER = `${PATH_SEP}ph`;
+const ROW_EMPTY = `${PATH_SEP}empty`;
+const ROW_FOOTER = `${PATH_SEP}footer`;
 
-function sortKeys(value: unknown): unknown {
-  if (typeof value === "number" && !Number.isFinite(value)) return String(value); // NaN/±Infinity → legible token
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (value !== null && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const k of Object.keys(value as Record<string, unknown>).sort()) {
-      out[k] = sortKeys((value as Record<string, unknown>)[k]);
-    }
-    return out;
-  }
-  return value;
-}
-
-/** One union row: the key plus each side's stringified record ({@link MISSING} when absent) and their Δ. */
+/** One union row: the key, each side's record (undefined = absent) + its canonical string, and their Δ. */
 interface Row {
   key: string;
+  base: ObserverEntityRecord | undefined;
+  loro: ObserverEntityRecord | undefined;
   baseStr: string;
   loroStr: string;
   diff: boolean;
@@ -94,8 +83,10 @@ export class DurableTab {
   private readonly colLabels: HTMLDivElement;
   private readonly filterInput: HTMLInputElement;
   private readonly body: HTMLDivElement;
-  /** Content signature of the last body render — the diff-before-replace guard (preserves focus/selection). */
-  private lastSig = "";
+  /** Per-row DOM cache for {@link syncKeyedRows} — row identity survives polls; content changes rebuild. */
+  private readonly rowCache = new Map<string, { sig: string; el: HTMLElement }>();
+  /** Open tree paths (json-tree.ts header) — survives row rebuilds AND rows leaving/re-entering the view. */
+  private readonly expanded = new Set<string>();
   /** Cached whole-union Δ (shown in the header), recomputed at most every {@link DELTA_SCAN_MS} — see refresh. */
   private deltaCount = 0;
   /** Timestamp of the last whole-union Δ scan; `-Infinity` forces a scan on the first poll and after re-attach. */
@@ -119,8 +110,8 @@ export class DurableTab {
     this.filterInput = root.querySelector(".strata-obs-filter") as HTMLInputElement;
     this.body = root.querySelector(".strata-obs-durbody") as HTMLDivElement;
 
-    // Typing narrows the union immediately (like the entities tab): the input event recomputes, the
-    // content signature changes, and the body re-renders — all without disturbing the input node itself.
+    // Typing narrows the union immediately (like the entities tab): the input event recomputes and the
+    // reconciler drops/adds rows — without disturbing the input node itself.
     this.filterInput.addEventListener("input", () => this.refresh());
   }
 
@@ -133,12 +124,11 @@ export class DurableTab {
       this.colLabels.style.display = "none";
       // Force a fresh scan if a store re-attaches, so the header Δ never lingers from a prior source.
       this.lastDeltaScanAt = Number.NEGATIVE_INFINITY;
-      this.renderBodyOnce("\u0000null", (body) => {
-        const ph = this.doc.createElement("div");
-        ph.className = "strata-obs-empty";
-        ph.textContent = "no durable store attached — pass durable to attachObserver / start collab";
-        body.appendChild(ph);
-      });
+      syncKeyedRows(
+        this.body,
+        [{ id: ROW_PLACEHOLDER, sig: "", build: () => this.noteEl("no durable store attached — pass durable to attachObserver / start collab") }],
+        this.rowCache,
+      );
       return;
     }
     this.filterRow.style.display = "";
@@ -160,9 +150,11 @@ export class DurableTab {
     const cappedKeys = matchedKeys.slice(0, MAX_ROWS);
     const overflow = matchedKeys.length - cappedKeys.length;
     const capped: Row[] = cappedKeys.map((key) => {
-      const baseStr = recordStr(baseline.readEntity(key));
-      const loroStr = recordStr(loro.readEntity(key));
-      return { key, baseStr, loroStr, diff: baseStr !== loroStr };
+      const base = baseline.readEntity(key);
+      const loroRec = loro.readEntity(key);
+      const baseStr = recordStr(base);
+      const loroStr = recordStr(loroRec);
+      return { key, base, loro: loroRec, baseStr, loroStr, diff: baseStr !== loroStr };
     });
 
     // Δ: the true sync delta over the WHOLE union (independent of the display filter/cap). This is the only
@@ -180,51 +172,57 @@ export class DurableTab {
 
     this.head.textContent = `doc ${src.store.docId} · baseline ${baseKeys.length} · loro ${loroKeys.length} · Δ ${this.deltaCount}`;
 
-    // Diff-before-replace: only rebuild the body when the visible content actually changed, so a poll on a
-    // steady doc leaves the DOM (and any in-body text selection) untouched.
-    const sig = `${filter}\u0001${overflow}\u0001${capped
-      .map((r) => `${r.key}\u0002${r.diff ? "1" : "0"}\u0002${r.baseStr}\u0002${r.loroStr}`)
-      .join("\u0003")}`;
-    this.renderBodyOnce(sig, (body) => {
-      for (const r of capped) body.appendChild(this.rowEl(r));
-      if (capped.length === 0) {
-        const empty = this.doc.createElement("div");
-        empty.className = "strata-obs-empty";
-        empty.textContent = filter === "" ? "runtime and document agree — no entities" : "no keys match the filter";
-        body.appendChild(empty);
-      }
-      if (overflow > 0) {
-        const footer = this.doc.createElement("div");
-        footer.className = "strata-obs-empty";
-        footer.textContent = `+${overflow} more — filter to narrow`;
-        body.appendChild(footer);
-      }
-    });
+    // Reconcile per row: unchanged rows keep their DOM (expanded subtrees, selection); a changed row
+    // rebuilds and its trees re-open from the expansion set with the fresh values.
+    const rows: KeyedRow[] = capped.map((r) => ({
+      id: r.key,
+      sig: `${r.diff ? "1" : "0"}${PATH_SEP}${r.baseStr}${PATH_SEP}${r.loroStr}`,
+      build: () => this.rowEl(r),
+    }));
+    if (capped.length === 0) {
+      rows.push({
+        id: ROW_EMPTY,
+        sig: filter === "" ? "agree" : "nomatch",
+        build: () => this.noteEl(filter === "" ? "runtime and document agree — no entities" : "no keys match the filter"),
+      });
+    }
+    if (overflow > 0) {
+      rows.push({
+        id: ROW_FOOTER,
+        sig: String(overflow),
+        build: () => this.noteEl(`+${overflow} more — filter to narrow`),
+      });
+    }
+    syncKeyedRows(this.body, rows, this.rowCache);
   }
 
-  /** Build one two-column row: the key (spanning), then the baseline and loro records side by side. */
+  /** Build one two-column row: the key (spanning), then the baseline and loro record TREES side by side. */
   private rowEl(r: Row): HTMLDivElement {
     const row = this.doc.createElement("div");
     row.className = r.diff ? "strata-obs-durrow diff" : "strata-obs-durrow";
     const key = this.doc.createElement("div");
     key.className = "strata-obs-durkey";
     key.textContent = r.key;
-    const base = this.doc.createElement("div");
-    base.className = "strata-obs-durcol";
-    base.textContent = r.baseStr;
-    const loro = this.doc.createElement("div");
-    loro.className = "strata-obs-durcol";
-    loro.textContent = r.loroStr;
-    row.append(key, base, loro);
+    row.append(key, this.colEl(r.key, "b", r.base), this.colEl(r.key, "l", r.loro));
     return row;
   }
 
-  /** Rebuild the body via `fill` only when `sig` differs from the last render (the diff-before-replace gate). */
-  private renderBodyOnce(sig: string, fill: (body: HTMLDivElement) => void): void {
-    if (sig === this.lastSig) return;
-    this.lastSig = sig;
-    this.body.textContent = "";
-    fill(this.body);
+  /** One side's cell: the record as a collapsible tree, or {@link MISSING} when the side lacks the entity. */
+  private colEl(key: string, side: "b" | "l", rec: ObserverEntityRecord | undefined): HTMLDivElement {
+    const col = this.doc.createElement("div");
+    col.className = "strata-obs-durcol";
+    if (rec === undefined) col.textContent = MISSING;
+    // Root path is side-scoped so expanding an entity's baseline does not also expand its loro side.
+    else col.appendChild(treeNode({ doc: this.doc, path: `${side}${PATH_SEP}${key}`, value: rec, expanded: this.expanded }));
+    return col;
+  }
+
+  /** A muted note row (placeholder / empty state / overflow footer). */
+  private noteEl(text: string): HTMLDivElement {
+    const el = this.doc.createElement("div");
+    el.className = "strata-obs-empty";
+    el.textContent = text;
+    return el;
   }
 }
 

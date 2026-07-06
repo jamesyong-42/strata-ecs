@@ -79,11 +79,13 @@ export const CSS = `
 /* durable + ephemeral (collab stores) */
 .strata-obs-storehead { flex: none; padding: 6px 10px; color: #8b949e; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; border-bottom: 1px solid #21262d; }
-.strata-obs-durlabels { flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px;
-  padding: 3px 10px; color: #8b949e; border-bottom: 1px solid #21262d; }
+/* minmax(0,1fr), NOT 1fr: a bare 1fr floors at min-content, so one side's EXPANDED tree (long unbroken
+   number tokens) would squeeze the other column to nothing — minmax(0,…) keeps the split even always. */
+.strata-obs-durlabels { flex: none; display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+  gap: 2px 8px; padding: 3px 10px; color: #8b949e; border-bottom: 1px solid #21262d; }
 .strata-obs-durbody, .strata-obs-ephbody { flex: 1; min-height: 0; overflow: auto; }
-.strata-obs-durrow { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; padding: 5px 10px;
-  border-bottom: 1px solid #21262d; }
+.strata-obs-durrow { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 2px 8px;
+  padding: 5px 10px; border-bottom: 1px solid #21262d; }
 .strata-obs-durkey { grid-column: 1 / -1; color: #79c0ff; overflow: hidden; text-overflow: ellipsis; }
 .strata-obs-durcol { color: #e6edf3; white-space: pre-wrap; word-break: break-word; }
 .strata-obs-durrow.diff { background: rgba(248,81,73,.10); }
@@ -91,6 +93,22 @@ export const CSS = `
 .strata-obs-ephgroup { padding: 6px 10px 2px; color: #d2a8ff; font-weight: 700; }
 .strata-obs-ephentry { padding: 1px 10px 4px 16px; }
 .strata-obs-ephkey { color: #79c0ff; }
+
+/* json tree (durable columns + ephemeral blob fields) */
+.strata-obs-tline { display: flex; gap: 6px; align-items: baseline; min-width: 0; padding: 0 2px;
+  border-radius: 4px; }
+.strata-obs-tline.branch { cursor: pointer; user-select: none; }
+.strata-obs-tline.branch:hover { background: rgba(177,186,196,.10); }
+.strata-obs-tcaret { flex: none; width: 10px; color: #8b949e; }
+.strata-obs-tkey { flex: none; color: #d2a8ff; }
+.strata-obs-tkey::after { content: ":"; color: #8b949e; }
+.strata-obs-tprev { color: #8b949e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.strata-obs-tval { white-space: pre-wrap; word-break: break-word; }
+.strata-obs-tval.str { color: #a5d6ff; }
+.strata-obs-tval.num { color: #79c0ff; }
+.strata-obs-tval.bool { color: #ff7b72; }
+.strata-obs-tval.nul { color: #8b949e; }
+.strata-obs-tkids { margin-left: 6px; padding-left: 10px; border-left: 1px solid #21262d; }
 `;
 
 export function injectStyle(doc: Document): void {

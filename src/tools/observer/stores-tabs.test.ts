@@ -10,8 +10,11 @@
  * What is pinned here: the opt-in tab strip (3 base tabs vs 5 with both options); the durable Δ (union of
  * baseline + loro, "—" for a missing side, the diff highlight EXACTLY on the disagreeing rows, filter,
  * the 200-row cap + footer); the ephemeral writer split (final -digits stripped, own group first + "(you)",
- * dashes in a peer-id preserved); null-getter placeholders; the persisted-but-absent-tab fallback; and the
- * load-bearing safety property — peer-controlled values are rendered as TEXT, never parsed as HTML.
+ * dashes in a peer-id preserved); null-getter placeholders; the persisted-but-absent-tab fallback; the
+ * INTERACTIVE TREE contract (json-tree.ts — lazy children, expansion state OUTSIDE the DOM so an open node
+ * survives a live value change, per-row keyed reconcile so unchanged rows keep their exact DOM nodes); and
+ * the load-bearing safety property — peer-controlled values are rendered as TEXT, never parsed as HTML,
+ * collapsed previews and expanded leaves alike.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWorld } from "../../core/index";
@@ -97,6 +100,20 @@ const rowByKey = (key: string): HTMLElement | undefined =>
   durRows().find((r) => r.querySelector(".strata-obs-durkey")?.textContent === key);
 const cols = (row: HTMLElement): string[] =>
   [...row.querySelectorAll(".strata-obs-durcol")].map((c) => c.textContent ?? "");
+
+// --- json-tree helpers: records render as collapsible trees (json-tree.ts) --------------------------
+/** The branch line labeled `label` inside `scope` (tkey text is the pure label; the ":" is CSS content). */
+const branchIn = (scope: Element, label: string): HTMLElement | undefined =>
+  [...scope.querySelectorAll<HTMLElement>(".strata-obs-tline.branch")].find(
+    (l) => l.querySelector(".strata-obs-tkey")?.textContent === label,
+  );
+/** The leaf line labeled `label` inside `scope` (undefined while its ancestors are collapsed/unbuilt). */
+const leafIn = (scope: Element, label: string): HTMLElement | undefined =>
+  [...scope.querySelectorAll<HTMLElement>(".strata-obs-tline.leaf")].find(
+    (l) => l.querySelector(".strata-obs-tkey")?.textContent === label,
+  );
+/** A durable column's tree ROOT line (no label — the row's key already names the entity). */
+const rootBranch = (col: Element): HTMLElement => col.querySelector(".strata-obs-tline.branch") as HTMLElement;
 
 describe("strata-ecs/tools collab tabs — tab strip", () => {
   it("renders exactly the 3 base tabs when neither collab option is given (regression)", () => {
@@ -217,7 +234,14 @@ describe("strata-ecs/tools durable tab", () => {
     vi.advanceTimersByTime(POLL_MS);
 
     expect(container.querySelector("img")).toBeNull(); // the string was NOT parsed into an element
-    expect(cols(rowByKey("p-1")!)[0]).toContain(evil); // it appears verbatim in the baseline column
+    expect(cols(rowByKey("p-1")!)[0]).toContain(evil); // it appears verbatim in the collapsed preview
+
+    // expanding to the string LEAF keeps it text too — the quoted literal, still no element anywhere.
+    const col = rowByKey("p-1")!.querySelector(".strata-obs-durcol")!;
+    rootBranch(col).click();
+    branchIn(col, "components")!.click();
+    expect(container.querySelector("img")).toBeNull();
+    expect(leafIn(col, "Note")?.querySelector(".strata-obs-tval")?.textContent).toBe(JSON.stringify(evil));
   });
 
   it("bounds per-poll reads to the visible cap on a large doc — no whole-union read+stringify every poll (perf regression)", () => {
@@ -313,6 +337,59 @@ describe("strata-ecs/tools durable tab", () => {
   });
 });
 
+describe("strata-ecs/tools durable tab — interactive tree", () => {
+  it("expands a record into a tree, keeps expansion open across a live value change, and reuses unchanged rows", () => {
+    // Mutable stores: r-a is the row being inspected; r-b changes underneath it.
+    const baseRecords: Record<string, ObserverEntityRecord> = {
+      "r-a": rec("r-a", { Pos: { x: 1 } }),
+      "r-b": rec("r-b", { Pos: { x: 2 } }),
+    };
+    const loroRecords: Record<string, ObserverEntityRecord> = {
+      "r-a": rec("r-a", { Pos: { x: 1 } }),
+      "r-b": rec("r-b", { Pos: { x: 2 } }),
+    };
+    const src: ObserverDurableSource = {
+      store: { docId: "d", snapshot: snapshotView(loroRecords) },
+      attachment: { baseline: snapshotView(baseRecords) },
+    };
+    attach({ container, tab: "durable", durable: () => src });
+    vi.advanceTimersByTime(POLL_MS);
+
+    const rowA = rowByKey("r-a")!;
+    const rowB = rowByKey("r-b")!;
+    const colA = rowA.querySelector(".strata-obs-durcol")!; // r-a's BASELINE column
+
+    // collapsed: a preview line, no leaves built yet (children are lazy)
+    expect(colA.querySelector(".strata-obs-tprev")).not.toBeNull();
+    expect(colA.querySelector(".strata-obs-tline.leaf")).toBeNull();
+
+    // drill in: root → components → Pos → the x leaf, type-colored number
+    rootBranch(colA).click();
+    branchIn(colA, "components")!.click();
+    branchIn(colA, "Pos")!.click();
+    expect(leafIn(colA, "x")?.querySelector(".strata-obs-tval.num")?.textContent).toBe("1");
+
+    // a change in r-b rebuilds ONLY r-b — r-a keeps its exact DOM node (expansion, selection intact)
+    loroRecords["r-b"] = rec("r-b", { Pos: { x: 99 } });
+    vi.advanceTimersByTime(POLL_MS);
+    expect(rowByKey("r-a")).toBe(rowA); // reused, untouched
+    expect(rowByKey("r-b")).not.toBe(rowB); // rebuilt (its content changed)
+    expect(rowByKey("r-b")!.classList.contains("diff")).toBe(true);
+
+    // a change in r-a ITSELF rebuilds the row — but the expansion set re-opens the tree onto the NEW value
+    baseRecords["r-a"] = rec("r-a", { Pos: { x: 7 } });
+    vi.advanceTimersByTime(POLL_MS);
+    const newColA = rowByKey("r-a")!.querySelector(".strata-obs-durcol")!;
+    expect(leafIn(newColA, "x")?.querySelector(".strata-obs-tval")?.textContent).toBe("7");
+
+    // collapsing `components` hides its whole subtree again (the built kids are kept, just hidden)
+    const compBranch = branchIn(newColA, "components")!;
+    compBranch.click();
+    const compKids = compBranch.parentElement!.querySelector(".strata-obs-tkids") as HTMLElement;
+    expect(compKids.style.display).toBe("none");
+  });
+});
+
 describe("strata-ecs/tools ephemeral tab", () => {
   // own peer "p1" (two entities) + a remote whose peer-id ITSELF contains dashes: the writer split must
   // strip ONLY the final -<digits>, so "p2-longer-uuid-7" belongs to writer "p2-longer-uuid".
@@ -345,9 +422,14 @@ describe("strata-ecs/tools ephemeral tab", () => {
     const keys = [...container.querySelectorAll(".strata-obs-ephkey")].map((e) => e.textContent);
     expect(keys).toEqual(["p1-1", "p1-2", "p2-longer-uuid-7"]);
 
-    // a string-array `tags` field renders as a joined list, not JSON.
-    const vals = [...container.querySelectorAll(".strata-obs-cval")].map((e) => e.textContent);
-    expect(vals).toContain("Selection, Active");
+    // blob fields are tree nodes: collapsed, `tags` shows its inline preview…
+    const p11 = container.querySelector(".strata-obs-ephentry")!;
+    const tagsLine = branchIn(p11, "tags")!;
+    expect(tagsLine.querySelector(".strata-obs-tprev")?.textContent).toBe('["Selection","Active"]');
+    // …and clicking expands it into index-labeled string leaves.
+    tagsLine.click();
+    expect(leafIn(p11, "0")?.querySelector(".strata-obs-tval")?.textContent).toBe('"Selection"');
+    expect(leafIn(p11, "1")?.querySelector(".strata-obs-tval")?.textContent).toBe('"Active"');
   });
 
   it("renders a placeholder while the ephemeral getter returns null", () => {
@@ -373,6 +455,30 @@ describe("strata-ecs/tools ephemeral tab", () => {
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector(".strata-obs-pane[data-pane='ephemeral']")?.textContent).toContain(evil);
+  });
+
+  it("keeps an expanded blob field open while the live blob changes underneath (per-entry rebuild)", () => {
+    // The cursor case: a remote peer re-blobs continuously; the inspected node must stay open and tick.
+    let x = 1;
+    const src: ObserverEphemeralSource = {
+      debugDump: () => ({
+        peerId: "p1",
+        ttlMs: 5000,
+        throttleMs: 16,
+        entries: [{ key: "p1-1", blob: { components: { Cursor: { x } }, tags: [] } }],
+      }),
+    };
+    attach({ container, tab: "ephemeral", ephemeral: () => src });
+    vi.advanceTimersByTime(POLL_MS);
+    const pane = container.querySelector(".strata-obs-pane[data-pane='ephemeral']")!;
+
+    branchIn(pane, "components")!.click();
+    branchIn(pane, "Cursor")!.click();
+    expect(leafIn(pane, "x")?.querySelector(".strata-obs-tval")?.textContent).toBe("1");
+
+    x = 9; // the cursor moved — the next poll dumps a changed blob, rebuilding the entry row
+    vi.advanceTimersByTime(POLL_MS);
+    expect(leafIn(pane, "x")?.querySelector(".strata-obs-tval")?.textContent).toBe("9"); // still open, fresh value
   });
 
   it("keeps a key equal to the local peerId in the own group instead of stripping it into a phantom writer", () => {
