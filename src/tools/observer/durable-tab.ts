@@ -90,6 +90,8 @@ export class DurableTab {
   private readonly doc: Document;
   private readonly head: HTMLDivElement;
   private readonly filterRow: HTMLDivElement;
+  /** The static "baseline / loro" column captions — which side is which (hidden with the filter row). */
+  private readonly colLabels: HTMLDivElement;
   private readonly filterInput: HTMLInputElement;
   private readonly body: HTMLDivElement;
   /** Content signature of the last body render — the diff-before-replace guard (preserves focus/selection). */
@@ -109,9 +111,11 @@ export class DurableTab {
     root.innerHTML =
       `<div class="strata-obs-storehead"></div>` +
       `<div class="strata-obs-filterrow"><input class="strata-obs-filter" placeholder="filter by key…" /></div>` +
+      `<div class="strata-obs-durlabels"><span>baseline</span><span>loro (converged)</span></div>` +
       `<div class="strata-obs-durbody"></div>`;
     this.head = root.querySelector(".strata-obs-storehead") as HTMLDivElement;
     this.filterRow = root.querySelector(".strata-obs-filterrow") as HTMLDivElement;
+    this.colLabels = root.querySelector(".strata-obs-durlabels") as HTMLDivElement;
     this.filterInput = root.querySelector(".strata-obs-filter") as HTMLInputElement;
     this.body = root.querySelector(".strata-obs-durbody") as HTMLDivElement;
 
@@ -126,6 +130,7 @@ export class DurableTab {
     if (src === null) {
       this.head.textContent = "";
       this.filterRow.style.display = "none";
+      this.colLabels.style.display = "none";
       // Force a fresh scan if a store re-attaches, so the header Δ never lingers from a prior source.
       this.lastDeltaScanAt = Number.NEGATIVE_INFINITY;
       this.renderBodyOnce("\u0000null", (body) => {
@@ -137,6 +142,7 @@ export class DurableTab {
       return;
     }
     this.filterRow.style.display = "";
+    this.colLabels.style.display = "";
 
     const baseline = src.attachment.baseline;
     const loro = src.store.snapshot;

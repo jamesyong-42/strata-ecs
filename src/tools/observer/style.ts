@@ -79,6 +79,8 @@ export const CSS = `
 /* durable + ephemeral (collab stores) */
 .strata-obs-storehead { flex: none; padding: 6px 10px; color: #8b949e; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; border-bottom: 1px solid #21262d; }
+.strata-obs-durlabels { flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px;
+  padding: 3px 10px; color: #8b949e; border-bottom: 1px solid #21262d; }
 .strata-obs-durbody, .strata-obs-ephbody { flex: 1; min-height: 0; overflow: auto; }
 .strata-obs-durrow { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; padding: 5px 10px;
   border-bottom: 1px solid #21262d; }
