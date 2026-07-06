@@ -82,6 +82,36 @@ function deliver(from: Peer, to: Peer): void {
   for (const b of from.outbound.splice(0)) to.source.apply(b);
 }
 
+/**
+ * Wait until `from`'s binding timers have flushed ≥1 buffer into `from.outbound`. A FIXED sleep
+ * races the 16ms change-throttle under CPU load (a loaded runner can stall past any constant,
+ * leaving `deliver` nothing to forward — the CI flake). Deadline-polling adapts; on timeout it
+ * returns and lets the following assertion report the truth. Its poll rounds also guarantee the
+ * ≥1 wall-clock-ms timestamp distinctness Loro's per-key LWW needs between two sends of one key
+ * (the throttle period ≥16ms already provides it).
+ */
+async function flushed(from: Peer, deadlineMs = 2000): Promise<void> {
+  const t0 = Date.now();
+  while (from.outbound.length === 0 && Date.now() - t0 < deadlineMs) await sleep(5);
+}
+
+/**
+ * Deliver `from`→`to` repeatedly until `pred()` holds (or the deadline lapses — the assertion
+ * then reports). Stronger than {@link flushed} + one `deliver`: the binding's KEEPALIVE timer
+ * (~ttl/3) can interleave a buffer into `outbound` ahead of the change flush, so a single
+ * forward of "whatever is there" can deliver a keepalive and miss the change — this drains
+ * every interleaving until the observable effect lands.
+ */
+async function converge(from: Peer, to: Peer, pred: () => boolean, deadlineMs = 2000): Promise<void> {
+  const t0 = Date.now();
+  for (;;) {
+    deliver(from, to);
+    to.world.sync();
+    if (pred() || Date.now() - t0 > deadlineMs) return;
+    await sleep(5);
+  }
+}
+
 /** Entities a query matches — `world.query(q)` exposes only `.each`, so count by iterating (durable's pattern). */
 function countMatches(peer: Peer, q: AnyQuery): number {
   let n = 0;
@@ -133,7 +163,7 @@ describe("presence flow end-to-end (§15.3/§15.4)", () => {
     });
     A.eph.edit(cursor).set(CursorPos, { x: 3, y: 4 }); // same handler, no tick between (Option A)
 
-    await sleep(25); // A's change-throttle fires → bytes in A.outbound
+    await flushed(A); // A's change-throttle fired → bytes in A.outbound
     deliver(A, B);
     B.world.sync(); // drain → project
 
@@ -151,7 +181,7 @@ describe("presence flow end-to-end (§15.3/§15.4)", () => {
     const A = makePeer("alice");
     const B = makePeer("bob");
     A.eph.spawn({ components: [[EditingRef, { target: K("shape-7") }]] });
-    await sleep(25);
+    await flushed(A);
     deliver(A, B);
     B.world.sync();
     const rc = B.world.firstOf(defineQuery([EditingRef, Not(Local)]))!;
@@ -170,14 +200,14 @@ describe("blob-diff projection (§15.6)", () => {
         [PresenceInfo, { name: "A", color: 1 }],
       ],
     });
-    await sleep(25);
+    await flushed(A);
     deliver(A, B);
     B.world.sync();
     const rc = B.world.firstOf(remoteCursors)!;
     expect(B.world.has(rc, PresenceInfo)).toBe(true);
 
     A.eph.removeComponent(cursor, PresenceInfo); // the facet vanishes from the blob (§15.6)
-    await sleep(25); // distinct wall-clock ms so the new blob out-timestamps the last
+    await flushed(A); // the ≥16ms throttle tick also provides the distinct wall-clock ms vs the last blob
     deliver(A, B);
     B.world.sync();
     expect(B.world.has(rc, PresenceInfo)).toBe(false); // removed on B
@@ -188,9 +218,7 @@ describe("blob-diff projection (§15.6)", () => {
     const A = makePeer("alice");
     const B = makePeer("bob");
     const cursor = A.eph.spawn({ components: [[CursorPos, { x: 1, y: 1 }]] });
-    await sleep(25);
-    deliver(A, B);
-    B.world.sync();
+    await converge(A, B, () => B.world.firstOf(remoteCursors) !== undefined);
     const rc = B.world.firstOf(remoteCursors)!;
 
     let valFires = 0;
@@ -210,11 +238,11 @@ describe("blob-diff projection (§15.6)", () => {
     expect(valFires).toBe(0); // unchanged value → no runtime write → no reactive fire (decision E)
     expect(B.world.get(rc, CursorPos)).toEqual({ x: 1, y: 1 });
 
-    // A genuine value change DOES project + fire.
+    // A genuine value change DOES project + fire. converge() may interleave keepalive deliveries
+    // and extra drains before the change lands — none of them may fire the value watch (that's the
+    // property under test, now pinned across interleavings, not just for one hand-timed delivery).
     A.eph.edit(cursor).set(CursorPos, { x: 9, y: 9 });
-    await sleep(25);
-    deliver(A, B);
-    B.world.sync();
+    await converge(A, B, () => B.world.get(rc, CursorPos)?.x === 9);
     B.world.reactive.notify();
     expect(valFires).toBe(1);
     expect(B.world.get(rc, CursorPos)).toEqual({ x: 9, y: 9 });
@@ -224,19 +252,19 @@ describe("blob-diff projection (§15.6)", () => {
     const A = makePeer("alice");
     const B = makePeer("bob");
     const cursor = A.eph.spawn({ components: [[CursorPos, { x: 0, y: 0 }]] });
-    await sleep(25);
+    await flushed(A);
     deliver(A, B);
     B.world.sync();
     const rc = B.world.firstOf(remoteCursors)!;
 
     A.eph.addTag(cursor, Selecting);
-    await sleep(25);
+    await flushed(A);
     deliver(A, B);
     B.world.sync();
     expect(B.world.hasTag(rc, Selecting)).toBe(true);
 
     A.eph.removeTag(cursor, Selecting);
-    await sleep(25);
+    await flushed(A);
     deliver(A, B);
     B.world.sync();
     expect(B.world.hasTag(rc, Selecting)).toBe(false);
@@ -251,7 +279,7 @@ describe("peer-left atomicity (§15.3)", () => {
     A.eph.spawn({ components: [[CursorPos, { x: 1, y: 1 }]] });
     A.eph.spawn({ components: [[CursorPos, { x: 2, y: 2 }]] });
     A.eph.spawn({ components: [[CursorPos, { x: 3, y: 3 }]] });
-    await sleep(30);
+    await flushed(A);
     deliver(A, B);
     B.world.sync();
     expect(countMatches(B, remoteCursors)).toBe(3);
@@ -273,7 +301,7 @@ describe("leave() — best-effort explicit departure (§15.3)", () => {
     const B = makePeer("bob");
     A.eph.spawn({ components: [[CursorPos, { x: 1, y: 1 }]] });
     A.eph.spawn({ components: [[PresenceInfo, { name: "A", color: 1 }]] });
-    await sleep(25);
+    await flushed(A);
     deliver(A, B);
     B.world.sync();
     expect(countMatches(B, remoteCursors)).toBe(1);
@@ -377,7 +405,7 @@ describe("EphemeralSyncStatus (006 C7)", () => {
     const B = makePeer("bob");
 
     A.eph.spawn({ components: [[CursorPos, { x: 1, y: 1 }]] });
-    await sleep(25);
+    await flushed(A);
     deliver(A, B);
     B.world.sync();
     let status = B.world.getResource(EphemeralSyncStatus)!;
@@ -386,7 +414,7 @@ describe("EphemeralSyncStatus (006 C7)", () => {
 
     // A second peer → peerCount 2, lastInboundFrame advances again.
     A2.eph.spawn({ components: [[CursorPos, { x: 2, y: 2 }]] });
-    await sleep(25);
+    await flushed(A2);
     deliver(A2, B);
     B.world.sync();
     status = B.world.getResource(EphemeralSyncStatus)!;
@@ -414,7 +442,7 @@ describe("detach — full teardown (§5.6)", () => {
     const A = makePeer("alice");
     const B = makePeer("bob");
     A.eph.spawn({ components: [[CursorPos, { x: 1, y: 1 }]] }); // an own entity on A
-    await sleep(25);
+    await flushed(A);
     deliver(A, B);
     B.world.sync();
     expect(countMatches(B, remoteCursors)).toBe(1); // B holds a remote projection
@@ -445,7 +473,7 @@ describe("detach purges own outbound staging (fix 1)", () => {
     const B = makePeer("bob");
     // B holds a REMOTE projection of A (so B's Loro store carries the remote key "alice-0").
     A.eph.spawn({ components: [[CursorPos, { x: 1, y: 1 }]] });
-    await sleep(25);
+    await flushed(A);
     deliver(A, B);
     B.world.sync();
     expect(countMatches(B, remoteCursors)).toBe(1);
