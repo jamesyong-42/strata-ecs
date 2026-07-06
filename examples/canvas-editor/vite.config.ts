@@ -1,5 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+import wasm from "vite-plugin-wasm";
+import topLevelAwait from "vite-plugin-top-level-await";
 
 // Live-source mode (default): `strata-ecs` resolves straight to ../../src so framework edits
 // hot-reload the example instantly — this example exists to drive strata-ecs's development.
@@ -15,6 +17,15 @@ const isolationHeaders = {
 };
 
 export default defineConfig({
+  // loro-crdt (the collab layers' CRDT engine) ships a wasm-bindgen module whose glue uses a
+  // top-level await; Vite's dev server rejects the ESM-integration wasm import without these.
+  // The collab boot is statically imported by main.ts, so loro is in the browser graph in BOTH
+  // modes — omit these and even local-only mode fails to load (the whole app depends on them).
+  plugins: [wasm(), topLevelAwait()],
+  // topLevelAwait's transform emits syntax esbuild refuses to down-level to the es2020 default,
+  // so the production build needs a target with native top-level await (every evergreen browser
+  // has it). Dev is unaffected; this only gates `vite build`.
+  build: { target: "esnext" },
   resolve: {
     alias: useDist
       ? []
