@@ -57,9 +57,12 @@ export class EphemeralTab {
     this.head.textContent = `peer ${dump.peerId} · ttl ${dump.ttlMs}ms · throttle ${dump.throttleMs}ms · ${dump.entries.length} entries`;
 
     // Group by writer (final -<digits> stripped), own partition first and labeled, remotes sorted for stability.
+    // Guard the local peerId: a key equal to it (no -<int> suffix) would strip its own final -digits and file
+    // under a phantom writer — strata never mints such a key (every key is `<peerId>-<int>`, §15.3), but a
+    // non-strata peer could inject one on the wire, so keep it in the own group rather than spawn a bogus one.
     const groups = new Map<string, Array<{ key: string; blob: Record<string, unknown> }>>();
     for (const entry of dump.entries) {
-      const writer = entry.key.replace(/-\d+$/, "");
+      const writer = entry.key === dump.peerId ? entry.key : entry.key.replace(/-\d+$/, "");
       let g = groups.get(writer);
       if (g === undefined) {
         g = [];

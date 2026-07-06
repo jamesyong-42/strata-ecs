@@ -73,6 +73,24 @@ function rec(key: string, components: Record<string, unknown>): ObserverEntityRe
   return { key, components, tags: [], relations: {} };
 }
 
+/**
+ * A snapshot view that TALLIES every `readEntity` into `counter.reads` — the probe for the durable tab's
+ * per-poll cost bound: the tab must read only the ≤MAX_ROWS *visible* rows each poll, and walk the whole
+ * union (an O(n) read pass) only on the throttled Δ scan, not on every ~8 Hz poll.
+ */
+function countingView(
+  records: Record<string, ObserverEntityRecord>,
+  counter: { reads: number },
+): ObserverSnapshotView {
+  return {
+    entities: () => Object.keys(records),
+    readEntity: (key) => {
+      counter.reads++;
+      return records[key];
+    },
+  };
+}
+
 const tabButtons = (): HTMLButtonElement[] => [...container.querySelectorAll<HTMLButtonElement>(".strata-obs-tab")];
 const durRows = (): HTMLElement[] => [...container.querySelectorAll<HTMLElement>(".strata-obs-durrow")];
 const rowByKey = (key: string): HTMLElement | undefined =>
@@ -201,6 +219,98 @@ describe("strata-ecs/tools durable tab", () => {
     expect(container.querySelector("img")).toBeNull(); // the string was NOT parsed into an element
     expect(cols(rowByKey("p-1")!)[0]).toContain(evil); // it appears verbatim in the baseline column
   });
+
+  it("bounds per-poll reads to the visible cap on a large doc — no whole-union read+stringify every poll (perf regression)", () => {
+    // 1000-entity baseline vs empty loro. Old code read+stringified EVERY union key EVERY poll (≈2000
+    // reads/poll → ~200 ms main-thread stall); the tab must now read only the ≤MAX_ROWS visible rows per
+    // poll and walk the whole union solely on the THROTTLED Δ scan.
+    const many: Record<string, ObserverEntityRecord> = {};
+    for (let i = 0; i < 1000; i++) {
+      const k = `k${String(i).padStart(4, "0")}`;
+      many[k] = rec(k, { N: { i } });
+    }
+    const counter = { reads: 0 };
+    const bigSource: ObserverDurableSource = {
+      store: { docId: "big", snapshot: countingView({}, counter) }, // empty loro → every baseline key is a Δ
+      attachment: { baseline: countingView(many, counter) },
+    };
+    attach({ container, tab: "durable", durable: () => bigSource });
+
+    vi.advanceTimersByTime(POLL_MS); // first poll: eager Δ scan (walks the whole union) + the visible cap
+    expect(durRows()).toHaveLength(200);
+    expect(counter.reads).toBeGreaterThanOrEqual(1000); // the eager scan really did walk the whole union
+
+    // A poll WITHIN the throttle window must NOT re-walk the union: it reads only the ≤200 visible rows on
+    // both sides (~400), decisively less than one whole-side walk (1000) — let alone the old ≈2000/poll.
+    counter.reads = 0;
+    vi.advanceTimersByTime(POLL_MS);
+    expect(counter.reads).toBeLessThanOrEqual(2 * 200 + 4);
+    expect(counter.reads).toBeLessThan(1000);
+  });
+
+  it("holds the whole-union Δ in the header regardless of the filter, and re-scans only after the throttle interval", () => {
+    // Mutable stores so the delta can change mid-test; both sides start equal (Δ 0).
+    const baseRecords: Record<string, ObserverEntityRecord> = {
+      "e-0": rec("e-0", { Pos: { x: 0 } }),
+      "e-1": rec("e-1", { Pos: { x: 1 } }),
+    };
+    const loroRecords: Record<string, ObserverEntityRecord> = {
+      "e-0": rec("e-0", { Pos: { x: 0 } }),
+      "e-1": rec("e-1", { Pos: { x: 1 } }),
+    };
+    const src: ObserverDurableSource = {
+      store: { docId: "d", snapshot: snapshotView(loroRecords) },
+      attachment: { baseline: snapshotView(baseRecords) },
+    };
+    attach({ container, tab: "durable", durable: () => src });
+    const head = () => container.querySelector(".strata-obs-storehead")?.textContent ?? "";
+
+    vi.advanceTimersByTime(POLL_MS); // first poll → eager scan → Δ 0
+    expect(head()).toContain("· Δ 0");
+
+    // Filtering to a single visible row must NOT change the header Δ — Δ is the WHOLE-union delta, not a
+    // count of what is on screen. (Introduce a real divergence first so a naive per-view count would be 1.)
+    loroRecords["e-1"] = rec("e-1", { Pos: { x: 999 } });
+    const durFilter = ".strata-obs-pane[data-pane='durable'] .strata-obs-filter";
+    const input = container.querySelector<HTMLInputElement>(durFilter)!;
+    input.value = "e-0"; // hides the (now-diverged) e-1 row from view
+    input.dispatchEvent(new Event("input")); // same tick → within throttle window → Δ stays cached at 0
+    expect(durRows()).toHaveLength(1);
+    expect(head()).toContain("· Δ 0");
+
+    // The VISIBLE rows are always live even between scans: clear the filter and e-1 already shows the diff.
+    input.value = "";
+    input.dispatchEvent(new Event("input"));
+    expect(rowByKey("e-1")!.classList.contains("diff")).toBe(true);
+    expect(head()).toContain("· Δ 0"); // …but the aggregate count is still the throttled, cached value
+
+    // Once the throttle interval elapses, a subsequent poll re-scans and the header catches up to Δ 1.
+    // (Advance well past DELTA_SCAN_MS so a poll fires strictly after the scan window, regardless of phase.)
+    vi.advanceTimersByTime(2000);
+    expect(head()).toContain("· Δ 1");
+  });
+
+  it("counts a non-finite float divergence (NaN vs Infinity) as a real Δ and renders it legibly, not as 'null'", () => {
+    // Float columns legitimately hold NaN/±Inf (canon keeps them); JSON.stringify collapses ALL of them to
+    // `null`, which would hide the value AND mask a real NaN-vs-Infinity disagreement as agreement.
+    const baseRecords = { "f-1": rec("f-1", { V: { x: NaN } }), "f-2": rec("f-2", { V: { x: NaN } }) };
+    const loroRecords = { "f-1": rec("f-1", { V: { x: Infinity } }), "f-2": rec("f-2", { V: { x: NaN } }) };
+    const src: ObserverDurableSource = {
+      store: { docId: "d", snapshot: snapshotView(loroRecords) },
+      attachment: { baseline: snapshotView(baseRecords) },
+    };
+    attach({ container, tab: "durable", durable: () => src });
+    vi.advanceTimersByTime(POLL_MS);
+
+    expect(rowByKey("f-1")!.classList.contains("diff")).toBe(true); // NaN vs Infinity → a genuine Δ
+    expect(rowByKey("f-2")!.classList.contains("diff")).toBe(false); // NaN vs NaN → genuinely equal
+    expect(container.querySelector(".strata-obs-storehead")?.textContent).toContain("· Δ 1");
+
+    const f1cols = cols(rowByKey("f-1")!);
+    expect(f1cols[0]).toContain("NaN"); // legible token, not the misleading "null"
+    expect(f1cols[1]).toContain("Infinity");
+    expect(f1cols.join("")).not.toContain("null");
+  });
 });
 
 describe("strata-ecs/tools ephemeral tab", () => {
@@ -263,5 +373,27 @@ describe("strata-ecs/tools ephemeral tab", () => {
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector(".strata-obs-pane[data-pane='ephemeral']")?.textContent).toContain(evil);
+  });
+
+  it("keeps a key equal to the local peerId in the own group instead of stripping it into a phantom writer", () => {
+    // A key EQUAL to the peerId (no -<int> suffix) would otherwise have its own final -digits stripped and be
+    // filed under a phantom writer ("abc-42" → "abc"). Strata never mints such a key, but a non-strata peer
+    // could inject one — it must land in the own group, not spawn a bogus second one.
+    const src: ObserverEphemeralSource = {
+      debugDump: () => ({
+        peerId: "abc-42",
+        ttlMs: 5000,
+        throttleMs: 16,
+        entries: [
+          { key: "abc-42", blob: { components: {}, tags: [] } }, // bare peerId
+          { key: "abc-42-0", blob: { components: {}, tags: [] } }, // normally-minted own key
+        ],
+      }),
+    };
+    attach({ container, tab: "ephemeral", ephemeral: () => src });
+    vi.advanceTimersByTime(POLL_MS);
+
+    const groups = [...container.querySelectorAll(".strata-obs-ephgroup")].map((e) => e.textContent);
+    expect(groups).toEqual(["abc-42 (you)"]); // one own group; no phantom "abc"
   });
 });
