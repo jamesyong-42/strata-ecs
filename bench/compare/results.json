@@ -1,62 +1,348 @@
 {
-  "context": { "cpu": "Apple M1 Max", "arch": "arm64-darwin", "node": "24.14.1" },
-  "libs": ["strata-ecs", "bitecs", "becsy", "miniplex", "koota"],
-  "versions": { "strata-ecs": "0.0.0", "bitecs": "0.4.0", "becsy": "0.16.0", "miniplex": "2.0.0", "koota": "0.6.6" },
+  "context": {
+    "cpu": "Apple M1 Max",
+    "arch": "arm64-darwin",
+    "node": "24.14.1"
+  },
+  "libs": [
+    "strata-ecs",
+    "bitecs",
+    "becsy",
+    "miniplex",
+    "koota"
+  ],
+  "versions": {
+    "strata-ecs": "0.1.0",
+    "bitecs": "0.4.0",
+    "becsy": "0.16.0",
+    "miniplex": "2.0.0",
+    "koota": "0.6.6"
+  },
   "byLib": {
     "strata-ecs": {
-      "packed_5": { "avg_ns": 8990 },
-      "simple_iter": { "avg_ns": 12640 },
-      "frag_iter": { "avg_ns": 7430 },
-      "entity_cycle": { "avg_ns": 255120 },
-      "add_remove": { "avg_ns": 473050 },
-      "sim_frame": { "avg_ns": 101290 },
-      "spawn_reap_frame": { "avg_ns": 2616350 },
-      "toggle_frame": { "avg_ns": 12462130 },
-      "serialize": { "avg_ns": 11344820 },
-      "random_access": { "avg_ns": 815940 }
+      "packed_5": {
+        "id": "packed_5",
+        "avg_ns": 7668.511261058806,
+        "p75_ns": 7834,
+        "p99_ns": 9042,
+        "checksum": 1000
+      },
+      "simple_iter": {
+        "id": "simple_iter",
+        "avg_ns": 9607.824896730379,
+        "p75_ns": 9500,
+        "p99_ns": 11834,
+        "checksum": 191980
+      },
+      "frag_iter": {
+        "id": "frag_iter",
+        "avg_ns": 5796.879476873238,
+        "p75_ns": 5709,
+        "p99_ns": 7542,
+        "checksum": 2700
+      },
+      "entity_cycle": {
+        "id": "entity_cycle",
+        "avg_ns": 223049.61264696537,
+        "p75_ns": 222417,
+        "p99_ns": 387583,
+        "checksum": 1000
+      },
+      "add_remove": {
+        "id": "add_remove",
+        "avg_ns": 419958.1433691756,
+        "p75_ns": 418625,
+        "p99_ns": 591083,
+        "checksum": 1000
+      },
+      "sim_frame": {
+        "id": "sim_frame",
+        "avg_ns": 79600.95440556969,
+        "p75_ns": 77792,
+        "p99_ns": 156458,
+        "checksum": 12333
+      },
+      "spawn_reap_frame": {
+        "id": "spawn_reap_frame",
+        "avg_ns": 1613616.516203706,
+        "p75_ns": 1609500,
+        "p99_ns": 2117167,
+        "checksum": 5000
+      },
+      "toggle_frame": {
+        "id": "toggle_frame",
+        "avg_ns": 10437009.78125,
+        "p75_ns": 10667083,
+        "p99_ns": 11066375,
+        "checksum": 10000
+      },
+      "serialize": {
+        "id": "serialize",
+        "avg_ns": 8972455.546666667,
+        "p75_ns": 9229208,
+        "p99_ns": 10059375,
+        "checksum": 5000
+      },
+      "random_access": {
+        "id": "random_access",
+        "avg_ns": 687910.8119490695,
+        "p75_ns": 691833,
+        "p99_ns": 764958,
+        "checksum": 50036440
+      }
     },
     "bitecs": {
-      "packed_5": { "avg_ns": 9070 },
-      "simple_iter": { "avg_ns": 16080 },
-      "frag_iter": { "avg_ns": 7420 },
-      "entity_cycle": { "avg_ns": 297890 },
-      "add_remove": { "avg_ns": 217890 },
-      "sim_frame": { "avg_ns": 47510 },
-      "spawn_reap_frame": { "avg_ns": 3650600 },
-      "toggle_frame": { "avg_ns": 11271390 },
-      "random_access": { "avg_ns": 466240 }
+      "packed_5": {
+        "id": "packed_5",
+        "avg_ns": 7668.335908073731,
+        "p75_ns": 7750.000000953674,
+        "p99_ns": 11125,
+        "checksum": 1000
+      },
+      "simple_iter": {
+        "id": "simple_iter",
+        "avg_ns": 12631.24595273454,
+        "p75_ns": 12500,
+        "p99_ns": 20167,
+        "checksum": 191980
+      },
+      "frag_iter": {
+        "id": "frag_iter",
+        "avg_ns": 5912.2677458222015,
+        "p75_ns": 5875,
+        "p99_ns": 6666,
+        "checksum": 2700
+      },
+      "entity_cycle": {
+        "id": "entity_cycle",
+        "avg_ns": 223338.8066878981,
+        "p75_ns": 233917,
+        "p99_ns": 411500,
+        "checksum": 1000
+      },
+      "add_remove": {
+        "id": "add_remove",
+        "avg_ns": 168385.5622605364,
+        "p75_ns": 189417,
+        "p99_ns": 249834,
+        "checksum": 1000
+      },
+      "sim_frame": {
+        "id": "sim_frame",
+        "avg_ns": 38459.97591888077,
+        "p75_ns": 38500,
+        "p99_ns": 55833,
+        "checksum": 12333
+      },
+      "spawn_reap_frame": {
+        "id": "spawn_reap_frame",
+        "avg_ns": 2757689.545816775,
+        "p75_ns": 2815041,
+        "p99_ns": 3643083.0000009537,
+        "checksum": 5000
+      },
+      "toggle_frame": {
+        "id": "toggle_frame",
+        "avg_ns": 8009692.62195122,
+        "p75_ns": 8150709,
+        "p99_ns": 8873875,
+        "checksum": 10000
+      },
+      "random_access": {
+        "id": "random_access",
+        "avg_ns": 380277.85613845324,
+        "p75_ns": 384375,
+        "p99_ns": 438459,
+        "checksum": 50036440
+      }
     },
     "becsy": {
-      "packed_5": { "avg_ns": 75950 },
-      "simple_iter": { "avg_ns": 210390 },
-      "frag_iter": { "avg_ns": 76080 },
-      "entity_cycle": { "avg_ns": 477260 },
-      "add_remove": { "avg_ns": 225590 },
-      "sim_frame": { "avg_ns": 1193120 },
-      "spawn_reap_frame": { "avg_ns": 5447190 },
-      "toggle_frame": { "avg_ns": 5389630 }
+      "packed_5": {
+        "id": "packed_5",
+        "avg_ns": 60739.37670995803,
+        "p75_ns": 59792,
+        "p99_ns": 100416,
+        "checksum": 1000
+      },
+      "simple_iter": {
+        "id": "simple_iter",
+        "avg_ns": 143589.70284079298,
+        "p75_ns": 142292,
+        "p99_ns": 196667,
+        "checksum": 191980
+      },
+      "frag_iter": {
+        "id": "frag_iter",
+        "avg_ns": 53261.26659010746,
+        "p75_ns": 48750,
+        "p99_ns": 116375,
+        "checksum": 2700
+      },
+      "entity_cycle": {
+        "id": "entity_cycle",
+        "avg_ns": 333537.3445657333,
+        "p75_ns": 333167,
+        "p99_ns": 429792,
+        "checksum": 1000
+      },
+      "add_remove": {
+        "id": "add_remove",
+        "avg_ns": 162169.72781746945,
+        "p75_ns": 162958,
+        "p99_ns": 207292,
+        "checksum": 1000
+      },
+      "sim_frame": {
+        "id": "sim_frame",
+        "avg_ns": 872300.8455790784,
+        "p75_ns": 879167,
+        "p99_ns": 1283792,
+        "checksum": 12333
+      },
+      "spawn_reap_frame": {
+        "id": "spawn_reap_frame",
+        "avg_ns": 4003642.895348826,
+        "p75_ns": 4068167.0000019073,
+        "p99_ns": 4683749.999998093,
+        "checksum": 5000
+      },
+      "toggle_frame": {
+        "id": "toggle_frame",
+        "avg_ns": 4448133.974025974,
+        "p75_ns": 4474542,
+        "p99_ns": 4839584,
+        "checksum": 10000
+      }
     },
     "miniplex": {
-      "packed_5": { "avg_ns": 52580 },
-      "simple_iter": { "avg_ns": 90140 },
-      "frag_iter": { "avg_ns": 53100 },
-      "entity_cycle": { "avg_ns": 613300 },
-      "add_remove": { "avg_ns": 1035290 },
-      "sim_frame": { "avg_ns": 629600 },
-      "spawn_reap_frame": { "avg_ns": 4588550 },
-      "toggle_frame": { "avg_ns": 24411510 },
-      "random_access": { "avg_ns": 539540 }
+      "packed_5": {
+        "id": "packed_5",
+        "avg_ns": 43095.33341538576,
+        "p75_ns": 42792,
+        "p99_ns": 61750,
+        "checksum": 1000
+      },
+      "simple_iter": {
+        "id": "simple_iter",
+        "avg_ns": 75593.0080897422,
+        "p75_ns": 74333,
+        "p99_ns": 107167,
+        "checksum": 191980
+      },
+      "frag_iter": {
+        "id": "frag_iter",
+        "avg_ns": 45830.69845006867,
+        "p75_ns": 45709,
+        "p99_ns": 61333,
+        "checksum": 2700
+      },
+      "entity_cycle": {
+        "id": "entity_cycle",
+        "avg_ns": 480598.6343642612,
+        "p75_ns": 456667,
+        "p99_ns": 2117958,
+        "checksum": 1000
+      },
+      "add_remove": {
+        "id": "add_remove",
+        "avg_ns": 760503.7638136512,
+        "p75_ns": 768292,
+        "p99_ns": 1032250,
+        "checksum": 1000
+      },
+      "sim_frame": {
+        "id": "sim_frame",
+        "avg_ns": 399561.4472934495,
+        "p75_ns": 395292,
+        "p99_ns": 576792,
+        "checksum": 12333
+      },
+      "spawn_reap_frame": {
+        "id": "spawn_reap_frame",
+        "avg_ns": 2863279.410788358,
+        "p75_ns": 2822917,
+        "p99_ns": 4421917,
+        "checksum": 5000
+      },
+      "toggle_frame": {
+        "id": "toggle_frame",
+        "avg_ns": 16019933.82051282,
+        "p75_ns": 16666500,
+        "p99_ns": 17638875,
+        "checksum": 10000
+      },
+      "random_access": {
+        "id": "random_access",
+        "avg_ns": 389003.6023230089,
+        "p75_ns": 397708,
+        "p99_ns": 469584,
+        "checksum": 50036440
+      }
     },
     "koota": {
-      "packed_5": { "avg_ns": 18790 },
-      "simple_iter": { "avg_ns": 29150 },
-      "frag_iter": { "avg_ns": 22210 },
-      "entity_cycle": { "avg_ns": 2212430 },
-      "add_remove": { "avg_ns": 717360 },
-      "sim_frame": { "avg_ns": 85770 },
-      "spawn_reap_frame": { "avg_ns": 13639810 },
-      "toggle_frame": { "avg_ns": 39191100 },
-      "random_access": { "avg_ns": 1020160 }
+      "packed_5": {
+        "id": "packed_5",
+        "avg_ns": 14334.285409015916,
+        "p75_ns": 14665.999999046326,
+        "p99_ns": 20375,
+        "checksum": 1000
+      },
+      "simple_iter": {
+        "id": "simple_iter",
+        "avg_ns": 22217.30126953125,
+        "p75_ns": 22266.34716796875,
+        "p99_ns": 22708.577392578125,
+        "checksum": 191980
+      },
+      "frag_iter": {
+        "id": "frag_iter",
+        "avg_ns": 16912.046630859375,
+        "p75_ns": 16934.1533203125,
+        "p99_ns": 17580.02734375,
+        "checksum": 2700
+      },
+      "entity_cycle": {
+        "id": "entity_cycle",
+        "avg_ns": 1408212.7962962964,
+        "p75_ns": 1456709,
+        "p99_ns": 2018541,
+        "checksum": 1000
+      },
+      "add_remove": {
+        "id": "add_remove",
+        "avg_ns": 521589.06607275427,
+        "p75_ns": 534208,
+        "p99_ns": 652708,
+        "checksum": 1000
+      },
+      "sim_frame": {
+        "id": "sim_frame",
+        "avg_ns": 64872.740318701224,
+        "p75_ns": 64375,
+        "p99_ns": 142624.99999809265,
+        "checksum": 12333
+      },
+      "spawn_reap_frame": {
+        "id": "spawn_reap_frame",
+        "avg_ns": 9837310.26153846,
+        "p75_ns": 10077333,
+        "p99_ns": 12263833,
+        "checksum": 5000
+      },
+      "toggle_frame": {
+        "id": "toggle_frame",
+        "avg_ns": 26122146.695652176,
+        "p75_ns": 26976750,
+        "p99_ns": 27721208,
+        "checksum": 10000
+      },
+      "random_access": {
+        "id": "random_access",
+        "avg_ns": 714188.6991869919,
+        "p75_ns": 717583,
+        "p99_ns": 820708,
+        "checksum": 50036440
+      }
     }
   }
 }

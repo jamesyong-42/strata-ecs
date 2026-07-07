@@ -189,8 +189,12 @@ writeFileSync(join(HERE, "results.json"), JSON.stringify(payload, null, 2));
 writeFileSync(join(HERE, "report.html"), renderReport(payload));
 process.stderr.write("\nwrote RESULTS.md · results.json · report.html\n");
 
-// warn on any parity mismatch
+// Checksum parity is the suite's proof of equal work — a mismatch means the numbers compare
+// different workloads, so it's a hard failure (artifacts above are still written for debugging).
 let mismatches = 0;
 for (const sc of [...SCENARIOS, ...FRAMES, ...EXTENSIONS]) if (parity[sc].size > 1) mismatches++;
-if (mismatches) process.stderr.write(`\n⚠ ${mismatches} scenario(s) have checksum mismatches — investigate before trusting those rows.\n`);
-else process.stderr.write("\n✓ all implemented scenarios agree on checksums.\n");
+if (mismatches) {
+  process.stderr.write(`\n✗ ${mismatches} scenario(s) have checksum mismatches — the results are not comparable.\n`);
+  process.exit(1);
+}
+process.stderr.write("\n✓ all implemented scenarios agree on checksums.\n");

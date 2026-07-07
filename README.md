@@ -21,7 +21,7 @@ haven't turned on.
 - **Typed-array fast** — components live in struct-of-arrays columns grouped by
   archetype; a system is a contiguous loop over a `Float32Array`. Ties or beats
   [bitecs](https://github.com/NateTheGreatt/bitECS) on the canonical iteration
-  benchmarks, fastest on entity-lifecycle churn ([BENCHMARKS.md](BENCHMARKS.md)).
+  benchmarks, leads on entity-lifecycle churn ([BENCHMARKS.md](BENCHMARKS.md)).
 - **Schema-first types** — field types flow from one schema literal into both the
   storage and the TypeScript types. `batch.col(Position).x` *is* a `Float32Array` at
   compile time; a typo in a field name is a type error.
@@ -280,8 +280,8 @@ pnpm collab:server           # dumb byte relay — ws://localhost:8787
 ## Performance
 
 On the canonical ECS micro-benchmarks (Node 24), strata-ecs ties or beats bitecs — the
-flat-array specialist — on dense iteration, and is fastest on entity-lifecycle churn.
-A movement tick over 10,000 entities runs in ~0.23 ms with zero per-row allocation.
+flat-array specialist — on dense iteration, and leads on entity-lifecycle churn.
+A movement tick over 10,000 entities runs in ~0.2 ms with zero per-row allocation.
 The archetype trade-off is real and documented: adding or removing a component migrates
 the row between tables.
 

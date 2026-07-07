@@ -4,6 +4,7 @@
  * on the iteration path (matching bitecs/miniplex/koota, which also iterate without a scheduler).
  */
 
+import { createRequire } from "node:module";
 import {
   type Component,
   type Entity,
@@ -416,7 +417,9 @@ const toggle_frame: Scenario = {
 
 const bench: LibraryBench = {
   name: "@vibecook/strata-ecs",
-  version: "0.0.0",
+  // The installed package's real version — unlike the rivals' pins below, strata is the moving
+  // target here, so a hardcoded string would silently drift on every release.
+  version: createRequire(import.meta.url)("@vibecook/strata-ecs/package.json").version,
   scenarios: [packed_5, simple_iter, frag_iter, entity_cycle, add_remove],
   frames: [sim_frame, spawn_reap_frame, toggle_frame],
   extensions: [serialize, random_access],

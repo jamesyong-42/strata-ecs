@@ -74,7 +74,7 @@ function scenarioCard(id, label, libs, byLib) {
   const bars = rows
     .map(({ lib, ns }) => {
       const color = COLORS[lib] ?? FALLBACK;
-      const isStrata = lib === "strata";
+      const isStrata = lib === "strata-ecs";
       if (ns == null) {
         return `<div class="row na"><span class="lib" style="--c:${color}">${esc(lib)}</span>
           <div class="track"><div class="fill" style="width:0%"></div></div>

@@ -664,7 +664,7 @@
       <figure class="code" data-file="core-entityKey" data-kind="function"></figure>
       <p>
         Brand a plain string as an <code>EntityKey</code> — the stable, cross-session identity a
-        <code>key</code> field stores. Identity at runtime (the brand is type-level only): the Part I
+        <code>key</code> field stores. Identity at runtime (the brand is type-level only): the core
         runtime stores a <code>key</code> field as an ordinary string column and is key-ignorant. The brand
         exists so an arbitrary string cannot be passed where a durable reference is expected.
       </p>
@@ -891,7 +891,7 @@
         The application-facing handle over the runtime store. <code>world.*</code> mutations run
         <em>outside</em> any system iteration, so shape changes apply immediately.
         <code>tick(pipeline)</code> runs systems — where <code>ctx.*</code> shape changes defer to the phase
-        boundary. <code>sync()</code> drains any attached inbound layers (a no-op in a pure Part I world).
+        boundary. <code>sync()</code> drains any attached inbound layers (a no-op when none are attached).
         The frame contract is <code>sync() → tick(s) → reactive.notify() → render</code>. Reads
         (<code>read</code>/<code>get</code>/<code>readField</code>/<code>has</code>/…) and the value surface
         (<code>edit</code>, <code>setResource</code>, <code>removeResource</code>) are iteration-safe; the
@@ -1461,7 +1461,7 @@ type Pipeline = readonly Phase[];   // positional — array order is run order</
   // iteration, frame & telemetry
   query(q: Query): { each(fn: (batch: Batch) => void): void };
   tick(pipeline: Pipeline): void;
-  sync(): void;                          // drain inbound layers (no-op in a pure Part I world)
+  sync(): void;                          // drain inbound layers (no-op when none attached)
   observe(obs: WorldObserver): () => void;
 
   // inbound layers (durable/ephemeral bindings register here)
