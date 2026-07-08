@@ -120,6 +120,16 @@ body {
   border-color: #a371f7;
 }
 
+/* Undo/redo (collab mode) share the control-button style; disabled = dimmed, no hover lift. */
+#hud .hud-controls button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#hud .hud-controls button:disabled:hover {
+  background: transparent;
+}
+
 #hud .hud-checks {
   display: flex;
   flex-wrap: wrap;

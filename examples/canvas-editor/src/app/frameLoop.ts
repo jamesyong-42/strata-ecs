@@ -10,6 +10,7 @@
  */
 
 import type { Pipeline } from "@vibecook/strata-ecs";
+import { applyPendingSelection } from "../collab/history";
 import { drawBuffer } from "../render/drawBuffer";
 import { dirty } from "./commands";
 import { repaint } from "./reactivity";
@@ -37,6 +38,9 @@ export function startFrameLoop(
     requestAnimationFrame(frame);
 
     world.sync(); // Part I no-op — kept from day one so the durable layer attaches with zero rewrite
+    // A pending undo/redo selection resolves HERE, now sync() has drained the revert into the runtime and
+    // its keys bind to handles (collab-only; a fast no-op with nothing pending — collab/history.ts).
+    applyPendingSelection();
     // (No camera sync step: camera mutations write the Camera resource immediately, 003 §1.4.)
     syncGestureResource(); // pointer deltas accumulated between frames → the Gesture resource
 

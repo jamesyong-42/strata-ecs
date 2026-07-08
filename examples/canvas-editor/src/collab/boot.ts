@@ -270,7 +270,13 @@ export function startCollabBoot(
     peerId,
     channel,
     doc,
-    seedFirst: () => doc.transaction((tx) => seedBoard(tx, seedCount)),
+    seedFirst: () => {
+      doc.transaction((tx) => seedBoard(tx, seedCount));
+      // The initial board is the FLOOR, not an undoable user action — clear the seed off the undo stack so
+      // undo can't wipe it (and so the first peer matches a joiner, whose board arrives by snapshot import
+      // and never touches the undo stack). Local user edits from here on are the only undoable steps.
+      doc.clearHistory();
+    },
     onStatus: notify,
     // The seeded/synced entities reach the runtime via projection on the next sync()s — frame the board
     // once they are placed (two frames is safe: sync drains, then the board is queryable).

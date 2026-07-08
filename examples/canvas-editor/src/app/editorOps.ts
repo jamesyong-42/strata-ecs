@@ -7,7 +7,7 @@
  */
 
 import type { Entity } from "@vibecook/strata-ecs";
-import { selectedBoxes } from "../ecs/queries";
+import { renderable, selectedBoxes } from "../ecs/queries";
 import { Fill, Kind, Label, Position, Selected, Size, Velocity, ZIndex } from "../ecs/schema";
 import { commitDelete, commitDuplicate } from "../collab/ops";
 import { activeCollab } from "../collab/mode";
@@ -30,6 +30,18 @@ export function selectedCount(): number {
     n += b.count;
   });
   return n;
+}
+
+/** Re-derive the shape tally from the live document. The `stats.entities` counter is maintained
+ *  incrementally by the create/delete/duplicate verbs, but undo/redo changes the population OUTSIDE those
+ *  verbs (the revert projects through the drain), so the count is recomputed once per undo/redo — off the
+ *  hot path (undo is a rare user action), which also reconverges any drift from remote peers' edits. */
+export function recountShapes(): void {
+  let n = 0;
+  world.query(renderable).each((b) => {
+    n += b.count;
+  });
+  stats.entities = n;
 }
 
 /** Replace (or extend, with `additive`) the selection — one bulk tag commit. Handles may

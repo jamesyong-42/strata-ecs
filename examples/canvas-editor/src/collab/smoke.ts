@@ -23,6 +23,9 @@
  *                     increment is accepted by A and B WITHOUT quarantine (the bidirectional-base exchange).
  *   8. presence     — B's ephemeral cursor projects on A as `Not(Local)`; position + `SelectionRef` flow
  *                     across; `eph.leave()` despawns it (D1).
+ *   9. undo/redo    — A creates a shape through the real op, `undo()`s it (gone on A AND B), `redo()`s it
+ *                     (back on both, same key); the selection side-channel hands undo the keys captured at
+ *                     commit time (plan-undo). LOCAL-ops-only: the revert reaches the runtime at next sync().
  *
  * The WHOLE suite runs under BOTH loopback modes — `"sync"` (inline, deterministic) and `"async"`
  * (microtask-deferred, realistic BroadcastChannel timing) — and main.ts asserts identical final
@@ -30,7 +33,7 @@
  * the runtime; the framework did the converging.
  */
 
-import { createWorld, type Entity } from "@vibecook/strata-ecs";
+import { createWorld, type Entity, type EntityKey } from "@vibecook/strata-ecs";
 import {
   attachDurable,
   createDurableStore,
@@ -53,6 +56,7 @@ import {
   ZIndex,
 } from "../ecs/schema";
 import { remotePresence } from "../ecs/queries";
+import { selectedEntities, setSelection } from "../app/editorOps";
 import { commitCreate, commitDelete, commitDrag, commitDuplicate } from "./ops";
 import { setActiveCollab } from "./mode";
 import { presenceIdentity } from "./presence";
@@ -582,6 +586,86 @@ export async function runCollabSmoke(
   attEphB.detach();
   loroA.destroy();
   loroB.destroy();
+
+  // --- undo/redo: A creates a shape via the REAL op, undoes it (gone on both peers), redoes it (back) --
+  // Undo is LOCAL-ops-only and reaches A's runtime at the next sync(), then ships to peers like any commit
+  // (plan-undo). commitCreate is one transaction = one undo step, so undo reverses exactly this create.
+  const undoDraft = worldA.spawn({
+    components: [
+      [Position, { x: 1200, y: 400 }],
+      [Size, { w: 80, h: 60 }],
+      [Fill, { r: 120, g: 220, b: 120, a: 255 }],
+      [ZIndex, { z: 20 }],
+      [Kind, { shape: "rect" }],
+      [Velocity, {}],
+    ],
+  });
+  const undoTwin = commitCreate(undoDraft);
+  worldA.sync();
+  const undoKey = undoTwin !== undefined ? docA.keyOf(undoTwin) : undefined;
+  check("undo scenario: A created a shape via the real op", undoKey !== undefined && docA.canUndo());
+  await barrier(
+    () => worldB.sync(),
+    () => undoKey !== undefined && docB.resolve(undoKey) !== undefined,
+  );
+  check("B converged on the created shape (pre-undo)", undoKey !== undefined && docB.resolve(undoKey) !== undefined);
+
+  const undid = docA.undo();
+  worldA.sync(); // A projects its own revert (local echo, no round-trip) at the next sync()
+  check("A.undo() reported a step undone", undid);
+  check("A can redo after undo", docA.canRedo());
+  await barrier(
+    () => worldB.sync(),
+    () => undoKey !== undefined && docB.resolve(undoKey) === undefined,
+  );
+  check("A's undone shape is gone locally", undoKey !== undefined && docA.resolve(undoKey) === undefined);
+  check("B converged on the undo (shape gone on both peers)", undoKey !== undefined && docB.resolve(undoKey) === undefined);
+
+  const redid = docA.redo();
+  worldA.sync();
+  check("A.redo() reported a step redone", redid);
+  await barrier(
+    () => worldB.sync(),
+    () => undoKey !== undefined && docB.resolve(undoKey) !== undefined,
+  );
+  check("A has the shape back after redo", undoKey !== undefined && docA.resolve(undoKey) !== undefined);
+  check("B converged on the redo (shape back on both peers)", undoKey !== undefined && docB.resolve(undoKey) !== undefined);
+
+  // selection-restore side-channel: capture the selection (as durable keys) on commit, deliver it back on
+  // undo — the exact mechanism collab/history.ts installs, driven here straight on the store. A commit is
+  // made while the redone shape is selected; after the selection moves away, undoing that commit must hand
+  // its restore hook the ORIGINAL selection key.
+  let restoredKeys: unknown = null;
+  docA.setHistoryHooks({
+    capture: () => selectedEntities().map((e) => docA.keyOf(e)).filter((k): k is EntityKey => k !== undefined),
+    restore: (v) => {
+      restoredKeys = v;
+    },
+  });
+  // Select the redone shape by its LIVE handle: `undoTwin` went stale across the undo/redo cycle (redo
+  // re-spawned the key under a fresh handle), so re-resolve it from the key before tagging it.
+  const liveTwin = undoKey !== undefined ? docA.resolve(undoKey) : undefined;
+  setSelection(liveTwin !== undefined ? [liveTwin] : []); // real Selected tag on A's world
+  const selProbe = docA.transaction((tx) => spawnRect(tx, -700, -700, 21)); // one commit → captures [undoKey]
+  worldA.sync();
+  const selProbeKey = docA.keyOf(selProbe);
+  setSelection([]); // move the selection away so a stale value can't masquerade as restored
+  docA.undo(); // pops the probe → restore fires synchronously with the captured selection keys
+  worldA.sync();
+  check(
+    "selection-restore: undo delivered the captured selection key",
+    Array.isArray(restoredKeys) && restoredKeys.length === 1 && restoredKeys[0] === undoKey,
+  );
+  docA.setHistoryHooks(null); // stop capturing before the suite's later commits
+  setSelection([]); // leave the app world's selection clean for the post-suite board
+  // Converge the probe-undo on the other peers so the shared doc is clean for the reconnect/teardown steps.
+  await barrier(
+    () => {
+      worldB.sync();
+      worldC.sync();
+    },
+    () => selProbeKey !== undefined && docB.resolve(selProbeKey) === undefined && docC.resolve(selProbeKey) === undefined,
+  );
 
   // --- reconnect (ws only): drop EVERY socket mid-session; each peer re-bootstraps; convergence holds --
   // The relay is dumb + stateless, so a client-side drop that forces every peer to re-join is exactly a

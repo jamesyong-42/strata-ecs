@@ -30,6 +30,7 @@ import { clearBoard, stressSpawn } from "./app/stress";
 import { interaction, pointerDown, pointerMove, pointerUp, setTool } from "./app/tools";
 import { world } from "./app/worldRef";
 import { startCollabBoot } from "./collab/boot";
+import { installHistory } from "./collab/history";
 import { activeCollab } from "./collab/mode";
 import { injectDemoCursors, runCollabSmoke } from "./collab/smoke";
 import { buildPipeline, SYSTEM_NAMES, type SystemName } from "./ecs/pipeline";
@@ -129,6 +130,9 @@ fitCanvases();
 // last session, viewport included; an incompatible autosave (schema drift) is quarantined, never a brick.
 if (collabRoom !== null) {
   startCollabBoot(collabRoom, count, notify, (chips) => hud.setCollabChips(chips), wsOrigin);
+  // Undo/redo is collab-only (it needs the DurableStore's history door): install the selection
+  // side-channel + the reactive HUD buttons now the session is attached (collab/history.ts).
+  installHistory(hud);
   // persistence stays local-only — setOnMutate is deliberately NOT called (no autosave in collab).
 } else {
   let booted = false;
@@ -261,7 +265,7 @@ if (params.get("script") === "collab-smoke") {
           if (r.failed.length > 0) console.error("collab-smoke (ws) failing checks:", r.failed);
           postVerdict(
             r.passed === r.total
-              ? `collab-smoke (ws): PASS ${r.passed}/${r.total} — live relay · app-ops · late-join · reconnect re-bootstrap all converged`
+              ? `collab-smoke (ws): PASS ${r.passed}/${r.total} — live relay · app-ops · undo/redo · late-join · reconnect re-bootstrap all converged`
               : `collab-smoke (ws): FAIL — ${r.passed}/${r.total}${r.firstFail ? ` [${r.firstFail}]` : ""}`,
           );
         } else {
@@ -272,7 +276,7 @@ if (params.get("script") === "collab-smoke") {
           const ok = s.passed === s.total && a.passed === a.total && s.total === a.total;
           postVerdict(
             ok
-              ? `collab-smoke: PASS ${s.passed}/${s.total} (sync) · ${a.passed}/${a.total} (async) — app-ops · async-loopback · late-join · presence all converged`
+              ? `collab-smoke: PASS ${s.passed}/${s.total} (sync) · ${a.passed}/${a.total} (async) — app-ops · undo/redo · async-loopback · late-join · presence all converged`
               : `collab-smoke: FAIL — sync ${s.passed}/${s.total}${s.firstFail ? ` [${s.firstFail}]` : ""} · async ${a.passed}/${a.total}${a.firstFail ? ` [${a.firstFail}]` : ""}`,
           );
         }

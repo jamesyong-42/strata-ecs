@@ -35,12 +35,16 @@ export class Hud {
   private readonly note: HTMLDivElement;
   private readonly collab: HTMLDivElement;
   private readonly body: HTMLDivElement;
+  private readonly controls: HTMLDivElement;
   private readonly spark: CanvasRenderingContext2D;
   private readonly frameRing = new Float32Array(SAMPLES);
   private readonly ecsRing = new Float32Array(SAMPLES);
   private ringIdx = 0;
   private simOn = false;
   private simBtn!: HTMLButtonElement;
+  // undo/redo — created only in collab mode (enableHistory); disabled state driven reactively.
+  private undoBtn?: HTMLButtonElement;
+  private redoBtn?: HTMLButtonElement;
 
   constructor(root: HTMLElement, actions: HudActions) {
     root.innerHTML =
@@ -53,10 +57,11 @@ export class Hud {
     this.body = root.querySelector(".hud-body") as HTMLDivElement;
     this.note = root.querySelector(".hud-note") as HTMLDivElement;
     this.collab = root.querySelector(".hud-collab") as HTMLDivElement;
+    this.controls = root.querySelector(".hud-controls") as HTMLDivElement;
     const sparkEl = root.querySelector(".hud-spark") as HTMLCanvasElement;
     this.spark = sparkEl.getContext("2d") as CanvasRenderingContext2D;
     this.spark.scale(2, 2);
-    this.buildControls(root.querySelector(".hud-controls") as HTMLDivElement, actions);
+    this.buildControls(this.controls, actions);
   }
 
   private buildControls(el: HTMLDivElement, a: HudActions): void {
@@ -114,6 +119,31 @@ export class Hud {
   setCollabChips(text: string): void {
     this.collab.textContent = text;
     this.collab.classList.add("on");
+  }
+
+  /** Add the undo/redo control buttons — COLLAB MODE ONLY (the ?collab boot calls this once). They share
+   *  the control-button style and start disabled; {@link setHistoryState} drives their enabled state. */
+  enableHistory(actions: { onUndo(): void; onRedo(): void }): void {
+    const mk = (label: string, title: string, onClick: () => void): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.title = title;
+      b.disabled = true;
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    this.undoBtn = mk("↶ undo", "Undo the last change (Cmd/Ctrl+Z) — local edits only, converges on every peer", actions.onUndo);
+    this.redoBtn = mk("↷ redo", "Redo (Shift+Cmd/Ctrl+Z or Ctrl+Y)", actions.onRedo);
+    this.controls.prepend(this.redoBtn);
+    this.controls.prepend(this.undoBtn); // prepend redo then undo → [undo][redo] lead the control row
+  }
+
+  /** Enable/disable the undo/redo buttons — called reactively from DurableUndoStatus (set-on-change, so
+   *  this fires only when a button's availability actually flips, never per frame). */
+  setHistoryState(canUndo: boolean, canRedo: boolean): void {
+    if (this.undoBtn !== undefined) this.undoBtn.disabled = !canUndo;
+    if (this.redoBtn !== undefined) this.redoBtn.disabled = !canRedo;
   }
 
   /** Keep the button in step with the WORLD's SimMode (boot ?sim=1, autosave restore) —

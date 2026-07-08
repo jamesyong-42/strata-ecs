@@ -7,6 +7,7 @@
  * middle-drag or space-drag pan, Shift+1 zoom-to-fit.
  */
 
+import { redo, undo } from "../collab/history";
 import { reportCursor } from "../collab/presence";
 import { panBy, screenToWorld, zoomAt, zoomToFit } from "./camera";
 import { clearSelection, deleteSelection, duplicateSelection } from "./editorOps";
@@ -38,6 +39,12 @@ const TOOL_CURSOR: Record<ToolId, string> = {
   ellipse: "crosshair",
   note: "crosshair",
 };
+
+/** True when a keystroke is bound for a text field — undo/redo there is the field's own, not the canvas's. */
+function isEditableTarget(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false;
+  return t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable;
+}
 
 export function attachInput(target: HTMLElement, notify: (msg: string) => void): void {
   let spaceHeld = false;
@@ -143,6 +150,22 @@ export function attachInput(target: HTMLElement, notify: (msg: string) => void):
           if (d.count > 0) notify(`duplicated ${d.count.toLocaleString()} shapes in ${d.ms.toFixed(1)}ms`);
         }
         break;
+      case "KeyZ": {
+        // Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z redo — collab-only (undo/redo no-op otherwise). Don't fight a
+        // gesture mid-drag or a focused text field (its own undo wins there); undo/redo swallow the key
+        // only in collab mode, so local mode keeps the browser default.
+        if (!(e.metaKey || e.ctrlKey)) break;
+        if (gestureActive() || isEditableTarget(e.target)) break;
+        if (e.shiftKey ? redo() : undo()) e.preventDefault();
+        break;
+      }
+      case "KeyY": {
+        // Ctrl+Y redo (the Windows convention; Cmd+Y is not redo on macOS).
+        if (!e.ctrlKey || e.metaKey) break;
+        if (gestureActive() || isEditableTarget(e.target)) break;
+        if (redo()) e.preventDefault();
+        break;
+      }
       case "Escape":
         if (gestureActive()) cancelGesture();
         else clearSelection();
