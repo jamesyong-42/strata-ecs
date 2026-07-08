@@ -8,6 +8,7 @@ import topLevelAwait from "vite-plugin-top-level-await";
 const inputs = {
   main: fileURLToPath(new URL("./index.html", import.meta.url)),
   probe: fileURLToPath(new URL("./probe.html", import.meta.url)),
+  swarm: fileURLToPath(new URL("./swarm.html", import.meta.url)),
 };
 
 // Live-source mode (default): `@vibecook/strata-ecs` resolves straight to ../../src so framework edits
