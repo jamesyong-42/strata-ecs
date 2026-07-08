@@ -1,0 +1,14 @@
+{
+  "name": "@strata-ecs/example-canvas-desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The canvas-editor as a minimal Electron app: same renderer code, an IPC switchboard in main (P1), and a truffle/tsnet mesh so instances collab over a tailnet with no server (P2).",
+  "type": "module",
+  "main": "src/main.mjs",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^43.1.0"
+  }
+}

@@ -7,3 +7,6 @@ packages:
   # The WebSocket relay for the canvas-editor collab demo — a dumb byte-relay (its only dep is `ws`),
   # isolated the same way so the server's dep never enters strata's own graph.
   - "examples/collab-server"
+  # The Electron desktop shell around the canvas-editor (serverless tailnet collab via truffle) —
+  # electron/truffle stay out of strata's graph the same way.
+  - "examples/canvas-desktop"

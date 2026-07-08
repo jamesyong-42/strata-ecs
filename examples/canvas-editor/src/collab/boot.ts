@@ -26,6 +26,7 @@ import { world } from "../app/worldRef";
 import { setActiveCollab } from "./mode";
 import { startPresence } from "./presence";
 import { createBroadcastChannel, type Channel } from "./transport";
+import { createIpcChannel, hasDesktopBridge } from "./transport-ipc";
 import { createWebSocketChannel, resolveRelayUrl } from "./transport-ws";
 import { createWebTransportChannel, resolveWebTransportUrl } from "./transport-webtransport";
 
@@ -254,8 +255,13 @@ export function startCollabBoot(
 
   // ONE channel, shared by durable + presence (a single `onMessage` handler in wireCollab routes both
   // envelope kinds — the transport's handler is replace-on-set, so the two layers cannot each register).
+  // The desktop bridge WINS over everything: under the canvas-desktop Electron shell, the main-process
+  // switchboard IS the room (its P2 mesh reaches other machines), so ?ws/?wt would only bypass it.
   let channel: Channel;
-  if (wt !== null) {
+  if (hasDesktopBridge()) {
+    notify("collab: desktop IPC channel (canvas-desktop main is the switchboard)");
+    channel = createIpcChannel(room, peerId);
+  } else if (wt !== null) {
     const url = resolveWebTransportUrl(wt.origin, room);
     notify(`collab: connecting to WebTransport relay ${url} …`);
     channel = createWebTransportChannel({ room, self: peerId, url, certHashHex: wt.certHash });
