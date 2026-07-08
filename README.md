@@ -32,7 +32,8 @@ haven't turned on.
   (permanently stored, merges without conflicts) and an ephemeral **Presence** layer
   (cursors and selections that reset on disconnect), both projecting into the same
   runtime your systems already read. Convergence comes from [Loro](https://loro.dev),
-  not from code you write — and the hot path never imports it.
+  not from code you write — and the hot path never imports it. Undo and redo ship
+  built in and multiplayer-correct: each peer undoes only its own changes.
 - **Transport-agnostic** — the framework converges documents; your app moves bytes.
   Any channel that carries a `Uint8Array` works: WebSocket, `BroadcastChannel`, WebRTC.
 - **First-party devtools and React binding** — a drop-in inspector panel
@@ -239,6 +240,10 @@ conflicting remote edits off while your gesture is in flight, then everyone conv
 
 Presence is the same idea for people: each peer owns a partition, writes it immediately,
 and every other peer projects in as a live `Not(Local)` entity that self-expires on TTL.
+
+Undo and redo are built in and local-only — `doc.undo()` / `doc.redo()`, one transaction
+per step, `doc.undoGroup(fn)` to collapse a gesture, and a `DurableUndoStatus` resource to
+drive toolbar enablement. See [Undo & history](https://jamesyong-42.github.io/strata-ecs/#undo).
 
 See [Going multiplayer](https://jamesyong-42.github.io/strata-ecs/#collab) in the guide for
 the full story — the visibility rules, entity keys vs. handles, and the transport

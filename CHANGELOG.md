@@ -4,6 +4,19 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [Unreleased]
+
+### Added
+
+- **Undo & redo on the document layer** — `doc.undo()` / `doc.redo()` with
+  `doc.canUndo()` / `doc.canRedo()`, `doc.undoGroup(fn)` (collapse a gesture into one
+  step), `doc.clearHistory()`, and `doc.setHistoryHooks({ capture, restore })` for
+  selection metadata that rides the stacks. Undo is **local-only** — each peer undoes
+  only its own changes — and one transaction is one undoable step. `createDurableStore`
+  takes `{ maxUndoSteps }` (default 100), and a new runtime-local `DurableUndoStatus`
+  resource (`{ canUndo, canRedo }`) drives toolbar enablement reactively. See
+  [Undo & history](https://jamesyong-42.github.io/strata-ecs/#undo).
+
 ## [0.1.0] — 2026-07-06
 
 Initial public release:

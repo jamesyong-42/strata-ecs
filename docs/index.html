@@ -406,6 +406,7 @@
     <a href="#persistence">Save &amp; load</a>
     <a href="#collab">Going multiplayer</a>
     <a href="#durable" class="sub">The document layer</a>
+    <a href="#undo" class="sub">Undo &amp; history</a>
     <a href="#ephemeral" class="sub">The presence layer</a>
     <a href="#transport" class="sub">Transport</a>
   </div>
@@ -1146,12 +1147,38 @@
     <ul>
       <li><strong>Committer-wins, per component.</strong> The last commit to a component wins; because the component is the conflict unit, splitting independently-edited fields into separate components (Position vs. Fill) means they never contend.</li>
       <li><strong>Keys, not handles, cross the boundary.</strong> A runtime <code>Entity</code> handle is session-local; a document <code>EntityKey</code> is the stable cross-session identity. Use <code>doc.keyOf(e)</code> to get one and <code>doc.resolve(key)</code> to turn it back into a handle.</li>
-      <li><strong>Undo is local-ops-only</strong> by construction — a transaction is the unit.</li>
+      <li><strong>Undo is local-ops-only</strong> by construction — a transaction is the unit. See <a href="#undo">Undo &amp; history</a>.</li>
       <li><strong><code>DurableSyncStatus</code></strong> is a runtime-local resource (<code>pendingInbound</code>, <code>heldCells</code>, <code>lastAppliedFrame</code>) you read with <code>useResource</code>; it only moves on real activity, so an idle network re-renders nothing.</li>
     </ul>
     <div class="rule r-durable">
       <span class="tag">Rule — identity</span>
       <p>Persist keys, never handles: <code>doc.keyOf(e)</code> on the way out, <code>doc.resolve(key)</code> on the way in. A stored handle from a past session is meaningless.</p>
+    </div>
+
+    <!-- ---------- UNDO ---------- -->
+    <h3 id="undo">Undo &amp; history</h3>
+    <p>
+      Undo and redo come with the document layer — no separate store, no plumbing. They follow the rule
+      every mature multiplayer editor follows (Figma, Liveblocks, Google Docs):
+      <strong>undo undoes only <em>your</em> changes</strong>. A collaborator's edits never land on your
+      undo stack, and yours never land on theirs. <code>doc.undo()</code> and <code>doc.redo()</code>
+      return <code>false</code> on an empty stack, so they're safe to call straight from a keyboard
+      handler.
+    </p>
+    <figure class="code" data-file="undo.ts"></figure>
+    <ul>
+      <li><strong>A transaction is one step.</strong> Each <code>doc.transaction</code> is one undoable unit; wrap a multi-part gesture in <code>doc.undoGroup(fn)</code> to collapse its commits into a single step.</li>
+      <li><strong>Redo survives a teammate's edit.</strong> A new <em>local</em> commit clears the redo stack — you've branched — but a remote edit arriving over the wire does not, so you can still redo what you just undid.</li>
+      <li><strong>Drive the toolbar from <code>DurableUndoStatus</code>.</strong> The runtime-local <code>{ canUndo, canRedo }</code> resource updates exactly when a button's enabled state flips, so an idle stack re-renders nothing. Detached, the store's <code>canUndo()</code> / <code>canRedo()</code> methods are the pull-based equivalent.</li>
+      <li><strong>Selection rides the stack.</strong> <code>setHistoryHooks</code> stores a JSON-safe snapshot (typically the selected keys) with each step and restores it on undo — so undo puts the selection back where it was, the way users expect.</li>
+    </ul>
+    <div class="rule r-durable">
+      <span class="tag">Rule — undo is yours, and it wins</span>
+      <p>Undo touches only your own changes, but it re-asserts the pre-edit state as the <em>newest</em>
+      value — so undoing an edit can overwrite a teammate's later change to the same component, and undoing
+      a spawn removes the entity even if a teammate added to it since. Everyone still converges on the
+      result: undo is a real forward edit, not a rewind of history. Attached, the reversal shows up at the
+      next <code>sync()</code>.</p>
     </div>
 
     <!-- ---------- EPHEMERAL ---------- -->
@@ -1551,6 +1578,36 @@ doc.transaction((tx) => {
 // Seal a finished drag: commit the settled position ONCE at gesture end.
 doc.transaction((tx) => {
   for (const e of moved) tx.edit(e).set(Position, world.read(e, Position));
+});
+</script>
+
+<script type="text/plain" data-code="undo.ts">import { useResource } from "@vibecook/strata-ecs/react";
+import { DurableUndoStatus } from "@vibecook/strata-ecs/durable";
+
+// Cmd/Ctrl+Z undoes YOUR last transaction; add Shift to redo. Safe on an empty stack.
+// e.code, not e.key: with Shift held, e.key is "Z" — a lowercase compare would never see the redo chord.
+window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.code === "KeyZ") {
+    e.preventDefault();
+    e.shiftKey ? doc.redo() : doc.undo();
+  }
+});
+
+// A toolbar button — reactive enablement, zero re-renders while the stack is idle.
+function UndoButton() {
+  const status = useResource(world, DurableUndoStatus);
+  return <button disabled={!status?.canUndo} onClick={() => doc.undo()}>Undo</button>;
+}
+
+// Restore the selection along with the edit (metadata rides the undo/redo stacks).
+doc.setHistoryHooks({
+  capture: () => [...selectedKeys],                    // JSON-safe: the selected entity keys
+  restore: (keys) => setSelection(keys as EntityKey[]),
+});
+
+// Collapse a multi-step gesture into ONE undo step.
+doc.undoGroup(() => {
+  for (const e of aligned) doc.transaction((tx) => tx.edit(e).set(Position, snapped(e)));
 });
 </script>
 

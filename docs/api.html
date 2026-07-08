@@ -406,8 +406,10 @@
     <a href="#durable-createDurableStore" class="sub">createDurableStore</a>
     <a href="#durable-DurableStore" class="sub">DurableStore</a>
     <a href="#durable-transaction" class="sub">transaction</a>
+    <a href="#durable-history" class="sub">undo / redo</a>
     <a href="#durable-attachDurable" class="sub">attachDurable</a>
     <a href="#durable-status" class="sub">SyncStatus</a>
+    <a href="#durable-undo-status" class="sub">UndoStatus</a>
   </div>
   <div class="nav-group g-ephem">
     <span class="lbl">ephemeral</span>
@@ -438,7 +440,7 @@
     </p>
     <div class="chips">
       <span class="chip"><b>v0</b> · pre-release</span>
-      <span class="chip">94 exports</span>
+      <span class="chip">99 exports</span>
       <span class="chip pre"><b>import</b> "@vibecook/strata-ecs"</span>
     </div>
     <nav class="switch" aria-label="Modules">
@@ -524,17 +526,20 @@
       </tbody>
     </table></div>
 
-    <h3 class="grp"><code>@vibecook/strata-ecs/durable</code> — 9 exports</h3>
+    <h3 class="grp"><code>@vibecook/strata-ecs/durable</code> — 14 exports</h3>
     <div class="tbl"><table>
       <thead><tr><th>Export</th><th>Kind</th><th>Role</th></tr></thead>
       <tbody>
         <tr><td class="band b-durable"><a href="#durable-createDurableStore"><code>createDurableStore</code></a></td><td class="k">fn</td><td>The one place a <code>LoroDoc</code> enters the durable layer.</td></tr>
+        <tr><td class="band b-durable"><a href="#durable-createDurableStore"><code>DurableStoreOptions</code></a></td><td class="k">type</td><td>Store options — the undo-stack depth cap.</td></tr>
         <tr><td class="band b-durable"><a href="#durable-DurableStore"><code>DurableStore</code></a></td><td class="k">class</td><td>The durable object — identity, reads, and the transport wires.</td></tr>
         <tr><td class="band b-durable"><a href="#durable-transaction"><code>Mutator</code> <code>TxEditor</code></a></td><td class="k">type</td><td>The <code>tx</code> mutation vocabulary inside a transaction.</td></tr>
+        <tr><td class="band b-durable"><a href="#durable-history"><code>undo</code> <code>redo</code> <code>undoGroup</code> · <code>HistoryHooks</code> <code>HistoryStack</code></a></td><td class="k">methods · type</td><td>Local-only undo/redo, grouping, and the selection-restore hooks.</td></tr>
         <tr><td class="band b-durable"><a href="#durable-attachDurable"><code>attachDurable</code></a></td><td class="k">fn</td><td>Project the document into a world; register the drain.</td></tr>
         <tr><td class="band b-durable"><a href="#durable-attachDurable"><code>Attachment</code></a></td><td class="k">type</td><td>The detach handle attach returns.</td></tr>
         <tr><td class="band b-durable"><a href="#durable-PendingImportError"><code>PendingImportError</code></a></td><td class="k">class</td><td>Thrown when the doc quarantines on an out-of-order import.</td></tr>
         <tr><td class="band b-durable"><a href="#durable-status"><code>DurableSyncStatus</code> <code>DurableSyncStatusValue</code></a></td><td class="k">const · type</td><td>The runtime-local sync-status resource and its value shape.</td></tr>
+        <tr><td class="band b-durable"><a href="#durable-undo-status"><code>DurableUndoStatus</code> <code>DurableUndoStatusValue</code></a></td><td class="k">const · type</td><td>The runtime-local undo/redo availability resource and its value shape.</td></tr>
       </tbody>
     </table></div>
 
@@ -1098,14 +1103,15 @@
     </p>
 
     <article class="entry e-durable" id="durable-createDurableStore">
-      <h3><span class="k">function</span>createDurableStore<a class="anchor" href="#durable-createDurableStore">#</a></h3>
-      <figure class="code" data-file="durable-createDurableStore" data-kind="function"></figure>
+      <h3><span class="k">function · interface</span>createDurableStore · DurableStoreOptions<a class="anchor" href="#durable-createDurableStore">#</a></h3>
+      <figure class="code" data-file="durable-createDurableStore" data-kind="function · interface"></figure>
       <p>
         Wrap a caller-owned <code>LoroDoc</code> in a <a href="#durable-DurableStore"><code>DurableStore</code></a>
         — the one place a <code>LoroDoc</code> enters the durable layer. You own the doc's lifecycle
         (construction, loading bytes, transport); this constructs the adapter, seeds peer-prefixed key
         minting, and establishes the shared <code>docId</code>. Everything downstream speaks only framework
-        interfaces plus the store's methods.
+        interfaces plus the store's methods. The optional <code>DurableStoreOptions</code> caps undo depth
+        (<code>maxUndoSteps</code>, default 100 — see <a href="#durable-history">undo / redo</a>).
       </p>
       <ul class="notes">
         <li><span class="nl">Channel</span> The durable layer reserves the Loro commit-message channel on any doc it is attached to (it tags every commit to recover per-commit boundaries).</li>
@@ -1158,6 +1164,39 @@
       </ul>
     </article>
 
+    <article class="entry e-durable" id="durable-history">
+      <h3><span class="k">methods · interfaces</span>undo · redo · undoGroup · HistoryHooks<a class="anchor" href="#durable-history">#</a></h3>
+      <figure class="code" data-file="durable-history" data-kind="methods · interfaces"></figure>
+      <p>
+        Undo and redo on the <a href="#durable-DurableStore"><code>DurableStore</code></a> — <strong>local
+        history only</strong>, the collaborative-undo consensus rule (Figma, Liveblocks, Google Docs): a
+        peer's ops are never on your stack, and yours never land on theirs. One <code>transaction</code> is
+        one undoable step; <code>undoGroup(fn)</code> collapses a gesture's several commits into one.
+        <code>undo</code> / <code>redo</code> return <code>false</code> on an empty stack (drive UI
+        disablement from <code>canUndo</code> / <code>canRedo</code>, or read
+        <a href="#durable-undo-status"><code>DurableUndoStatus</code></a> reactively). The redo stack clears
+        on a new <em>local</em> commit but survives a remote import. <code>setHistoryHooks</code> stores a
+        JSON-safe value (typically the selection) with each pushed step and hands it back on the matching
+        <code>undo</code> / <code>redo</code>.
+      </p>
+      <div class="rule r-durable">
+        <span class="tag">Rule — newest-wins</span>
+        <p>
+          An undo re-asserts the pre-op state as the <strong>newest</strong> ops, so it can overwrite a
+          collaborator's causally-newer change: undoing an edit clobbers a peer's later write to the same
+          component, and undoing a spawn removes the entity <em>including</em> components peers added after
+          it. Everyone still converges — undo is a real forward edit, not a rewind of history. Attached, the
+          reversal reaches the runtime at the next <code>world.sync()</code>.
+        </p>
+      </div>
+      <ul class="notes">
+        <li><span class="nl">Grouping</span> Groups do not nest; a throwing <code>fn</code> still closes the group. A remote import arriving mid-group ends it early (the committed steps stay undoable).</li>
+        <li><span class="nl d">Throws</span> <code>undo</code> / <code>redo</code> / <code>clearHistory</code> / <code>undoGroup</code> throw inside a <code>transaction</code> or a history hook; <code>undo</code> / <code>redo</code> also throw on a quarantined store (<code>clearHistory</code> stays allowed).</li>
+        <li><span class="nl">Hooks</span> A hook runs inside the history call and must touch app state only — any document re-entry (transaction / undo / redo / applyRemote) throws. A throwing hook is isolated; the step still lands, its metadata just <code>null</code>.</li>
+        <li><span class="nl">Detach</span> History lives on the store (its doc), not the attachment — the stacks survive detach and re-attach.</li>
+      </ul>
+    </article>
+
     <article class="entry e-durable" id="durable-attachDurable">
       <h3><span class="k">function · interface</span>attachDurable · Attachment<a class="anchor" href="#durable-attachDurable">#</a></h3>
       <figure class="code" data-file="durable-attachDurable" data-kind="function · interface"></figure>
@@ -1201,6 +1240,22 @@
       </p>
       <ul class="notes">
         <li><span class="nl">Idle-free</span> Every field is activity-driven and the binding skips the set when nothing changed, so an idle network produces zero re-renders even though <code>sync()</code> drains each frame.</li>
+      </ul>
+    </article>
+
+    <article class="entry e-durable" id="durable-undo-status">
+      <h3><span class="k">const · interface</span>DurableUndoStatus · DurableUndoStatusValue<a class="anchor" href="#durable-undo-status">#</a></h3>
+      <figure class="code" data-file="durable-undo-status" data-kind="const Resource · interface"></figure>
+      <p>
+        A framework-defined, <strong>runtime-local</strong> resource the binding publishes as the history
+        stacks change — never written to the document, never itself durable. Read it with
+        <code>useResource(world, DurableUndoStatus)</code> to drive toolbar enablement: <code>canUndo</code>
+        and <code>canRedo</code> mirror the store's <a href="#durable-history"><code>canUndo()</code></a> /
+        <code>canRedo()</code> so a button re-renders exactly when its enabled state flips. Present only while
+        attached — when detached, use the store's pull-based methods instead.
+      </p>
+      <ul class="notes">
+        <li><span class="nl">Idle-free</span> Set-on-change with producer-side diffing, so an idle stack produces zero re-renders even though a history-change signal fires on every commit.</li>
       </ul>
     </article>
   </section>
@@ -1545,12 +1600,21 @@ interface EntityDescription { label: string; color?: string; phase?: string | nu
 interface LifecycleRecorder { records(): readonly LifeRecord[]; nowMs(): number; clear(): void; dispose(): void }
 interface LifeRecord { id: Entity; bornTick; bornMs; diedTick; diedMs; label; color; phase }</script>
 
-<script type="text/plain" data-code="durable-createDurableStore">function createDurableStore(doc: LoroDoc): DurableStore;   // the ONE place a LoroDoc enters</script>
+<script type="text/plain" data-code="durable-createDurableStore">function createDurableStore(doc: LoroDoc, opts?: DurableStoreOptions): DurableStore;   // the ONE place a LoroDoc enters
+
+interface DurableStoreOptions {
+  maxUndoSteps?: number;   // undo-stack depth cap; oldest steps evict beyond it. Default 100.
+}</script>
 
 <script type="text/plain" data-code="durable-DurableStore">class DurableStore {
   readonly docId: string;                                  // shared by all collaborators
 
   transaction<R>(fn: (tx: Mutator) => R): R;               // the one upward boundary
+
+  undo(): boolean;   redo(): boolean;                      // LOCAL history only — your changes
+  canUndo(): boolean;   canRedo(): boolean;
+  undoGroup<T>(fn: () => T): T;                            // collapse a gesture into ONE step
+  setHistoryHooks(hooks: HistoryHooks | null): void;       // selection metadata riding the stacks
 
   keyOf(e: Entity): EntityKey | undefined;                 // handle → stable key (undefined pre-attach)
   resolve(key: EntityKey): Entity | undefined;             // key → current handle
@@ -1574,6 +1638,20 @@ interface Mutator {   // the tx vocabulary — same surface as world/ctx, sealed
 }
 interface TxEditor { set<S>(c: Component<S>, v: S): TxEditor }</script>
 
+<script type="text/plain" data-code="durable-history">// All methods on DurableStore. LOCAL history only — a peer's ops are never on your stacks.
+undo(): boolean;                          // your most recent step; false on an empty stack
+redo(): boolean;                          // re-apply; cleared by a new LOCAL commit, not by remote imports
+canUndo(): boolean;   canRedo(): boolean; // drive UI enablement (or read DurableUndoStatus reactively)
+undoGroup<T>(fn: () => T): T;             // collapse a gesture's several commits into ONE step
+clearHistory(): void;                     // empty both stacks; never reverts state
+setHistoryHooks(hooks: HistoryHooks | null): void;   // selection metadata riding the stacks
+
+type HistoryStack = "undo" | "redo";
+interface HistoryHooks {
+  capture?: (stack: HistoryStack) => unknown;              // JSON-safe value stored WITH each pushed step
+  restore?: (value: unknown, stack: HistoryStack) => void; // handed back when undo()/redo() pops it
+}</script>
+
 <script type="text/plain" data-code="durable-attachDurable">function attachDurable(world: World, store: DurableStore): Attachment;
 
 interface Attachment { detach(): void }   // idempotent — the four-step teardown</script>
@@ -1588,6 +1666,12 @@ interface Attachment { detach(): void }   // idempotent — the four-step teardo
   lastAppliedFrame: number; // advances ONLY when a drain applied >= 1 fact
 }>;
 interface DurableSyncStatusValue { pendingInbound: number; heldCells: number; lastAppliedFrame: number }</script>
+
+<script type="text/plain" data-code="durable-undo-status">const DurableUndoStatus: Resource<{
+  canUndo: boolean;   // whether undo() would do anything
+  canRedo: boolean;   // whether redo() would do anything
+}>;
+interface DurableUndoStatusValue { canUndo: boolean; canRedo: boolean }</script>
 
 <script type="text/plain" data-code="ephem-createEphemeralStore">function createEphemeralStore(source: EphemeralSource, opts: EphemeralStoreOptions): EphemeralStore;
 
