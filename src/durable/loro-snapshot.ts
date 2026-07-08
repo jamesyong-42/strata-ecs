@@ -414,9 +414,15 @@ export class LoroSnapshot implements CRDTSnapshot {
       if (capture) {
         this.inHistoryHook = true;
         try {
-          value = (capture(isUndo ? "undo" : "redo") ?? null) as Value;
+          const raw = capture(isUndo ? "undo" : "redo");
+          // Enforce the documented JSON-safe contract AT the boundary: a value loro can't encode
+          // (BigInt, circular, a function) must fail HERE, isolated like a throwing hook — not inside
+          // the wasm call that is mid-push. The round-trip also normalizes exotic objects to exactly
+          // what a restore hook would get back after the wire.
+          value = raw === undefined || raw === null ? null : (JSON.parse(JSON.stringify(raw)) as Value);
         } catch (err) {
-          console.error("strata: history capture hook threw — storing null for this step.", err);
+          console.error("strata: history capture hook threw or returned a non-JSON value — storing null for this step.", err);
+          value = null;
         } finally {
           this.inHistoryHook = false;
         }

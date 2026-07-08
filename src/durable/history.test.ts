@@ -19,7 +19,7 @@
 
 import { describe, expect, it } from "vitest";
 import { LoroDoc } from "loro-crdt";
-import { createWorld, defineComponent, entityKey } from "../core";
+import { createWorld, defineComponent, defineRelation, defineResource, defineTag, entityKey } from "../core";
 import { attachDurable } from "./binding";
 import { createDurableStore } from "./durable-store";
 import { PendingImportError } from "./loro-snapshot";
@@ -27,6 +27,9 @@ import { DurableUndoStatus } from "./undo-status";
 
 const HPos = defineComponent("HISTPos", { x: "f32", y: "f32" });
 const HFill = defineComponent("HISTFill", { v: "f32" });
+const HSel = defineTag("HISTSel");
+const HLink = defineRelation("HISTLink", { arity: "one" });
+const HClock = defineResource("HISTClock", { t: "u32" });
 
 const K = (s: string) => entityKey(s);
 
@@ -81,6 +84,30 @@ describe("stack mechanics (rules 3 & 4)", () => {
     expect(s.snapshot.hasEntity(K("1-0"))).toBe(true);
     expect(s.snapshot.getComponent(K("1-0"), HPos)).toEqual({ x: 1, y: 2 });
     expect(s.canRedo()).toBe(false);
+  });
+
+  it("undo/redo cover the full op vocabulary — tags, relations, and resources revert like components", () => {
+    const s = makeStore(1);
+    s.snapshot.commit(() => {
+      s.snapshot.spawn(K("1-0"));
+      s.snapshot.spawn(K("1-1"));
+    });
+    s.snapshot.commit(() => {
+      s.snapshot.addTag(K("1-0"), HSel);
+      s.snapshot.setRelation(K("1-0"), HLink, K("1-1"));
+      s.snapshot.setResource(HClock, { t: 42 });
+    });
+
+    expect(s.undo()).toBe(true); // reverts the tag + relation + resource, not the spawns
+    expect(s.snapshot.hasTag(K("1-0"), HSel)).toBe(false);
+    expect(s.snapshot.getRelationOne(K("1-0"), HLink)).toBeUndefined();
+    expect(s.snapshot.getResource(HClock)).toBeUndefined();
+    expect(s.snapshot.hasEntity(K("1-0"))).toBe(true);
+
+    expect(s.redo()).toBe(true);
+    expect(s.snapshot.hasTag(K("1-0"), HSel)).toBe(true);
+    expect(s.snapshot.getRelationOne(K("1-0"), HLink)).toBe(K("1-1"));
+    expect(s.snapshot.getResource(HClock)).toEqual({ t: 42 });
   });
 
   it("a new local commit clears the redo stack (rule 3)", () => {
@@ -302,6 +329,22 @@ describe("selection metadata hooks (rule 5)", () => {
     s.snapshot.commit(() => s.snapshot.spawn(K("1-0")));
     s.undo();
     expect(String(seen)).toMatch(/history hook/);
+  });
+
+  it("a capture hook returning a non-JSON value is isolated — the step lands with null metadata", () => {
+    const s = makeStore(1);
+    let restored: unknown = "sentinel";
+    s.setHistoryHooks({
+      capture: () => 10n, // BigInt: JSON.stringify throws — must never reach the wasm push
+      restore: (value) => {
+        restored = value;
+      },
+    });
+    s.snapshot.commit(() => s.snapshot.spawn(K("1-0")));
+    expect(s.canUndo()).toBe(true);
+    expect(s.undo()).toBe(true);
+    expect(s.snapshot.hasEntity(K("1-0"))).toBe(false);
+    expect(restored).toBeUndefined(); // stored null → handed back as undefined
   });
 
   it("a throwing capture hook is isolated — the commit and the step both land", () => {
