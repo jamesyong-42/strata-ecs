@@ -23,7 +23,11 @@
 // The store + its constructor. `DurableStore` is TYPE-ONLY (the constructor is not public API — you get
 // one from createDurableStore); DurableBijection / the LoroSnapshot it holds stay unexported.
 export { createDurableStore } from "./durable-store";
-export type { DurableStore } from "./durable-store";
+export type { DurableStore, DurableStoreOptions } from "./durable-store";
+
+// History (plan-undo): undo/redo/canUndo/canRedo/undoGroup/clearHistory/setHistoryHooks live ON
+// `DurableStore`; these are their companion types. Local-ops-only, one transaction = one undo step.
+export type { HistoryHooks, HistoryStack } from "./loro-snapshot";
 
 // Attach / detach (a package-level function, not `world.attachDurable` — the core names no durable type).
 export { attachDurable } from "./binding";
@@ -38,3 +42,7 @@ export { PendingImportError } from "./loro-snapshot";
 // The runtime-local sync-status resource — `useResource(world, DurableSyncStatus)` (006 C7, §15.7).
 export { DurableSyncStatus } from "./sync-status";
 export type { DurableSyncStatusValue } from "./sync-status";
+
+// The runtime-local undo/redo availability resource — drives toolbar enablement reactively (plan-undo U2).
+export { DurableUndoStatus } from "./undo-status";
+export type { DurableUndoStatusValue } from "./undo-status";

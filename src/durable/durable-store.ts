@@ -55,8 +55,14 @@
 import type { LoroDoc } from "loro-crdt"; // the ONE loro import — parameter type ONLY (Loro stays in the adapter)
 import { type Component, type Entity, type EntityKey, entityKey } from "../core";
 import type { ChangeBatch, Unsubscribe } from "../substrate";
-import { LoroSnapshot, type OutboundCursor } from "./loro-snapshot";
+import { type HistoryHooks, LoroSnapshot, type OutboundCursor } from "./loro-snapshot";
 import { type Mutator, runTransaction, type TxRuntime } from "./transaction";
+
+/** Options for {@link createDurableStore} (plan-undo U1). */
+export interface DurableStoreOptions {
+  /** Undo-stack depth cap; oldest steps evict beyond it. Default 100. */
+  maxUndoSteps?: number;
+}
 
 /** The reserved "meta" slot holding the document GUID (§14.1). */
 const DOC_ID_KEY = "docId";
@@ -132,8 +138,8 @@ export class DurableStore {
   /** The doc version as of the last outbound send — the "from" of the next increment (decision B). */
   private lastSentVersion: OutboundCursor;
 
-  constructor(doc: LoroDoc) {
-    const snap = new LoroSnapshot(doc); // Loro quarantined behind CRDTSnapshot (§14.2)
+  constructor(doc: LoroDoc, opts?: DurableStoreOptions) {
+    const snap = new LoroSnapshot(doc, opts); // Loro quarantined behind CRDTSnapshot (§14.2)
     this.snapshot = snap;
 
     // Key minting: prefix from the doc's peer id; counter RESUMES past this peer's max existing key so a
@@ -224,6 +230,88 @@ export class DurableStore {
       return runTransaction(this.snapshot, this.txRuntime, fn);
     } finally {
       this.txOpen = false;
+    }
+  }
+
+  // --- history: undo/redo (plan-undo) ---------------------------------------------------------------
+
+  /**
+   * Undo this store's most recent undoable step — one `transaction` (or one {@link undoGroup}). LOCAL
+   * history only, the collaborative-undo consensus rule: a peer's ops are never on this stack. The
+   * revert self-commits and ships to peers like any local commit; attached, it reaches the runtime at
+   * the NEXT `world.sync()` (next frame under the frame contract). Returns whether a step was undone
+   * (`false` = empty stack, nothing happened — drive UI disablement from {@link canUndo} instead).
+   *
+   * SEMANTICS (loro-faithful, pinned in tests): undo re-asserts the pre-op state as the NEWEST ops. So
+   * undoing an edit overwrites a causally-newer remote overwrite of the same cell, and undoing a spawn
+   * despawns the entity — including components peers added after it. Not legal during `transaction`,
+   * inside history hooks, or on a quarantined store.
+   */
+  undo(): boolean {
+    this.assertNoOpenTx("undo()");
+    return this.snapshot.undo();
+  }
+
+  /** Re-apply the most recently undone step. The redo stack clears on any new local commit. */
+  redo(): boolean {
+    this.assertNoOpenTx("redo()");
+    return this.snapshot.redo();
+  }
+
+  /** Whether {@link undo} would do anything. Attached UIs can read `DurableUndoStatus` reactively. */
+  canUndo(): boolean {
+    return this.snapshot.canUndo();
+  }
+
+  /** Whether {@link redo} would do anything. */
+  canRedo(): boolean {
+    return this.snapshot.canRedo();
+  }
+
+  /**
+   * Group every `transaction` committed inside `fn` into ONE undo step (the gesture rule: a drag or a
+   * multi-part command should undo as one). Groups do not nest; a throwing `fn` still closes the group
+   * (whatever committed before the throw remains one step). NOTE: a remote import arriving mid-group
+   * ends the group early (loro behaviour) — the committed steps stay undoable, possibly as two steps.
+   */
+  undoGroup<T>(fn: () => T): T {
+    this.assertNoOpenTx("undoGroup()");
+    this.snapshot.beginUndoGroup();
+    try {
+      return fn();
+    } finally {
+      this.snapshot.endUndoGroup();
+    }
+  }
+
+  /** Empty both history stacks — e.g. around an app-level restore, so undo can't cross it. */
+  clearHistory(): void {
+    this.assertNoOpenTx("clearHistory()");
+    this.snapshot.clearHistory();
+  }
+
+  /**
+   * Install (or clear with `null`) the app-metadata hooks riding the undo stacks — the selection-restore
+   * side-channel (plan-undo U1): `capture` returns a JSON-safe value (e.g. the selected entity keys)
+   * stored with each pushed step; `restore` receives it back when `undo()`/`redo()` pops the step. Hooks
+   * run inside the history call and must only touch app state (document re-entry throws).
+   */
+  setHistoryHooks(hooks: HistoryHooks | null): void {
+    this.snapshot.setHistoryHooks(hooks);
+  }
+
+  /**
+   * @internal Subscribe to "the history stacks may have changed" — the binding drives the
+   * `DurableUndoStatus` resource from this (set-on-change, so an idle stack never re-renders).
+   */
+  onHistoryChange(fn: () => void): Unsubscribe {
+    return this.snapshot.onHistoryChange(fn);
+  }
+
+  /** History ops are illegal mid-transaction: the recorder's buffered ops aren't sealed yet (§12.2). */
+  private assertNoOpenTx(op: string): void {
+    if (this.txOpen) {
+      throw new Error(`strata: ${op} inside doc.transaction is not allowed — commit the transaction first (§12.2).`);
     }
   }
 
@@ -338,6 +426,6 @@ export class DurableStore {
  * this constructs the `LoroSnapshot`, seeds key minting, and establishes the docId. Everything downstream
  * speaks only Part II interfaces plus the store's methods.
  */
-export function createDurableStore(doc: LoroDoc): DurableStore {
-  return new DurableStore(doc);
+export function createDurableStore(doc: LoroDoc, opts?: DurableStoreOptions): DurableStore {
+  return new DurableStore(doc, opts);
 }

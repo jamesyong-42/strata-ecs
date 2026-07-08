@@ -102,6 +102,7 @@ import type { ChangeBatch, ChangeEvent, ComponentValue, EntityRecord, Snapshot, 
 import type { DurableBijection, DurableStore } from "./durable-store";
 import type { TxRuntime } from "./transaction";
 import { DurableSyncStatus, type DurableSyncStatusValue } from "./sync-status";
+import { DurableUndoStatus, type DurableUndoStatusValue } from "./undo-status";
 
 /**
  * The detach handle `attachDurable` returns (§12.4). NOT another `DurableTarget` — attaching never
@@ -307,6 +308,10 @@ class DurableBinding implements InboundSource {
   private lastAppliedFrame = 0;
   /** The last {@link DurableSyncStatus} value published — the producer-side set-on-change memo (006 C7). */
   private lastSyncStatus: DurableSyncStatusValue | null = null;
+  /** The last {@link DurableUndoStatus} value published — same set-on-change memo (plan-undo U2). */
+  private lastUndoStatus: DurableUndoStatusValue | null = null;
+  /** Unsubscribe from the store's history-change signal; installed at attach, called at teardown. */
+  private historyUnsub: Unsubscribe | null = null;
 
   constructor(
     private readonly world: World,
@@ -465,6 +470,29 @@ class DurableBinding implements InboundSource {
   wireSyncStatus(): void {
     this.store.setInboundListener(() => this.publishSyncStatus());
     this.publishSyncStatus();
+    // Undo status rides the store's history-change notification (any local seal, import, clear —
+    // plan-undo U2). Same producer-side set-on-change discipline; unsubscribed at teardown.
+    this.historyUnsub = this.store.onHistoryChange(() => this.publishUndoStatus());
+    this.publishUndoStatus();
+  }
+
+  /**
+   * Publish {@link DurableUndoStatus} with producer-side set-on-change (plan-undo U2): the store's
+   * history-change signal fires on EVERY commit, but the resource is only set when a button's enabled
+   * state actually flips — so steady-state editing (canUndo stays true) never re-renders a toolbar.
+   */
+  private publishUndoStatus(): void {
+    if (this.detached) return; // a late notification after teardown must not resurrect the resource
+    const next: DurableUndoStatusValue = {
+      canUndo: this.store.canUndo(),
+      canRedo: this.store.canRedo(),
+    };
+    const prev = this.lastUndoStatus;
+    if (prev !== null && prev.canUndo === next.canUndo && prev.canRedo === next.canRedo) {
+      return;
+    }
+    this.lastUndoStatus = next;
+    this.world.setResource(DurableUndoStatus, next); // runtime-local — never written to the doc
   }
 
   /**
@@ -981,7 +1009,10 @@ class DurableBinding implements InboundSource {
     this.store.setBijection(null); // handle-addressed reads return undefined between attachments (§14.3)
     this.store.setTxRuntime(null); // doc.transaction throws again once detached (no projector to mint)
     this.store.setInboundListener(null); // stop republishing sync status on remote enqueue (006 C7)
+    this.historyUnsub?.(); // stop republishing undo status (plan-undo U2)
+    this.historyUnsub = null;
     this.world.removeResource(DurableSyncStatus); // runtime-local status is gone once detached (useResource → undefined)
+    this.world.removeResource(DurableUndoStatus); // ditto — detached UIs fall back to store.canUndo()/canRedo()
     ATTACHED.delete(this.store); // mark re-attachable
   }
 

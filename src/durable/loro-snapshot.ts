@@ -177,7 +177,7 @@
  * loud placeholder until M5.
  */
 
-import { LoroDoc, LoroMap, UndoManager, isContainer } from "loro-crdt";
+import { LoroDoc, LoroMap, UndoManager, type Value, isContainer } from "loro-crdt";
 import type { ContainerID, Diff, JsonChange, OpId, VersionVector } from "loro-crdt";
 import { devWarn } from "../core/dev";
 import { type EntityKey, entityKey } from "../core/field";
@@ -285,6 +285,28 @@ export class PendingImportError extends Error {
  */
 export type OutboundCursor = VersionVector;
 
+/** Which history stack an event concerns: `"undo"` (the undo stack) or `"redo"` (plan-undo U1). */
+export type HistoryStack = "undo" | "redo";
+
+/**
+ * App-metadata hooks riding the undo stacks (plan-undo U1; the Yjs `stackItem.meta` / loro
+ * `onPush`/`onPop` pattern). `capture` runs when a step is PUSHED (stack `"undo"` = an ordinary
+ * transaction commit; `"redo"` = during an undo) and returns a JSON-safe value stored WITH the step —
+ * typically the current selection as entity keys. `restore` runs when a step is POPPED by
+ * `undo()`/`redo()` and receives that stored value back. Hooks run inside the loro call: they must
+ * only touch app state — any document re-entry (transaction/undo/redo/applyRemote) throws.
+ */
+export interface HistoryHooks {
+  capture?: (stack: HistoryStack) => unknown;
+  restore?: (value: unknown, stack: HistoryStack) => void;
+}
+
+/** Adapter construction options (plan-undo U1) — surfaced publicly on `createDurableStore`. */
+export interface LoroSnapshotOptions {
+  /** Undo-stack depth cap; oldest steps evict beyond it. Default 100 (loro's default). */
+  maxUndoSteps?: number;
+}
+
 /**
  * `LoroSnapshot` — a `CRDTSnapshot` over one `LoroDoc`.
  *
@@ -310,6 +332,18 @@ export class LoroSnapshot implements CRDTSnapshot {
   private readonly entitiesRootId: string;
   private readonly resourcesRootId: string;
   private readonly undoManager: UndoManager;
+  /** App metadata hooks riding the undo stack (plan-undo U1): capture on push, restore on pop. */
+  private historyHooks: HistoryHooks | null = null;
+  /** Notified whenever the undo/redo stacks may have changed (any local seal, import, clear). */
+  private readonly historyListeners = new Set<() => void>();
+  /** True while an explicit undo group is open (`beginUndoGroup`…`endUndoGroup`; no nesting). */
+  private grouping = false;
+  /**
+   * True while a history hook (capture/restore) runs. The hooks are invoked by loro FROM INSIDE the
+   * wasm undo/commit call, so re-entering the doc from one is undefined behaviour — every entry point
+   * this adapter owns throws while set. Hooks touch APP state (selection), never the document.
+   */
+  private inHistoryHook = false;
 
   /** Subscribers to sealed batches (local commits AND remote imports). We manage this list ourselves. */
   private readonly listeners = new Set<(batch: ChangeBatch) => void>();
@@ -344,7 +378,7 @@ export class LoroSnapshot implements CRDTSnapshot {
    */
   private readonly warnedNames = new Set<string>();
 
-  constructor(doc: LoroDoc) {
+  constructor(doc: LoroDoc, opts?: LoroSnapshotOptions) {
     this.doc = doc;
     this.entitiesMap = doc.getMap("entities");
     this.resourcesMap = doc.getMap("resources");
@@ -364,7 +398,42 @@ export class LoroSnapshot implements CRDTSnapshot {
     // the undo stack — a user's undo must never roll back the document id.
     this.undoManager = new UndoManager(doc, {
       mergeInterval: 0,
+      // Explicit loro default — the public knob is createDurableStore's `maxUndoSteps` (plan-undo U1).
+      maxUndoSteps: opts?.maxUndoSteps ?? 100,
       excludeOriginPrefixes: [META_ORIGIN],
+    });
+    // History-hook multiplex (plan-undo U1): loro's onPush/onPop are SINGLE-SLOT setters, so the adapter
+    // owns both once and fans out. onPush captures the app's metadata for the step being pushed
+    // (isUndo=true → the undo stack, i.e. an ordinary commit; false → the redo stack, i.e. during
+    // undo()); onPop hands the stored value back when a step is applied. Both callbacks run INSIDE the
+    // wasm call, so they are exception-isolated here (a throwing app hook must never unwind loro) and
+    // `inHistoryHook` makes doc re-entry from a hook throw at every entry point this adapter owns.
+    this.undoManager.setOnPush((isUndo) => {
+      let value: Value = null;
+      const capture = this.historyHooks?.capture;
+      if (capture) {
+        this.inHistoryHook = true;
+        try {
+          value = (capture(isUndo ? "undo" : "redo") ?? null) as Value;
+        } catch (err) {
+          console.error("strata: history capture hook threw — storing null for this step.", err);
+        } finally {
+          this.inHistoryHook = false;
+        }
+      }
+      return { value, cursors: [] };
+    });
+    this.undoManager.setOnPop((isUndo, item) => {
+      const restore = this.historyHooks?.restore;
+      if (restore === undefined) return;
+      this.inHistoryHook = true;
+      try {
+        restore(item.value ?? undefined, isUndo ? "undo" : "redo");
+      } catch (err) {
+        console.error("strata: history restore hook threw — step applied, metadata ignored.", err);
+      } finally {
+        this.inHistoryHook = false;
+      }
     });
   }
 
@@ -640,6 +709,7 @@ export class LoroSnapshot implements CRDTSnapshot {
    * surfaces whatever reached the doc.
    */
   commit(body: () => void): void {
+    if (this.inHistoryHook) throw new Error("strata: commit() inside a history hook (capture/restore) is not allowed.");
     if (this.committing) throw new Error("strata: nested commit() is not allowed.");
     this.committing = true;
     try {
@@ -672,6 +742,7 @@ export class LoroSnapshot implements CRDTSnapshot {
    * commitId must NOT be used for completeness accounting.
    */
   applyRemote(bytes: Uint8Array): ChangeBatch[] {
+    if (this.inHistoryHook) throw new Error("strata: applyRemote() inside a history hook (capture/restore) is not allowed.");
     if (this.committing) throw new Error("strata: applyRemote() during commit() is not allowed.");
     if (this.quarantined) throw new PendingImportError();
     const beforeVV = this.doc.version();
@@ -706,6 +777,9 @@ export class LoroSnapshot implements CRDTSnapshot {
     // (not re-emitting these remote ops as "local").
     this.sealedTo = this.doc.frontiers();
     for (const b of batches) this.emit(b);
+    // A remote import can move history state (it auto-ends an open group; future loro versions may
+    // invalidate redo) — recompute downstream. Cheap: the binding's publish is set-on-change.
+    this.notifyHistoryChange();
     return batches;
   }
 
@@ -761,16 +835,97 @@ export class LoroSnapshot implements CRDTSnapshot {
    * later components with it (both probe-pinned in the tests). The shipped M3 decision ACCEPTS that:
    * at this layer undo is faithful loro `UndoManager` behaviour.
    */
-  undo(): void {
-    if (this.committing) throw new Error("strata: undo() during commit() is not allowed.");
+  undo(): boolean {
+    this.assertHistoryOpLegal("undo()");
     this.doc.setNextCommitMessage(this.nextMsg());
-    if (this.undoManager.undo()) this.flushLocal();
+    const did = this.undoManager.undo();
+    if (did) this.flushLocal(); // flushLocal notifies history listeners; a false undo changed nothing
+    return did;
   }
 
-  redo(): void {
-    if (this.committing) throw new Error("strata: redo() during commit() is not allowed.");
+  redo(): boolean {
+    this.assertHistoryOpLegal("redo()");
     this.doc.setNextCommitMessage(this.nextMsg());
-    if (this.undoManager.redo()) this.flushLocal();
+    const did = this.undoManager.redo();
+    if (did) this.flushLocal();
+    return did;
+  }
+
+  // --- history surface (plan-undo U1) ---------------------------------------------------------------
+
+  canUndo(): boolean {
+    return this.undoManager.canUndo();
+  }
+
+  canRedo(): boolean {
+    return this.undoManager.canRedo();
+  }
+
+  /** Empty BOTH stacks (e.g. around an app-level restore, so "undo" can't cross it). */
+  clearHistory(): void {
+    this.assertHistoryOpLegal("clearHistory()", { allowQuarantined: true });
+    this.undoManager.clear();
+    this.notifyHistoryChange();
+  }
+
+  /**
+   * Open an explicit undo group: every commit until {@link endUndoGroup} collapses into ONE undo step
+   * (loro `groupStart`). No nesting. NOTE (loro d.ts): a remote import arriving mid-group auto-ends the
+   * group — `endUndoGroup` tolerates that.
+   */
+  beginUndoGroup(): void {
+    this.assertHistoryOpLegal("beginUndoGroup()");
+    if (this.grouping) throw new Error("strata: undo groups do not nest — endUndoGroup() first.");
+    this.grouping = true;
+    this.undoManager.groupStart();
+  }
+
+  endUndoGroup(): void {
+    if (!this.grouping) return; // idempotent — tolerates double-end and the remote auto-end
+    this.grouping = false;
+    try {
+      this.undoManager.groupEnd();
+    } catch {
+      // A remote import mid-group already ended it inside loro (documented auto-end); the group's
+      // commits are on the stack either way, so this is a benign race, not a failure.
+    }
+    this.notifyHistoryChange();
+  }
+
+  /** Install (or clear) the app-metadata hooks. One set per snapshot; the store is the public door. */
+  setHistoryHooks(hooks: HistoryHooks | null): void {
+    this.historyHooks = hooks;
+  }
+
+  /**
+   * Subscribe to "the stacks may have changed" (any local seal, remote import, clear, group end) — the
+   * binding drives the `DurableUndoStatus` resource from this. Fires AFTER the change; listeners read
+   * `canUndo()`/`canRedo()` fresh. Exception-isolated like every observer callback.
+   */
+  onHistoryChange(fn: () => void): Unsubscribe {
+    this.historyListeners.add(fn);
+    return () => {
+      this.historyListeners.delete(fn);
+    };
+  }
+
+  private notifyHistoryChange(): void {
+    for (const fn of [...this.historyListeners]) {
+      try {
+        fn();
+      } catch (err) {
+        console.error("strata: history-change listener threw (isolated).", err);
+      }
+    }
+  }
+
+  /** The shared legality gate for history operations (plan-undo U1 guards). */
+  private assertHistoryOpLegal(op: string, o?: { allowQuarantined?: boolean }): void {
+    if (this.inHistoryHook) {
+      throw new Error(`strata: ${op} inside a history hook (capture/restore) is not allowed.`);
+    }
+    if (this.committing) throw new Error(`strata: ${op} during commit() is not allowed.`);
+    if (this.quarantined && o?.allowQuarantined !== true) throw new PendingImportError();
   }
 
   // --- Part III M1 store-support surface (adapter-level; NOT on the frozen CRDTSnapshot) ------------
@@ -865,6 +1020,9 @@ export class LoroSnapshot implements CRDTSnapshot {
     this.sealedTo = after;
     const batch = this.translatePairs(this.doc.diff(before, after, false), "local", undefined);
     if (batch.events.length > 0) this.emit(batch);
+    // Every local seal moves history state (a commit pushes an undo step + clears redo; an undo/redo
+    // self-commit pops/pushes) — this ONE site covers them all (plan-undo U1).
+    this.notifyHistoryChange();
   }
 
   private emit(batch: ChangeBatch): void {
