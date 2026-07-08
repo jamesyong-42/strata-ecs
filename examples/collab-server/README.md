@@ -43,6 +43,38 @@ vendored upstream generator `src/certificate.js` — openssl's ECDSA PEM does no
 caches it to the gitignored `.wt-cert.json`, and prints the SHA-256 hash the browser pins with
 `serverCertificateHashes`. `pnpm start:wt` prints the exact `?collab=demo&wt=…&certHash=…` param.
 
+## Measured: what the second delivery class buys
+
+Both relays ran inside a `tc netem`-shaped Linux container (headless-Chrome peers on the host;
+2 reps per cell; the probe drives a cursor at the app's real 30 Hz presence cadence, so **33 ms
+between updates is the floor**). Two results, called straight in both directions:
+
+**Presence tail under loss** (2 peers, 1k-entity board, ~64 s steady window — remote-cursor
+inter-arrival):
+
+| link | WS p99 / max | WebTransport p99 / max |
+|---|---|---|
+| clean | **49 / 77 ms** | 54 / 91–153 ms |
+| 50 ms delay | 52–58 / 68 ms | 57–59 / 73 ms |
+| 25 ms delay + 1% loss | 88–99 / 175 ms | **58–61 / 83 ms** |
+| 25 ms delay + 3% loss | 101–107 / **341–348 ms** | **67–74 / 92–143 ms** |
+
+On a clean link WS is slightly *tighter* (QUIC datagram scheduling costs a few ms of tail). Under
+loss the picture inverts: TCP retransmits stall every queued frame behind the hole, so the WS max
+gap balloons to 10× the send cadence, while datagrams just drop the stale frame and carry the next.
+
+**Bootstrap contention** (3 peers, 10k-entity board = 1.84 MB snapshot, 20 mbit + 10 ms link): while
+a joiner pulls the snapshot, an unrelated observer's cursor feed stalls **1.9–3.4 s over WS** vs
+**~0.5 s over WebTransport** — the snapshot burst saturates the shared queue and the observer's TCP
+stream collapses into retransmission, where datagrams degrade to a few lost frames. (The joiner's
+own ~16 s freeze at 10k entities is the snapshot *import* CPU cost — identical on both transports,
+and a framework work item, not a transport one.)
+
+Also measured en route: a fixed hello window breaks bootstrap on slow links — at 20 mbit the
+1.84 MB snapshot answer takes ~750 ms and *loses the race* against an 800 ms hello timeout, forking
+the joiner. Production apps should scale their bootstrap window with expected snapshot size ÷
+bandwidth, or acknowledge the hello before shipping the snapshot.
+
 > **Demo only — do not expose publicly.** There is no authentication, no authorization, and no
 > rate limiting. The WS relay has no TLS; the WT relay's pinned-hash cert is a demo escape hatch
 > from a real PKI (short-lived certs, no CA), **not** a production posture. Anyone who can reach

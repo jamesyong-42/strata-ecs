@@ -41,6 +41,7 @@ import { remotePresence } from "../ecs/queries";
 import { presenceIdentity } from "./presence";
 import { wireCollab, type CollabWiring } from "./boot";
 import { createWebSocketChannel, resolveRelayUrl } from "./transport-ws";
+import { createWebTransportChannel, resolveWebTransportUrl } from "./transport-webtransport";
 
 // Match presence.ts's cadence exactly — the stall we measure is the app's real cadence, not a tuned one.
 const PRESENCE_THROTTLE_MS = 33; // ~30Hz outbound (design §15.5)
@@ -58,8 +59,21 @@ const params = new URLSearchParams(location.search);
 const role = params.get("role") === "joiner" ? "joiner" : "sender";
 const count = Math.max(1, Number(params.get("count") ?? 100_000) || 100_000);
 const wsOrigin = params.get("ws") ?? ""; // "" → ws://localhost:8787
+// &transport=wt (+ &certHash=<hex>, &wt=<origin>) runs the SAME probe over the WebTransport channel —
+// the WS-vs-WT benchmark drives both through this one instrument (plan-transport test matrix).
+const probeCertHash = params.get("certHash");
+const useWt = params.get("transport") === "wt" && probeCertHash !== null;
+const wtOrigin = params.get("wt") ?? "";
 const room = params.get("room") ?? "stall";
 const durMs = Number(params.get("dur") ?? (role === "joiner" ? 15_000 : 20_000)) || 15_000;
+// Matrix-B extras (2-peer matrix A ignores all three):
+//  &peerId=<id>   pin this peer's identity so another peer can watch its cursor deterministically.
+//  &watch=<id>    sample ONLY the cursor of the peer with this id (C watches A, ignoring B's cursor).
+//  &drive=0       LEECH mode: bootstrap the doc (pull the snapshot = the load) but spawn NO presence and
+//                 drive NO cursor — so this peer contributes only its bootstrap pull, no extra cursor.
+const fixedPeerId = params.get("peerId");
+const watchId = params.get("watch");
+const drive = params.get("drive") !== "0";
 
 const statusEl = document.getElementById("status");
 const setStatus = (m: string): void => {
@@ -111,11 +125,17 @@ doc.applyRemote = (bytes: Uint8Array): void => {
 // cursor never scans the board.
 attachDurable(probeWorld, doc);
 
-const peerId = crypto.randomUUID();
+const peerId = fixedPeerId ?? crypto.randomUUID();
 
 // --- the shared transport channel (the REAL WS relay client under test) ------------------------------
-const url = resolveRelayUrl(wsOrigin, room);
-const channel = createWebSocketChannel({ room, self: peerId, url });
+const channel = useWt
+  ? createWebTransportChannel({
+      room,
+      self: peerId,
+      url: resolveWebTransportUrl(wtOrigin, room),
+      certHashHex: probeCertHash!,
+    })
+  : createWebSocketChannel({ room, self: peerId, url: resolveRelayUrl(wsOrigin, room) });
 
 let helloAtMs = 0;
 let bootstrappedAtMs = 0;
@@ -136,19 +156,29 @@ const eph = createEphemeralStore(source, {
 });
 attachEphemeral(probeWorld, eph);
 const { name, color } = presenceIdentity(peerId);
-const me: Entity = eph.spawn({
-  components: [
-    [CursorPos, { x: CURSOR_RADIUS, y: 0 }],
-    [PresenceInfo, { name, color }],
-  ],
-});
+// LEECH (drive=0): no presence entity, so this peer never broadcasts a cursor — it only pulls the bootstrap
+// snapshot (matrix B's B peer). A driver (default) spawns its cursor and moves it in the frame loop.
+const me: Entity | null = drive
+  ? eph.spawn({
+      components: [
+        [CursorPos, { x: CURSOR_RADIUS, y: 0 }],
+        [PresenceInfo, { name, color }],
+      ],
+    })
+  : null;
 
 // --- bootstrap wiring: sender seeds the FULL board; joiner is a pure joiner (snapshot bootstrap) -------
+// &helloMs= overrides the hello window. MEASURED NECESSITY (matrix B): on a 20mbit-shaped link the
+// 1.84MB snapshot answer takes ~750ms+ — it LOSES the race against the app-default 800ms window, the
+// joiner forks an empty board, and the fork later quarantines. A real UX finding for constrained
+// links (fixed hello windows break bootstrap), and the reason benchmark joiners need a wider window.
+const helloMs = Number(params.get("helloMs") ?? 800) || 800;
+
 const wiring: CollabWiring = wireCollab({
   peerId,
   channel,
   doc,
-  helloTimeoutMs: 800,
+  helloTimeoutMs: helloMs,
   seedFirst: () => {
     if (role === "sender") doc.transaction((tx) => seedBoard(tx, count));
   },
@@ -169,11 +199,19 @@ void wiring;
 const samples: Sample[] = [];
 const OMEGA = (2 * Math.PI) / CURSOR_PERIOD_MS;
 
+// When &watch is set, sample ONLY the peer whose deterministic handle matches (matrix B: C watches A and
+// ignores B's cursor). Names come from presenceIdentity(peerId); with pinned ids the watched handle is
+// unambiguous. Unset (matrix A, 2 peers) → the single remote cursor, whichever it is.
+const watchName = watchId !== null ? presenceIdentity(watchId).name : null;
 const readRemote = (): { x: number; y: number } | undefined => {
   let pos: { x: number; y: number } | undefined;
   probeWorld.query(remotePresence).each((b) => {
     for (const r of b) {
       const e = b.entity(r);
+      if (watchName !== null) {
+        const info = probeWorld.get(e, PresenceInfo);
+        if (!info || info.name !== watchName) continue;
+      }
       const c = probeWorld.get(e, CursorPos);
       if (c) pos = { x: c.x, y: c.y };
     }
@@ -188,9 +226,12 @@ const frame = (): void => {
   if (finished) return;
   const t = nowRel();
 
-  // DRIVE my own cursor — the real presence write path (identical to presence.ts's reportCursor).
-  const angle = t * OMEGA;
-  eph.edit(me).set(CursorPos, { x: CURSOR_RADIUS * Math.cos(angle), y: CURSOR_RADIUS * Math.sin(angle) });
+  // DRIVE my own cursor — the real presence write path (identical to presence.ts's reportCursor). A leech
+  // (drive=0, me===null) skips this: it holds the connection open and pulls the bootstrap, nothing more.
+  if (me !== null) {
+    const angle = t * OMEGA;
+    eph.edit(me).set(CursorPos, { x: CURSOR_RADIUS * Math.cos(angle), y: CURSOR_RADIUS * Math.sin(angle) });
+  }
 
   // SAMPLE the remote cursor — project inbound ephemeral (and any pending durable board) first, then read
   // it. Time the sync: the joiner's bootstrap projection of the whole board lands in one sync() and blocks
@@ -250,8 +291,10 @@ function finish(): void {
   const joinAt = role === "joiner" ? bootstrappedAtMs : senderExportAtMs;
 
   // Steady state: intervals that START well after the join settled (join + 2s) — clean, no transfer.
+  // steadyRaw keeps arrival order (the raw inter-arrival series); steady is its sorted copy for percentiles.
   const steadyStart = (joinAt || 0) + 2000;
-  const steady = intervals.filter((iv) => iv.start >= steadyStart).map((iv) => iv.dur).sort((a, b) => a - b);
+  const steadyRaw = intervals.filter((iv) => iv.start >= steadyStart).map((iv) => iv.dur);
+  const steady = [...steadyRaw].sort((a, b) => a - b);
 
   // Max gap overall, and the max gap in the bootstrap window (the hypothesis's stall).
   let maxGap = { start: 0, end: 0, dur: 0 };
@@ -292,7 +335,12 @@ function finish(): void {
     updateCount: updateTimes.length,
     steadyMedianMs: round(percentile(steady, 50)),
     steadyP95Ms: round(percentile(steady, 95)),
+    steadyP99Ms: round(percentile(steady, 99)),
+    steadyMaxMs: round(steady.length ? steady[steady.length - 1] : 0),
     steadyCount: steady.length,
+    // The raw steady-window inter-arrival series (arrival order) so any percentile can be recomputed and
+    // the WS-under-loss spikes inspected directly (plan-transport matrix A). Cap at 4000 to bound the blob.
+    steadySeries: steadyRaw.slice(0, 4000).map(round),
     maxGapMs: round(maxGap.dur),
     maxGapAtMs: round(maxGap.end),
     maxGapDuringBootstrapMs: round(maxGapBoot.dur),
