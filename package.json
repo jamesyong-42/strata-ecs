@@ -79,7 +79,8 @@
     "onlyBuiltDependencies": [
       "esbuild",
       "@fails-components/webtransport-transport-http3-quiche",
-      "electron"
+      "electron",
+      "@vibecook/truffle"
     ]
   },
   "peerDependencies": {

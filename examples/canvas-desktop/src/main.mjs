@@ -6,19 +6,25 @@
  * preload.cjs as `window.strataDesktop`; boot.ts selects the IPC channel whenever that bridge exists
  * (transport-ipc.ts) — the same {@link Channel} seam BroadcastChannel/WS/WebTransport satisfy.
  *
- * P1 (this file): the windows of THIS instance relay over IPC, under the collab-server contract
- * (examples/collab-server/src/server.js): never decode a payload, hold NO document state, resolve NO
- * conflicts. The only envelope fields the switchboard reads are the ADDRESSING ones (`to`, `from`) —
- * the loro bytes stay opaque. P2 adds a truffle mesh node here, making instances on other machines
- * room members over the tailnet (QUIC durable/snapshot lanes + UDP presence; docs plan) — the
- * switchboard stays CRDT-blind either way.
+ * P1: the windows of THIS instance relay over IPC. P2 (mesh.mjs): other instances on the tailnet are
+ * room members too — truffle/tsnet discovery, QUIC durable/snapshot lanes, UDP presence. Both live
+ * under the collab-server contract (examples/collab-server/src/server.js): never decode a payload,
+ * hold NO document state, resolve NO conflicts. The only fields read are the ADDRESSING ones
+ * (`room`/`kind`/`from`/`to`) — the loro bytes stay opaque.
+ *
+ * Routing is ONE-HOP and loop-free by construction: local frames → local windows + mesh links;
+ * mesh frames → local windows only (never re-forwarded). `peerLoc` remembers which link a remote
+ * peerId lives behind so `to`-addressed frames (snapshots) transit exactly one link.
  *
  * Run: `pnpm example:canvas` (the UI dev server) in one terminal, then `pnpm example:desktop`.
  * Cmd/Ctrl+N opens another window in the same room — a second collaborator, no network involved.
+ * With a tailnet auth key in .env (TS_AUTHKEY), other machines running this app join the same rooms.
  */
-import { app, BrowserWindow, Menu, ipcMain } from "electron";
+import { app, BrowserWindow, Menu, ipcMain, shell } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
+import { loadDotEnv, startMesh } from "./mesh.mjs";
 
 /** The canvas-editor UI origin (its vite dev server); packaged loading is P3's problem. */
 const CANVAS_URL = process.env.CANVAS_URL ?? "http://localhost:5173";
@@ -27,8 +33,11 @@ const ROOM = process.env.STRATA_ROOM ?? "demo";
 /** Test knobs (the CDP smoke + P3 harness): open N windows at launch; run ?script=<…> in the FIRST. */
 const WINDOWS = Math.max(1, Number(process.env.STRATA_WINDOWS ?? "1") || 1);
 const FIRST_WINDOW_SCRIPT = process.env.STRATA_SCRIPT ?? null;
+/** How long a fresh instance waits for a mesh link before opening windows anyway (see meshHold). */
+const LINK_GRACE_MS = 8_000;
 
-const preloadPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "preload.cjs");
+const srcDir = path.dirname(fileURLToPath(import.meta.url));
+const preloadPath = path.join(srcDir, "preload.cjs");
 
 /**
  * The switchboard's whole memory: webContents.id → membership. Entries live exactly as long as the
@@ -36,37 +45,139 @@ const preloadPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "pre
  * @type {Map<number, { room: string, peerId: string, wc: Electron.WebContents }>}
  */
 const members = new Map();
+/**
+ * Where a peerId lives: `"local"` for this instance's windows, otherwise the deviceId of the mesh
+ * link it was last heard through — how a `to`-addressed snapshot transits exactly one link.
+ * @type {Map<string, string>}
+ */
+const peerLoc = new Map();
+/** The mesh surface (mesh.mjs), or null while starting / when running local-only. */
+let mesh = null;
+
+const count = (room) => [...members.values()].filter((m) => m.room === room).length;
+
+/** Deliver one envelope to local members of `room`, honoring `to`-addressing; never to `exceptWc`. */
+function deliverLocal(room, env, exceptWcId) {
+  for (const m of members.values()) {
+    if (m.wc.id === exceptWcId || m.room !== room) continue;
+    if (env.to !== undefined && env.to !== m.peerId) continue;
+    if (!m.wc.isDestroyed()) m.wc.send("collab:msg", env);
+  }
+}
 
 ipcMain.on("collab:join", (event, room, peerId) => {
   if (typeof room !== "string" || typeof peerId !== "string") return;
   members.set(event.sender.id, { room, peerId, wc: event.sender });
-  // The membership is live from this moment; `reconnect: false` — IPC has no drops in P1 (the mesh
-  // flap policy in P2 is what will ever send `collab:close` + reopen with `reconnect: true`).
+  peerLoc.set(peerId, "local");
   event.sender.send("collab:open", false);
   console.log(`[canvas-desktop] + join  room="${room}" peer=${peerId.slice(0, 8)} (${count(room)} in room)`);
 });
 
-ipcMain.on("collab:leave", (event) => {
-  const m = members.get(event.sender.id);
+const leave = (wcId, why) => {
+  const m = members.get(wcId);
   if (m === undefined) return;
-  members.delete(event.sender.id);
-  console.log(`[canvas-desktop] - leave room="${m.room}" (${count(m.room)} left)`);
-});
+  members.delete(wcId);
+  peerLoc.delete(m.peerId);
+  console.log(`[canvas-desktop] - leave room="${m.room}" (${why}; ${count(m.room)} left)`);
+};
+ipcMain.on("collab:leave", (event) => leave(event.sender.id, "left"));
 
 ipcMain.on("collab:post", (event, env) => {
   const m = members.get(event.sender.id);
-  if (m === undefined) return; // posted before join / after leave — nothing to route to
-  // The whole job (server.js contract): forward to every OTHER member of the room, honoring only the
-  // envelope's addressing. `env` itself is never validated beyond `to` — payloads are none of our business.
-  const to = env === null || typeof env !== "object" ? undefined : env.to;
-  for (const other of members.values()) {
-    if (other.wc.id === event.sender.id || other.room !== m.room) continue;
-    if (to !== undefined && to !== other.peerId) continue;
-    if (!other.wc.isDestroyed()) other.wc.send("collab:msg", env);
-  }
+  if (m === undefined || env === null || typeof env !== "object") return;
+  deliverLocal(m.room, env, event.sender.id);
+  if (mesh === null) return;
+  // Addressed to one of OUR windows → the mesh never needs to see it (a local snapshot answer).
+  if (env.to !== undefined && peerLoc.get(env.to) === "local") return;
+  const toLink = env.to !== undefined ? peerLoc.get(env.to) : undefined;
+  mesh.post(
+    { room: m.room, kind: env.kind, from: env.from, ...(env.to !== undefined ? { to: env.to } : {}) },
+    env.bytes,
+    toLink === "local" ? undefined : toLink,
+  );
 });
 
-const count = (room) => [...members.values()].filter((m) => m.room === room).length;
+/** Mesh inbound: remember where the sender lives, deliver locally, NEVER re-forward (one-hop). */
+function onMeshFrame(header, payload, fromLink) {
+  const { room, kind, from, to } = header;
+  if (typeof room !== "string" || typeof kind !== "string" || typeof from !== "string") return;
+  if (kind !== "durable" && kind !== "ephemeral" && kind !== "hello" && kind !== "snapshot") return;
+  if (peerLoc.get(from) !== "local") peerLoc.set(from, fromLink);
+  deliverLocal(room, { kind, from, to, bytes: payload }, -1);
+}
+
+/**
+ * The 006 §A4 flap policy: a link change may have dropped frames only the re-bootstrap can repair,
+ * so bounce every window's lifecycle (close → open(reconnect)) and let boot.ts re-run the full
+ * bidirectional bootstrap. Debounced — N links settling at once is ONE bounce, not N.
+ */
+let bounceTimer = null;
+function bounceWindows(why) {
+  if (bounceTimer !== null) clearTimeout(bounceTimer);
+  bounceTimer = setTimeout(() => {
+    bounceTimer = null;
+    console.log(`[canvas-desktop] bouncing ${members.size} window(s): ${why}`);
+    for (const m of members.values()) if (!m.wc.isDestroyed()) m.wc.send("collab:close");
+    setTimeout(() => {
+      for (const m of members.values()) if (!m.wc.isDestroyed()) m.wc.send("collab:open", true);
+    }, 100);
+  }, 300);
+}
+
+/** Resolvers waiting on the first link (meshHold). */
+const linkWaiters = new Set();
+
+async function startMeshBridge() {
+  const env = { ...loadDotEnv(path.join(srcDir, "..")), ...process.env };
+  const stateDir = process.env.STRATA_STATE_DIR ?? path.join(app.getPath("userData"), "tsnet");
+  try {
+    const api = await startMesh({
+      authKey: env.TS_AUTHKEY,
+      stateDir,
+      deviceName: process.env.STRATA_DEVICE_NAME ?? `${os.hostname()}-canvas`,
+      openUrl: (url) => void shell.openExternal(url),
+      log: (msg) => console.log(`[mesh] ${msg}`),
+      onFrame: onMeshFrame,
+      onLinkChange: (kind, peerId) => {
+        if (kind === "up") for (const w of linkWaiters) w();
+        if (kind === "down") for (const [p, loc] of peerLoc) if (loc === peerId) peerLoc.delete(p);
+        bounceWindows(`link ${kind} (${peerId.slice(0, 8)}…)`);
+      },
+    });
+    mesh = api;
+  } catch (err) {
+    console.warn(`[canvas-desktop] mesh disabled (local-only): ${err.message}`);
+  }
+}
+
+/**
+ * Hold the first window until the mesh has met its peers — a window that hellos BEFORE the link is
+ * up sees an empty room, seeds its own genesis, and quarantines against the instance it then meets
+ * (the split-seed race, mesh edition). Sequential starts resolve cleanly: no online peers → open
+ * immediately; peers exist → wait for the first link (or the grace cap, for ghost peers).
+ */
+async function meshHold(meshStart) {
+  const started = await Promise.race([meshStart, new Promise((r) => setTimeout(() => r("timeout"), 15_000))]);
+  if (started === "timeout") {
+    console.warn("[canvas-desktop] mesh still starting after 15s — opening local-only (links will bounce in)");
+    return;
+  }
+  if (mesh === null || mesh.linkCount() > 0) return;
+  const peers = (await mesh.onlinePeers()).length;
+  if (peers === 0) return; // nobody out there — we are the first instance; seed away
+  console.log(`[canvas-desktop] ${peers} instance(s) on the tailnet — waiting for a link (≤${LINK_GRACE_MS / 1000}s)…`);
+  await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      linkWaiters.delete(resolve);
+      resolve();
+    }, LINK_GRACE_MS);
+    linkWaiters.add(() => {
+      clearTimeout(timer);
+      linkWaiters.delete(resolve);
+      resolve();
+    });
+  });
+}
 
 /** Cascade offset per window so a multi-window launch never fully stacks (see throttling note). */
 let windowIndex = 0;
@@ -87,16 +198,7 @@ function createWindow(script = null) {
       backgroundThrottling: false,
     },
   });
-  // A destroyed webContents must leave the room even when the renderer never sent `collab:leave`
-  // (crash, hard close) — otherwise the switchboard forwards into a dead sink forever.
-  win.webContents.once("destroyed", () => {
-    const id = win.webContents.id;
-    const m = members.get(id);
-    if (m !== undefined) {
-      members.delete(id);
-      console.log(`[canvas-desktop] - leave room="${m.room}" (window destroyed; ${count(m.room)} left)`);
-    }
-  });
+  win.webContents.once("destroyed", () => leave(win.webContents.id, "window destroyed"));
   const url =
     `${CANVAS_URL}/?collab=${encodeURIComponent(ROOM)}` +
     (script !== null ? `&script=${encodeURIComponent(script)}` : "");
@@ -109,7 +211,9 @@ function createWindow(script = null) {
   return win;
 }
 
-app.whenReady().then(() => {
+const meshStart = app.whenReady().then(startMeshBridge);
+
+app.whenReady().then(async () => {
   // Minimal menu: the default roles plus the one desktop-specific verb — another window = another
   // collaborator in the room. (On the default menu Cmd+N does nothing; here it is the demo.)
   const template = [
@@ -126,6 +230,7 @@ app.whenReady().then(() => {
     { role: "windowMenu" },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  await meshHold(meshStart);
   createWindow(FIRST_WINDOW_SCRIPT);
   // STAGGERED, not simultaneous: two windows booting inside the same hello window (~800ms) both see
   // an empty room, both time out, and both SEED — two divergent geneses that quarantine each other on
@@ -140,4 +245,14 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+// The tsnet node is EPHEMERAL — stopping it removes this instance from the tailnet. Do it on the
+// way out (best-effort, capped: quit must not hang on a wedged sidecar).
+let meshStopped = false;
+app.on("will-quit", (event) => {
+  if (meshStopped || mesh === null) return;
+  event.preventDefault();
+  meshStopped = true;
+  void Promise.race([mesh.stop(), new Promise((r) => setTimeout(r, 3_000))]).finally(() => app.quit());
 });

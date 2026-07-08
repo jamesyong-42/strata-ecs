@@ -8,6 +8,9 @@
   "scripts": {
     "start": "electron ."
   },
+  "dependencies": {
+    "@vibecook/truffle": "0.5.0"
+  },
   "devDependencies": {
     "electron": "^43.1.0"
   }
