@@ -174,7 +174,8 @@ The world is the change detector. Three tiers, from coarse-and-cheap to precise:
 
 ```ts
 // did anything matching this query move? (may over-fire, never misses)
-world.reactive.observeQuery(renderable, [Position, Size, Fill], () => { repaint = true; });
+// the watched columns default to the query's own components; pass { cols } to narrow or widen
+world.reactive.observeQuery(renderable, () => { repaint = true; });
 
 // this exact value changed (equal-value writes are suppressed)
 world.reactive.observeValue(e, Position, (pos) => { /* { x, y } | undefined */ });

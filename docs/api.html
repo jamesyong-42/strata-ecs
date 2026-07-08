@@ -374,7 +374,7 @@
 
 <nav class="sidebar" id="sidebar">
   <a class="brand" href="#top"><b>strata<span class="dash">·</span>ecs</b></a>
-  <div class="ver">v0.1 · pre-release</div>
+  <div class="ver">v0.2 · pre-release</div>
   <a class="api-link" href="index.html">← Guide</a>
 
   <div class="nav-group g-core">
@@ -631,6 +631,7 @@
       </p>
       <ul class="notes">
         <li><span class="nl">Reactive</span> <code>setResource</code> replaces the value object wholesale, so a resource watch is equality-suppressed (<a href="#core-Reactive"><code>observeResource</code></a>, <a href="#react-useResource"><code>useResource</code></a>).</li>
+        <li><span class="nl">Update</span> <code>world.updateResource(res, fn)</code> is the read-modify-write in one call — <code>fn</code> receives the current value and returns the next. It throws if the resource was never set (there is nothing to update; call <code>setResource</code> first).</li>
       </ul>
     </article>
 
@@ -775,7 +776,7 @@
       </p>
       <ul class="notes">
         <li><span class="nl">Scope</span> <code>rows</code>, the columns, and <code>entity</code> are valid only inside the current <code>each</code> callback — chunk-scoped; never retain them past it (the row buffer may be reused for the next chunk).</li>
-        <li><span class="nl">Dense</span> The raw <code>denseCount</code> loop is valid only when <code>isDense</code>; <code>count</code> is the matched-row bound for every chunk.</li>
+        <li><span class="nl">Count</span> <code>count</code> is the matched-row loop bound for every chunk kind — walk <code>rows[0 .. count)</code>.</li>
       </ul>
     </article>
 
@@ -898,14 +899,15 @@
         <code>tick(pipeline)</code> runs systems — where <code>ctx.*</code> shape changes defer to the phase
         boundary. <code>sync()</code> drains any attached inbound layers (a no-op when none are attached).
         The frame contract is <code>sync() → tick(s) → reactive.notify() → render</code>. Reads
-        (<code>read</code>/<code>get</code>/<code>readField</code>/<code>has</code>/…) and the value surface
-        (<code>edit</code>, <code>setResource</code>, <code>removeResource</code>) are iteration-safe; the
-        structural surface is not.
+        (<code>read</code>/<code>get</code>/<code>readField</code>/<code>has</code>/<code>count</code>/<code>entities</code>/…)
+        and the value surface (<code>edit</code>, <code>setResource</code>, <code>updateResource</code>,
+        <code>removeResource</code>) are iteration-safe; the structural surface is not.
       </p>
       <ul class="notes">
         <li><span class="nl w">Throws</span> Every <strong>structural</strong> <code>world.*</code> method (spawn/destroy/add/remove component/tags/relations) throws while a query walk is in flight — in <strong>all</strong> builds. A mid-iteration archetype migration reorders the rows the walk is stepping over (memory corruption, not a style violation). Use a system's deferred <code>ctx.*</code> for shape changes during iteration.</li>
         <li><span class="nl w">Throws</span> <code>tick</code>, <code>sync</code>, <code>reset</code>, and <code>import({replace})</code> throw if called mid-iteration; <code>sync</code>/<code>reset</code> also require being outside a tick and outside an observer / reactive callback.</li>
-        <li><span class="nl">reactive</span> The <code>reactive</code> getter lazily creates and caches the layer; first access is what arms 001's dev-enforcement. A world that never touches it pays nothing (<a href="#core-Reactive"><code>Reactive</code></a>).</li>
+        <li><span class="nl">Queries</span> <code>count(q)</code> returns the matched-row total; <code>entities(q)</code> materializes the matching handles into a fresh array. Both are iteration-safe reads over the same query machinery — prefer <code>query(q).each</code> on the hot path, since <code>entities</code> allocates the array plus one handle per match. <code>updateResource(res, fn)</code> is the read-modify-write over a resource and throws if it was never set.</li>
+        <li><span class="nl">reactive</span> The <code>reactive</code> getter lazily creates and caches the layer; <strong>reading it is side-effect-free</strong> — stamping and dev-enforcement arm on the first <code>observe*</code> registration, not on property access, so a stray read never flips the profile. <code>isReactiveEnabled</code> probes whether that has happened. A world that never observes pays nothing (<a href="#core-Reactive"><code>Reactive</code></a>).</li>
         <li><span class="nl">Persist</span> <code>export()</code> returns readable UTF-8 JSON bytes; plain <code>import</code> needs an empty world; <code>import(bytes, { replace: true })</code> validates, then resets in place — keeping this <code>World</code> and every observer / reactive registration (<a href="index.html#persistence">Persistence</a>).</li>
         <li><span class="nl">Reset</span> After <code>reset()</code> / replace-import, every pre-reset handle reads dead, never aliased to a later entity; a single <code>onReset</code> fires, never per-entity <code>onDestroy</code>.</li>
         <li><span class="nl">spawn</span> The published <code>spawn</code> is generic: <code>spawn&lt;const T&gt;(init?: SpawnInitOf&lt;T&gt;)</code> infers each component's schema literal for per-field checking — condensed to <code>SpawnInit</code> above (<a href="#core-store">store seam</a>).</li>
@@ -921,10 +923,11 @@
         The reactive observer layer for one world, reached via <code>world.reactive</code>. It is a
         poll-at-boundary read surface over change-detection stamps the store already carries — nothing here
         touches the hot loop. Observers are compared against those stamps at a single settled point per
-        frame, <code>notify()</code>, which you call once after all ticks. Three tiers form a cost/precision
-        ladder — <code>observeQuery</code> (did anything matching move), <code>observeEntity</code> (this
-        entity's column stamped, fires even if equal), <code>observeValue</code> (this value actually
-        differs) — plus <code>observeResource</code> for singletons. <code>peek</code> / <code>peekResource</code>
+        frame, <code>notify()</code>, which you call once after all ticks. Two entity granularities form a
+        cost/precision ladder — <code>observeQuery</code> (did anything matching this query move) and
+        <code>observeValue</code> (this entity's value actually differs, equality-checked) — plus
+        <code>observeResource</code> for singletons. To watch one entity, watch its value, not a stamp:
+        <code>observeValue</code>. <code>peek</code> / <code>peekResource</code>
         read the current value without subscribing; <code>invalidate(C)</code> is the manual stamp for a
         write no chokepoint saw.
       </p>
@@ -932,7 +935,7 @@
         <li><span class="nl">Registration</span> Subscribing is a frame boundary: a change made in the same frame surfaces at the very next <code>notify()</code>; nothing stamped before you subscribed ever fires. No priming needed.</li>
         <li><span class="nl">Guarantee</span> <code>observeQuery</code> may over-fire but never misses; <code>observeValue</code> / <code>observeResource</code> are equality-suppressed. All zero-cost until the first observer registers.</li>
         <li><span class="nl">Lifetime</span> Per-world and mortal — it does not survive a <code>world.import()</code> swap; entity watches on a reset world fire <code>undefined</code> once and self-remove. Every <code>observe*</code> returns an idempotent <code>Unsubscribe</code>.</li>
-        <li><span class="nl">Callbacks</span> Fire under the observer-emit flag — a callback may schedule work but a structural mutation from inside one is dev-rejected.</li>
+        <li><span class="nl">Callbacks</span> A value write from inside a callback — <code>edit().set</code>, <code>setResource</code>, <code>removeResource</code> — is legal and deterministic: it lands at the <em>next</em> <code>notify()</code>, delivered exactly once. A <strong>structural</strong> mutation from inside one is still dev-rejected; schedule it for the next frame boundary.</li>
         <li><span class="nl">See</span> <a href="index.html#reactivity">Reactivity</a></li>
       </ul>
     </article>
@@ -1309,7 +1312,7 @@
         <li><span class="nl w">Throws</span> Structural methods (spawn/despawn/add/remove component/tags) throw mid query-iteration/tick in <strong>all</strong> builds; a value <code>edit().set</code> is exempt (legal in-system). All mutation is dev-rejected inside an observer / reactive emit.</li>
         <li><span class="nl w">Throws</span> Partition ownership is absolute — every mutator, <em>including</em> value writes, throws on an entity not in your live minted set. <code>addTag</code> / <code>removeTag</code> of <code>Local</code> throws (store-owned). A replicated component carrying <code>eid</code> fields dev-throws (use <code>key</code> fields).</li>
         <li><span class="nl">Guarantee</span> The TTL <code>timeout</code> is the guaranteed despawn on every receiver; <code>leave()</code> only shortens latency (a same-ms delete can lose to LWW).</li>
-        <li><span class="nl">Absent</span> No relations, no resources (design §15.6).</li>
+        <li><span class="nl">Absent</span> No relations, no resources.</li>
       </ul>
     </article>
 
@@ -1425,11 +1428,8 @@ function Related(rel: Relation, target?: Entity): RelTerm; // any edge, or a spe
 <script type="text/plain" data-code="core-Batch">interface Batch extends Iterable<number> {
   readonly count: number;        // matched rows (row filters applied) — the loop bound
   readonly rows: Int32Array;     // matched row indices, valid for rows[0 .. count)
-  readonly denseCount: number;   // raw archetype row count
-  readonly isDense: boolean;     // true only for a dense, unseeded, no-row-filter chunk
 
   col<S, Sch>(c: Component<S, Sch>): ColumnsOf<Sch>;     // typed columns, no cast
-  readonly columns: Record<string, Record<string, Column>>; // loose sugar
   entity(r: number): Entity;
   getRelated(r: number, rel: Relation): Entity | undefined;
   getAllRelated(r: number, rel: Relation): Entity[];
@@ -1492,7 +1492,8 @@ type Pipeline = readonly Phase[];   // positional — array order is run order</
 <script type="text/plain" data-code="core-World">class World {
   readonly name: string;
   get tickCount(): number;
-  get reactive(): Reactive;              // lazily created; first access arms dev-enforcement
+  get reactive(): Reactive;              // lazily created; reading it is side-effect-free (arms on first observe*)
+  get isReactiveEnabled(): boolean;      // has stamping armed yet?
 
   // structural — immediate outside a system; THROW mid query-iteration (all builds)
   spawn(init?: SpawnInit): Entity;       // real sig infers per-entry schema (SpawnInitOf<T>)
@@ -1504,6 +1505,7 @@ type Pipeline = readonly Phase[];   // positional — array order is run order</
   // value — immediate, iteration-safe
   edit(e: Entity): EntityEditor;
   setResource<S>(res: Resource<S>, value: S): void;   removeResource<S>(res: Resource<S>): void;
+  updateResource<S>(res: Resource<S>, fn: (v: S) => S): void;   // read-modify-write; throws if unset
 
   // reads
   read<S>(e, c: Component<S>): S;          get<S>(e, c: Component<S>): S | undefined;
@@ -1515,6 +1517,8 @@ type Pipeline = readonly Phase[];   // positional — array order is run order</
 
   // iteration, frame & telemetry
   query(q: Query): { each(fn: (batch: Batch) => void): void };
+  count(q: Query): number;               // matched-row total — iteration-safe read
+  entities(q: Query): Entity[];          // fresh array of matching handles — iteration-safe read
   tick(pipeline: Pipeline): void;
   sync(): void;                          // drain inbound layers (no-op when none attached)
   observe(obs: WorldObserver): () => void;
@@ -1530,9 +1534,8 @@ type Pipeline = readonly Phase[];   // positional — array order is run order</
 }</script>
 
 <script type="text/plain" data-code="core-Reactive">class Reactive {
-  // three tiers — a cost/precision ladder, plus a resource channel
-  observeQuery(q: Query, cols: readonly Component[], cb: () => void): Unsubscribe;
-  observeEntity<S>(e: Entity, c: Component<S>, cb: (v: S | undefined) => void): Unsubscribe;
+  // an entity cost/precision ladder (query → value), plus a resource channel
+  observeQuery(q: Query, cb: () => void, opts?: { cols?: readonly Component[]; immediate?: boolean }): Unsubscribe;
   observeValue<S>(e, c: Component<S>, cb: (v: S | undefined) => void, eq?: (a: S, b: S) => boolean): Unsubscribe;
   observeResource<S>(r: Resource<S>, cb: (v: S | undefined) => void, eq?: (a: S, b: S) => boolean): Unsubscribe;
 

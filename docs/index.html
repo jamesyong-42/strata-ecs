@@ -378,7 +378,7 @@
 
 <nav class="sidebar" id="sidebar">
   <a class="brand" href="#top"><b>strata<span class="dash">·</span>ecs</b></a>
-  <div class="ver">v0.1 · pre-release</div>
+  <div class="ver">v0.2 · pre-release</div>
   <a class="api-link" href="api.html">API reference →</a>
 
   <div class="nav-group g-start">
@@ -1504,9 +1504,8 @@ requestAnimationFrame(frame);
 <script type="text/plain" data-code="reactivity.ts">// Tier 1 — a query watch drives a repaint. May over-fire, never misses.
 const stop = world.reactive.observeQuery(
   defineQuery([Position, Size, Fill]),
-  [Position, Size, Fill],     // the columns to watch
   () => { repaint = true; },  // fires at the next notify() after a matching change
-);
+);                            // watched columns default to the query's own; { immediate: true } seeds a first paint
 
 // Tier 3 — an exact per-entity value; equal-value writes are suppressed.
 world.reactive.observeValue(e, Position, (pos) => { /* pos: { x, y } | undefined */ });
