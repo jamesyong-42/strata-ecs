@@ -49,7 +49,7 @@ export class EntityTable {
     // pack() silently masks/aliases (§2), so reject it up front.
     if (initialCapacity > MAX_SLOTS) {
       throw new Error(
-        `strata: initial entity capacity ${initialCapacity} exceeds the maximum of ${MAX_SLOTS} live entities for the 20/12 handle split (§2).`,
+        `strata: initial entity capacity ${initialCapacity} exceeds the maximum of ${MAX_SLOTS} live entities for the 20/12 handle split.`,
       );
     }
     this.capacity = Math.max(1, initialCapacity);
@@ -129,7 +129,7 @@ export class EntityTable {
     if (next > MAX_GENERATION) {
       next = 1;
       devWarn(
-        `entity slot ${slot} exhausted its ${MAX_GENERATION} generations and wrapped — a stale handle to this slot can now read as alive (ABA). Defined but lossy under the 20/12 handle split (§2).`,
+        `entity slot ${slot} exhausted its ${MAX_GENERATION} generations and wrapped — a stale handle to this slot can now read as alive (ABA). Defined but lossy under the 20/12 handle split.`,
       );
     }
     this.generations[slot] = next;
@@ -205,7 +205,7 @@ export class EntityTable {
   private grow(min: number): void {
     if (min > MAX_SLOTS) {
       throw new Error(
-        `strata: entity slot capacity exceeded — a document may hold at most ${MAX_SLOTS} live entities with the current 20/12 handle split (§2).`,
+        `strata: entity slot capacity exceeded — a document may hold at most ${MAX_SLOTS} live entities with the current 20/12 handle split.`,
       );
     }
     let cap = this.capacity;

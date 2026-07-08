@@ -14,6 +14,7 @@ const Trigger = defineTag("Trigger");
 const Targets = defineRelation("Targets", { arity: "many" });
 const ChildOf = defineRelation("ChildOf", { arity: "one" });
 const Config = defineResource("Config", { enabled: "bool" });
+const Score = defineResource("WorldScore", { value: "u32" });
 
 function count(w: World, q: Query): number {
   let n = 0;
@@ -284,23 +285,82 @@ describe("conformance-audit fixes", () => {
     expect(() => w.tick([phase("y", [])])).not.toThrow();
   });
 
-  it("exposes readField for an eid field and batch.columns", () => {
+  it("exposes readField for an eid field and the raw column via col()", () => {
     const w = createWorld();
     const target = w.spawn({ components: [[Position, { x: 1, y: 1 }]] });
     w.spawn({ components: [[Link, { target }]] });
     let viaReadField: Entity | undefined;
-    let viaColumns = -1;
+    let viaCol = -1;
     const S = defineSystem(defineQuery([Link]), (batch, ctx) => {
-      const linkTarget = batch.columns.Link.target as Uint32Array; // name-keyed convenience
+      const linkTarget = batch.col(Link).target as Uint32Array; // typed raw column, keyed by field name
       for (const r of batch) {
-        viaColumns = linkTarget[r];
+        viaCol = linkTarget[r];
         viaReadField = ctx.readField(batch.entity(r), Link, "target"); // eid decoded by name
       }
     });
     w.tick([phase("read", [S])]);
     expect(viaReadField).toBe(target); // ctx.readField decoded the eid field
-    expect(viaColumns).toBe(target); // batch.columns exposed the raw column
+    expect(viaCol).toBe(target); // col() exposed the raw column
     expect(w.readField(w.firstOf(defineQuery([Link])) as Entity, Link, "target")).toBe(target); // World.readField too
+  });
+});
+
+describe("world.count / world.entities (editor affordances)", () => {
+  const posQ = defineQuery([Position]);
+
+  it("count sums matched rows across archetypes and tracks structural changes", () => {
+    const w = createWorld();
+    w.spawn({ components: [[Position, { x: 0, y: 0 }]] }); // [Position]
+    w.spawn({ components: [[Position, { x: 1, y: 1 }], [Velocity, { x: 0, y: 0 }]] }); // [Position, Velocity]
+    const c = w.spawn({ components: [[Velocity, { x: 0, y: 0 }]] }); // no Position — excluded
+    expect(w.count(posQ)).toBe(2); // both Position archetypes counted; the Velocity-only one skipped
+
+    w.addComponent(c, Position, { x: 2, y: 2 }); // c migrates into a matching archetype
+    expect(w.count(posQ)).toBe(3);
+
+    w.destroy(c);
+    expect(w.count(posQ)).toBe(2);
+  });
+
+  it("entities materializes the matching handles across archetypes", () => {
+    const w = createWorld();
+    const a = w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+    const b = w.spawn({ components: [[Position, { x: 1, y: 1 }], [Velocity, { x: 0, y: 0 }]] });
+    w.spawn({ components: [[Velocity, { x: 0, y: 0 }]] }); // no Position
+    expect(new Set(w.entities(posQ))).toEqual(new Set([a, b]));
+    expect(w.entities(posQ)).toHaveLength(2);
+  });
+
+  it("count and entities agree on an empty match", () => {
+    const w = createWorld();
+    const q = defineQuery([Position, Not(Position)]); // contradiction — matches nothing
+    expect(w.count(q)).toBe(0);
+    expect(w.entities(q)).toEqual([]);
+  });
+});
+
+describe("world.updateResource (editor affordance)", () => {
+  it("reads the current value, applies fn, and writes it back", () => {
+    const w = createWorld();
+    w.setResource(Score, { value: 10 });
+    w.updateResource(Score, (v) => ({ value: v.value + 5 }));
+    expect(w.getResource(Score)).toEqual({ value: 15 });
+  });
+
+  it("throws when the resource is unset — there is nothing to update", () => {
+    const w = createWorld();
+    expect(() => w.updateResource(Score, (v) => v)).toThrow(/updateResource.*set/i);
+    expect(w.getResource(Score)).toBeUndefined();
+  });
+
+  it("its setResource write drives resource reactivity", () => {
+    const w = createWorld();
+    w.setResource(Score, { value: 1 });
+    const seen: unknown[] = [];
+    w.reactive.observeResource(Score, (v) => seen.push(v));
+    w.updateResource(Score, (v) => ({ value: v.value * 2 }));
+    w.reactive.notify();
+    expect(seen).toEqual([{ value: 2 }]);
   });
 });
 

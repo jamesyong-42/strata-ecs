@@ -153,13 +153,9 @@ class ReactiveHarness {
       mustFire: false,
       removed: false,
     };
-    w.unsub = this.world.reactive.observeQuery(
-      queryFor(c),
-      [REACTIVE_COMPS[c].h as Component],
-      () => {
-        w.fires++;
-      },
-    );
+    w.unsub = this.world.reactive.observeQuery(queryFor(c), () => {
+      w.fires++;
+    });
     this.watches.push(w);
   }
 

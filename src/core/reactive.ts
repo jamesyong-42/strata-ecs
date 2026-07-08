@@ -4,9 +4,10 @@
  * observers are compared against column/rows/tag stamps at a single settled point per frame,
  * {@link Reactive.notify}, called once by the app after all ticks (002 §4.1).
  *
- * Three tiers, a visible cost ladder (002 §3):
+ * A cost ladder (002 §3):
  *   - Tier 1 {@link Reactive.observeQuery}  — query-level: did anything matching change / membership move.
- *   - Tier 2 {@link Reactive.observeEntity} — entity-level: this entity's column stamped (fires even if equal).
+ *   - Tier 2 — entity-level (column-granular): REMOVED pre-1.0. Its stamp was archetype-wide, so it fired
+ *     on ANY co-resident component's write, not just the watched one — an attractive nuisance; use Tier 3.
  *   - Tier 3 {@link Reactive.observeValue}  — value-level: this entity's value actually differs (equality-checked).
  *
  * {@link Reactive.observeResource} adds a Tier-3-equivalent channel for world-singleton resources
@@ -37,20 +38,21 @@ interface QueryWatch {
   /** Whether membership can change without a column stamp — row filters OR a relation seed (§4.2). */
   readonly rowFiltered: boolean;
   readonly cb: () => void;
+  /** `opts.immediate` — fire once at the first notify() after registration regardless of stamps, then self-clears. */
+  immediate: boolean;
   /** Set by unsubscribe; a snapshot-iterated pass skips it so a mid-pass unsub never fires late. */
   dead: boolean;
   lastSeen: number;
 }
 
-/** A Tier-2/3 (entity/value-level) registration. Cells hold an ARRAY — many watches per (component, entity). */
+/** A Tier-3 (value-level) registration. Cells hold an ARRAY — many watches per (component, entity). */
 interface Watch {
-  readonly tier: 2 | 3;
   readonly component: Component;
   readonly entity: Entity;
   readonly cb: (v: unknown) => void;
-  /** Tier 3 equality (custom or the shallow default); unused for Tier 2. */
+  /** Value equality (custom or the shallow default). */
   readonly eq: (a: unknown, b: unknown) => boolean;
-  /** Tier 3 last-fired value — the stable reference {@link Reactive.peek} returns (002 §3.3/§5). */
+  /** Last-fired value — the stable reference {@link Reactive.peek} returns (002 §3.3/§5). */
   box: unknown;
   /** Last-known "present with a value" state — drives the fire-once-`undefined` on component removal (§3.4). */
   hadValue: boolean;
@@ -108,7 +110,7 @@ export class Reactive {
   private readonly resourceWatched = new Map<ResourceId, ResourceWatch[]>();
   /** Entities the eager death hook saw destroyed, awaiting an undefined-fire at the next notify (§3.4). */
   private readonly pendingDeaths = new Set<Entity>();
-  /** Live Tier-2/3 watch count — the eager death hook is installed while this is > 0 (§3.4). */
+  /** Live Tier-3 watch count — the eager death hook is installed while this is > 0 (§3.4). */
   private entityWatchCount = 0;
 
   constructor(private readonly store: RuntimeStore) {}
@@ -117,17 +119,25 @@ export class Reactive {
   // Registration (a frame boundary; no immediate fire — see the file header)
   // ---------------------------------------------------------------------------
 
-  /** Tier 1 (002 §3.1) — fire when any matching archetype's watched column or membership changed. */
-  observeQuery(q: Query, cols: readonly Component[], cb: () => void): Unsubscribe {
+  /**
+   * Tier 1 (002 §3.1) — fire when any matching archetype's watched column or membership changed.
+   * `opts.cols` defaults to the query's OWN required components; pass it to narrow to a subset (or to
+   * widen to co-resident columns the query does not itself require). `opts.immediate: true` fires the
+   * callback once at the first notify() after registration regardless of stamps (a first-paint seed) —
+   * registration itself still never back-fires synchronously.
+   */
+  observeQuery(q: Query, cb: () => void, opts?: { cols?: readonly Component[]; immediate?: boolean }): Unsubscribe {
+    this.store.enableReactive(); // stamping arms at REGISTRATION — property reads are side-effect-free
     this.store.armAccessEnforcement(); // first observer arms 001 dev-enforcement (001 §2.4)
     this.store.advanceFrame(); // registration is a frame boundary (§4.1a) — see the file header
     const watch: QueryWatch = {
       matches: this.store.matchesFor(q),
-      colIds: cols.map((c) => c.id),
+      colIds: opts?.cols !== undefined ? opts.cols.map((c) => c.id) : q.required,
       // A concrete-target `Related(rel, target)` compiles to a `seed` with NO row filter, yet its
       // membership still turns over on setRelation/removeRelation — consult `tagRelFrame` for it too.
       rowFiltered: q.rowFilters.length > 0 || q.seed !== undefined,
       cb,
+      immediate: opts?.immediate === true,
       dead: false,
       lastSeen: this.store.frame - 1,
     };
@@ -140,11 +150,6 @@ export class Reactive {
     };
   }
 
-  /** Tier 2 (002 §3.2) — fire when this entity's column stamped, with the current value (even if equal). */
-  observeEntity<S>(e: Entity, c: Component<S>, cb: (v: S | undefined) => void): Unsubscribe {
-    return this.registerWatch(2, e, c, cb as (v: unknown) => void, shallowEqual);
-  }
-
   /** Tier 3 (002 §3.3) — fire only when this entity's value actually differs (equality-checked). */
   observeValue<S>(
     e: Entity,
@@ -153,7 +158,6 @@ export class Reactive {
     eq?: (a: S, b: S) => boolean,
   ): Unsubscribe {
     return this.registerWatch(
-      3,
       e,
       c,
       cb as (v: unknown) => void,
@@ -171,6 +175,7 @@ export class Reactive {
     cb: (v: S | undefined) => void,
     eq?: (a: S, b: S) => boolean,
   ): Unsubscribe {
+    this.store.enableReactive(); // stamping arms at REGISTRATION — property reads are side-effect-free
     this.store.armAccessEnforcement(); // a reactive observer arms 001 dev-enforcement (001 §2.4)
     this.store.advanceFrame(); // registration frame boundary (§4.1a)
     let arr = this.resourceWatched.get(r.id);
@@ -191,12 +196,12 @@ export class Reactive {
   }
 
   private registerWatch(
-    tier: 2 | 3,
     e: Entity,
     c: Component,
     cb: (v: unknown) => void,
     eq: (a: unknown, b: unknown) => boolean,
   ): Unsubscribe {
+    this.store.enableReactive(); // stamping arms at REGISTRATION — property reads are side-effect-free
     this.store.armAccessEnforcement();
     this.store.advanceFrame(); // registration frame boundary (§4.1a)
     let m = this.watched.get(c.id);
@@ -211,14 +216,13 @@ export class Reactive {
     }
     const current = this.store.get(e, c);
     const watch: Watch = {
-      tier,
       component: c,
       entity: e,
       cb,
       eq,
-      // Tier 3 primes its box with the current value so `peek` is stable from registration and the
-      // first notify suppresses a same-value baseline (no fire on registration, §3.3).
-      box: tier === 3 ? current : undefined,
+      // Prime the box with the current value so `peek` is stable from registration and the first
+      // notify suppresses a same-value baseline (no fire on registration, §3.3).
+      box: current,
       hadValue: current !== undefined,
       dead: false,
       lastSeen: this.store.frame - 1,
@@ -237,13 +241,16 @@ export class Reactive {
 
   /**
    * Compare stamps, fire dirty observers, then advance the frame (002 §4.1a). Order (002 §4.1):
-   * (1) drain eager deaths, (2) Tier 1, (3) Tier 2/3, (4) always `advanceFrame()`. Callback dispatch
+   * (1) drain eager deaths, (2) Tier 1, (3) Tier 3, (4) always `advanceFrame()`. Callback dispatch
    * runs under the store's observer-emit flag so structural mutation from a callback is DEV-rejected
    * (002 §6 — callbacks may SCHEDULE work). A no-op but for the frame advance when nothing is watched.
    */
   notify(): void {
     const store = this.store;
     const prev = store.setObserverEmit(true);
+    // Notify-only stamping: callback value writes stamp frame+1, consumed by the trailing
+    // advanceFrame below. Dev-tool observer emits must NOT get the +1 (they have no consumer).
+    const prevStamp = store.setNotifyStamping(true);
     try {
       if (this.pendingDeaths.size > 0) this.drainDeaths();
       if (this.queryWatches.length > 0) this.notifyQueries();
@@ -251,6 +258,7 @@ export class Reactive {
       if (this.watched.size > 0) this.notifyWatches();
     } finally {
       store.setObserverEmit(prev);
+      store.setNotifyStamping(prevStamp);
       store.advanceFrame(); // ALWAYS — uniform §4.1a frame semantics, even with zero observers
     }
   }
@@ -288,12 +296,13 @@ export class Reactive {
     const tagRel = this.store.lastTagRelFrame;
     let dirty: QueryWatch[] | null = null;
     for (const w of this.queryWatches) {
-      if (!w.dead && queryDirty(w, tagRel)) (dirty ??= []).push(w);
+      if (!w.dead && (w.immediate || queryDirty(w, tagRel))) (dirty ??= []).push(w);
     }
     if (dirty === null) return; // no matching change since last seen — zero allocation
     const frame = this.store.frame;
     for (const w of dirty) {
       if (w.dead) continue; // an earlier callback in this pass may have removed it
+      w.immediate = false; // consume the one-shot immediate seed (fires once, at the first notify)
       fire0(w.cb);
       w.lastSeen = frame;
     }
@@ -325,7 +334,7 @@ export class Reactive {
   }
 
   /**
-   * (3) Tier 2/3 (§3.2/§3.3). Two-phase for the quiescent fast path (R5):
+   * (3) Tier 3 (§3.3). Two-phase for the quiescent fast path (R5):
    *
    * Phase 1 — a live-key scan (no fire, so `this.watched` can't mutate under us) compares
    * `store.componentFrame(cid)` against the component's skip watermark. A clean component costs ONE
@@ -381,14 +390,10 @@ export class Reactive {
                 v = store.get(e, w.component);
                 vRead = true;
               }
-              if (w.tier === 2) {
+              const changed = w.box === undefined || v === undefined ? w.box !== v : !w.eq(v, w.box);
+              if (changed) {
+                w.box = v;
                 fire(w.cb, v);
-              } else {
-                const changed = w.box === undefined || v === undefined ? w.box !== v : !w.eq(v, w.box);
-                if (changed) {
-                  w.box = v;
-                  fire(w.cb, v);
-                }
               }
               w.hadValue = true;
             }
@@ -517,7 +522,7 @@ function fire0(cb: () => void): void {
   }
 }
 
-/** Fire a Tier-2/3 callback with a value, swallowing throws. */
+/** Fire a Tier-3 callback with a value, swallowing throws. */
 function fire(cb: (v: unknown) => void, v: unknown): void {
   try {
     cb(v);

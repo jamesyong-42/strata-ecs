@@ -179,16 +179,16 @@ function unionList(a: string[] | undefined, b: string[]): Iterable<string> {
  */
 export function attachDurable(world: World, store: DurableStore): Attachment {
   if (ATTACHED.has(store)) {
-    throw new Error("strata: this DurableStore is already attached — one store has at most one attachment (§13.1).");
+    throw new Error("strata: this DurableStore is already attached — one store has at most one attachment.");
   }
   if (world.inImmediateProjectionUnsafeContext) {
     throw new Error(
-      "strata: attachDurable() cannot run during query iteration or a tick — attach projects the document immediately (like a drain), and a mid-iteration migration corrupts the walk; attach at the frame boundary (§13.1, 006 §A4).",
+      "strata: attachDurable() cannot run during query iteration or a tick — attach projects the document immediately (like a drain), and a mid-iteration migration corrupts the walk; attach at the frame boundary.",
     );
   }
   if (DEV && world.runtime.inObserverEmitActive) {
     throw new Error(
-      "strata: attachDurable() cannot run from inside an observer or reactive callback — attach's projection half-applies through the mixed in-emit guards; schedule it for the next frame boundary (005 §5.5, §13.1).",
+      "strata: attachDurable() cannot run from inside an observer or reactive callback — attach's projection half-applies through the mixed in-emit guards; schedule it for the next frame boundary.",
     );
   }
 
@@ -538,7 +538,7 @@ class DurableBinding implements InboundSource {
       // `world.sync()` already checks this on the sync path; a source drained by any other caller still
       // owes the assert at entry.
       throw new Error(
-        "strata: durable drain() cannot run from inside an observer or reactive callback — it would half-apply a ChangeBatch; drain at the frame boundary (005 §5.5).",
+        "strata: durable drain() cannot run from inside an observer or reactive callback — it would half-apply a ChangeBatch; drain at the frame boundary.",
       );
     }
     this.applied = 0; // per-drain apply tally (006 C7) — bumped by the CountingProjector + the resource sites
@@ -975,7 +975,7 @@ class DurableBinding implements InboundSource {
           `value outstanding). A runtime edit diverged this cell from its baseline and never committed, so ` +
           `remote changes keep being skipped. Commit the edit, or if you meant to discard it, write the ` +
           `converged value back yourself (read it from the document, then commit). The framework does not ` +
-          `abort/roll back (§13.5).`,
+          `abort/roll back.`,
       );
     }
   }
@@ -1030,7 +1030,7 @@ class DurableBinding implements InboundSource {
       for (const f of comp.fields) {
         if (f.spec.type === "eid") {
           throw new Error(
-            `strata: durable component "${comp.name}" declares an eid field "${f.name}" — an eid is a packed runtime handle, meaningless across sessions. Reference entities with a key field instead (005 §7).`,
+            `strata: durable component "${comp.name}" declares an eid field "${f.name}" — an eid is a packed runtime handle, meaningless across sessions. Reference entities with a key field instead.`,
           );
         }
       }
@@ -1043,7 +1043,7 @@ class DurableBinding implements InboundSource {
     if (this.warned.has(dedupe)) return;
     this.warned.add(dedupe);
     devWarn(
-      `inbound value for "${name}" field "${field}" rejected (${reason}) — dropped, touching neither runtime nor baseline (005 §2.3).`,
+      `inbound value for "${name}" field "${field}" rejected (${reason}) — dropped, touching neither runtime nor baseline.`,
     );
   }
 
@@ -1052,6 +1052,6 @@ class DurableBinding implements InboundSource {
     const dedupe = `name:${kind}:${name}`;
     if (this.warned.has(dedupe)) return;
     this.warned.add(dedupe);
-    devWarn(`attach saw an unknown ${kind} name "${name}" — skipped (no schema object resolves it; 006 §B3).`);
+    devWarn(`attach saw an unknown ${kind} name "${name}" — skipped (no schema object resolves it).`);
   }
 }

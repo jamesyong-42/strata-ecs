@@ -190,7 +190,7 @@ export function defineTag(name: string): Tag {
 export function defineFrameworkTag(name: string): Tag {
   if (!names.isReserved(name)) {
     throw new Error(
-      `strata: defineFrameworkTag("${name}") — only framework-reserved names may be defined this way (§3.4).`,
+      `strata: defineFrameworkTag("${name}") — only framework-reserved names may be defined this way.`,
     );
   }
   const existing = tagsByName.get(name);

@@ -45,7 +45,7 @@ describe("P6 — projection visible at next notify (§5.3)", () => {
     let vSeen: unknown = "unset";
     let qFired = 0;
     reactive.observeValue(h, CPos, (v) => (vSeen = v));
-    reactive.observeQuery(defineQuery([CPos]), [CPos], () => qFired++);
+    reactive.observeQuery(defineQuery([CPos]), () => qFired++);
 
     proj.applyComponent(k, CPos, { x: 0.1, y: 0.2 });
     reactive.notify();
@@ -57,7 +57,7 @@ describe("P6 — projection visible at next notify (§5.3)", () => {
   it("applySpawn: the componentless placement is visible to an all-matching query", () => {
     const { reactive, proj } = setup();
     let fired = 0;
-    reactive.observeQuery(defineQuery([]), [], () => fired++); // matches every archetype incl. empty
+    reactive.observeQuery(defineQuery([]), () => fired++); // matches every archetype incl. empty
 
     proj.applySpawn(entityKey("e")); // ensurePlaced → row appears in the empty archetype
     reactive.notify();
@@ -82,7 +82,7 @@ describe("P6 — projection visible at next notify (§5.3)", () => {
   it("applyTag: observeQuery on the tag fires", () => {
     const { reactive, proj } = setup();
     let fired = 0;
-    reactive.observeQuery(defineQuery([TSel]), [], () => fired++);
+    reactive.observeQuery(defineQuery([TSel]), () => fired++);
 
     proj.applyTag(entityKey("e"), TSel);
     reactive.notify();
@@ -95,7 +95,7 @@ describe("P6 — projection visible at next notify (§5.3)", () => {
     const k = entityKey("e");
     proj.applyTag(k, TSel);
     let fired = 0;
-    reactive.observeQuery(defineQuery([TSel]), [], () => fired++);
+    reactive.observeQuery(defineQuery([TSel]), () => fired++);
     reactive.notify(); // settle the add
     fired = 0;
 
@@ -109,7 +109,7 @@ describe("P6 — projection visible at next notify (§5.3)", () => {
     for (const rel of [RParent, RChild] as const) {
       const { reactive, proj } = setup();
       let fired = 0;
-      reactive.observeQuery(defineQuery([Related(rel)]), [], () => fired++);
+      reactive.observeQuery(defineQuery([Related(rel)]), () => fired++);
 
       const src = entityKey("s");
       const tgt = entityKey("t");
@@ -204,7 +204,7 @@ describe("P7 — projection idempotence fires no watch (§2.5, §6.1)", () => {
   it("remove of an already-removed key: no throw, no membership bump, no query fire", () => {
     const { reactive, proj, rt } = setup();
     let fired = 0;
-    reactive.observeQuery(defineQuery([CPos]), [CPos], () => fired++);
+    reactive.observeQuery(defineQuery([CPos]), () => fired++);
     reactive.notify(); // settle
     fired = 0;
     const before = rt.lastTagRelFrame;
@@ -241,7 +241,7 @@ describe("P7 — projection idempotence fires no watch (§2.5, §6.1)", () => {
     proj.applySpawn(k); // first placement into the empty archetype
     const h = proj.resolveByKey(k);
     let fired = 0;
-    reactive.observeQuery(defineQuery([]), [], () => fired++); // matches every archetype incl. empty
+    reactive.observeQuery(defineQuery([]), () => fired++); // matches every archetype incl. empty
     reactive.notify(); // settle the initial placement (post-registration → no retro-fire)
     fired = 0;
 

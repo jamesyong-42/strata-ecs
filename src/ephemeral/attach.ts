@@ -126,16 +126,16 @@ interface LastSeen {
  */
 export function attachEphemeral(world: World, eph: EphemeralStore): Attachment {
   if (ATTACHED.has(eph)) {
-    throw new Error("strata: this EphemeralStore is already attached — one store has at most one attachment (§15.1).");
+    throw new Error("strata: this EphemeralStore is already attached — one store has at most one attachment.");
   }
   if (world.inImmediateProjectionUnsafeContext) {
     throw new Error(
-      "strata: attachEphemeral() cannot run during query iteration or a tick — inbound projection writes structure immediately (like a drain), and a mid-iteration migration corrupts the walk; attach at the frame boundary (§15.3, 006 §A4).",
+      "strata: attachEphemeral() cannot run during query iteration or a tick — inbound projection writes structure immediately (like a drain), and a mid-iteration migration corrupts the walk; attach at the frame boundary.",
     );
   }
   if (DEV && world.runtime.inObserverEmitActive) {
     throw new Error(
-      "strata: attachEphemeral() cannot run from inside an observer or reactive callback — projection half-applies through the mixed in-emit guards; schedule it for the next frame boundary (005 §5.5, §15.3).",
+      "strata: attachEphemeral() cannot run from inside an observer or reactive callback — projection half-applies through the mixed in-emit guards; schedule it for the next frame boundary.",
     );
   }
 
@@ -238,7 +238,7 @@ class EphemeralBinding implements InboundSource {
     if (this.detached) return;
     if (DEV && this.world.runtime.inObserverEmitActive) {
       throw new Error(
-        "strata: ephemeral drain() cannot run from inside an observer or reactive callback — it would half-apply a projection; drain at the frame boundary (005 §5.5, 006 §C2).",
+        "strata: ephemeral drain() cannot run from inside an observer or reactive callback — it would half-apply a projection; drain at the frame boundary.",
       );
     }
     const pending = this.pending;
@@ -608,7 +608,7 @@ class EphemeralBinding implements InboundSource {
     if (!DEV || this.warned.has(dedupe)) return;
     this.warned.add(dedupe);
     devWarn(
-      `inbound ephemeral value for "${name}" field "${field}" rejected (${reason}) — dropped, leaving the prior projection standing (005 §2.3).`,
+      `inbound ephemeral value for "${name}" field "${field}" rejected (${reason}) — dropped, leaving the prior projection standing.`,
     );
   }
 
@@ -621,7 +621,7 @@ class EphemeralBinding implements InboundSource {
     const dedupe = `unknown:${kind}`;
     if (!DEV || this.warned.has(dedupe)) return;
     this.warned.add(dedupe);
-    devWarn(`inbound ephemeral blob names an unknown ${kind} "${name}" — skipped (no schema object resolves it; 006 §B3).`);
+    devWarn(`inbound ephemeral blob names an unknown ${kind} "${name}" — skipped (no schema object resolves it).`);
   }
 
   /**

@@ -41,7 +41,7 @@ describe("Tier 1 — query-level (002 §3.1)", () => {
     const w = createWorld();
     const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++);
+    w.reactive.observeQuery(posQ, () => fired++);
 
     const Mover = defineSystem(
       posQ,
@@ -67,7 +67,7 @@ describe("Tier 1 — query-level (002 §3.1)", () => {
   it("membership fires on immediate spawn and destroy", () => {
     const w = createWorld();
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++);
+    w.reactive.observeQuery(posQ, () => fired++);
 
     const e = w.spawn({ components: [[Pos, { x: 1, y: 1 }]] }); // rows gained → structural bump
     w.reactive.notify();
@@ -82,7 +82,7 @@ describe("Tier 1 — query-level (002 §3.1)", () => {
     const w = createWorld();
     w.spawn({ components: [[Driver, { n: 1 }]] });
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++);
+    w.reactive.observeQuery(posQ, () => fired++);
 
     let spawned: Entity | undefined;
     const Spawner = defineSystem(
@@ -109,8 +109,8 @@ describe("Tier 1 — query-level (002 §3.1)", () => {
     const tagQ = defineQuery([Pos, Selected]); // Selected → a row filter (rowFiltered)
     let taggedFires = 0;
     let plainFires = 0;
-    w.reactive.observeQuery(tagQ, [Pos], () => taggedFires++);
-    w.reactive.observeQuery(posQ, [Pos], () => plainFires++);
+    w.reactive.observeQuery(tagQ, () => taggedFires++);
+    w.reactive.observeQuery(posQ, () => plainFires++);
 
     w.addTag(e, Selected); // moves no rows, changes tag-filtered membership only
     w.reactive.notify();
@@ -129,7 +129,7 @@ describe("Tier 1 — query-level (002 §3.1)", () => {
     const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     const relQ = defineQuery([Pos, Related(Rel, target)]); // concrete target → a seed, no row filter
     let fired = 0;
-    w.reactive.observeQuery(relQ, [Pos], () => fired++);
+    w.reactive.observeQuery(relQ, () => fired++);
 
     w.setRelation(e, Rel, target); // relation membership turns over, moving no rows
     w.reactive.notify();
@@ -144,7 +144,7 @@ describe("Tier 1 — query-level (002 §3.1)", () => {
     const w = createWorld();
     w.spawn({ components: [[Pos, { x: 0, y: 0 }]] }); // pre-registration structural work
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++);
+    w.reactive.observeQuery(posQ, () => fired++);
     w.reactive.notify(); // nothing changed since registration
     w.reactive.notify();
     expect(fired).toBe(0);
@@ -154,11 +154,47 @@ describe("Tier 1 — query-level (002 §3.1)", () => {
     const w = createWorld();
     w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++);
+    w.reactive.observeQuery(posQ, () => fired++);
 
     w.reactive.invalidate(Pos);
     w.reactive.notify();
     expect(fired).toBe(1);
+  });
+
+  it("opts.cols defaults to the query's required components; an explicit cols narrows the watch", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }], [Vel, { x: 0, y: 0 }]] });
+    const pv = defineQuery([Pos, Vel]);
+    let narrowed = 0;
+    let full = 0;
+    w.reactive.observeQuery(pv, () => narrowed++, { cols: [Pos] }); // only Pos writes wake it
+    w.reactive.observeQuery(pv, () => full++); // default cols = the query's required [Pos, Vel]
+    w.reactive.notify(); // settle both
+
+    w.edit(e).set(Vel, { x: 1, y: 0 }); // a Vel-only write
+    w.reactive.notify();
+    expect(narrowed).toBe(0); // Vel is outside the narrowed cols
+    expect(full).toBe(1); // the default watches Vel too
+
+    w.edit(e).set(Pos, { x: 1, y: 0 });
+    w.reactive.notify();
+    expect(narrowed).toBe(1); // Pos woke the narrowed watch
+    expect(full).toBe(2);
+  });
+
+  it("opts.immediate fires once at the first notify() regardless of stamps; registration never back-fires", () => {
+    const w = createWorld();
+    w.spawn({ components: [[Pos, { x: 0, y: 0 }]] }); // pre-registration content; nothing stamps after
+    let fired = 0;
+    w.reactive.observeQuery(posQ, () => fired++, { immediate: true });
+    expect(fired).toBe(0); // registration itself does not fire synchronously
+
+    w.reactive.notify();
+    expect(fired).toBe(1); // the immediate seed fires once at the first notify, though nothing stamped
+
+    w.reactive.notify();
+    w.reactive.notify();
+    expect(fired).toBe(1); // and only once — the flag self-cleared
   });
 });
 
@@ -168,7 +204,7 @@ describe("frame semantics (002 §4.1a)", () => {
     const wa = createWorld();
     const ea = wa.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     let firedA = 0;
-    wa.reactive.observeQuery(posQ, [Pos], () => firedA++);
+    wa.reactive.observeQuery(posQ, () => firedA++);
     const Mover = defineSystem(posQ, (b: Batch) => void b, { name: "RCTBoundaryMover", access: { write: [Pos] } });
     wa.tick([phase("move", [Mover])]);
     wa.reactive.notify();
@@ -179,7 +215,7 @@ describe("frame semantics (002 §4.1a)", () => {
     const wb = createWorld();
     const eb = wb.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     let firedB = 0;
-    wb.reactive.observeQuery(posQ, [Pos], () => firedB++);
+    wb.reactive.observeQuery(posQ, () => firedB++);
     wb.edit(eb).set(Pos, { x: 1, y: 1 });
     wb.reactive.notify();
     expect(firedB).toBe(1);
@@ -189,7 +225,7 @@ describe("frame semantics (002 §4.1a)", () => {
     const w = createWorld();
     const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++);
+    w.reactive.observeQuery(posQ, () => fired++);
     w.reactive.notify(); // a pass runs and advances the frame
 
     w.edit(e).set(Pos, { x: 1, y: 1 }); // an input handler between frames
@@ -204,7 +240,7 @@ describe("frame semantics (002 §4.1a)", () => {
     const w = createWorld();
     w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++);
+    w.reactive.observeQuery(posQ, () => fired++);
 
     const Mover = defineSystem(posQ, (b: Batch) => void b, { name: "RCTMultiMover", access: { write: [Pos] } });
     const pipe = [phase("move", [Mover])];
@@ -218,7 +254,7 @@ describe("frame semantics (002 §4.1a)", () => {
   it("notify() with zero observers advances the frame; an observer registered later still sees a write", () => {
     const w = createWorld();
     const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
-    void w.reactive; // enable the layer without registering an observer
+    void w.reactive; // materialize the reactive layer (its frame counter is live even with no observers)
     const f0 = w.reactive.frame;
     w.reactive.notify();
     w.reactive.notify();
@@ -226,23 +262,10 @@ describe("frame semantics (002 §4.1a)", () => {
     expect(w.reactive.frame).toBeGreaterThan(f0); // each empty notify advanced the frame (§4.1a)
 
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++); // registers after several empty passes
+    w.reactive.observeQuery(posQ, () => fired++); // registers after several empty passes
     w.edit(e).set(Pos, { x: 5, y: 0 });
     w.reactive.notify();
     expect(fired).toBe(1); // still baselined correctly against the current frame
-  });
-});
-
-describe("Tier 2 — entity-level (002 §3.2)", () => {
-  it("fires on a column stamp even when the value is equal", () => {
-    const w = createWorld();
-    const e = w.spawn({ components: [[Pos, { x: 5, y: 0 }]] });
-    const seen: unknown[] = [];
-    w.reactive.observeEntity(e, Pos, (v) => seen.push(v));
-
-    w.edit(e).set(Pos, { x: 5, y: 0 }); // same value — still stamps the column
-    w.reactive.notify();
-    expect(seen).toEqual([{ x: 5, y: 0 }]); // Tier 2 is column-granular, not value-checked
   });
 });
 
@@ -487,11 +510,11 @@ describe("reentrancy / robustness (002 §6)", () => {
     let c1 = 0;
     let c2 = 0;
     let off1: Unsubscribe = () => {};
-    off1 = w.reactive.observeQuery(posQ, [Pos], () => {
+    off1 = w.reactive.observeQuery(posQ, () => {
       c1++;
       off1(); // detach self mid-notify
     });
-    w.reactive.observeQuery(posQ, [Pos], () => c2++);
+    w.reactive.observeQuery(posQ, () => c2++);
 
     w.edit(e).set(Pos, { x: 1, y: 0 });
     w.reactive.notify();
@@ -509,11 +532,11 @@ describe("reentrancy / robustness (002 §6)", () => {
     let c2 = 0;
     let offSecond: Unsubscribe = () => {};
     // First observer detaches the SECOND before its turn in this same pass.
-    w.reactive.observeQuery(posQ, [Pos], () => {
+    w.reactive.observeQuery(posQ, () => {
       c1++;
       offSecond();
     });
-    offSecond = w.reactive.observeQuery(posQ, [Pos], () => c2++);
+    offSecond = w.reactive.observeQuery(posQ, () => c2++);
 
     w.edit(e).set(Pos, { x: 1, y: 0 });
     w.reactive.notify();
@@ -525,10 +548,10 @@ describe("reentrancy / robustness (002 §6)", () => {
     const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     let sibling = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => {
+    w.reactive.observeQuery(posQ, () => {
       throw new Error("observer exploded");
     });
-    w.reactive.observeQuery(posQ, [Pos], () => sibling++);
+    w.reactive.observeQuery(posQ, () => sibling++);
 
     w.edit(e).set(Pos, { x: 1, y: 0 });
     w.reactive.notify();
@@ -541,7 +564,7 @@ describe("reentrancy / robustness (002 §6)", () => {
     const w = createWorld();
     const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    w.reactive.observeQuery(posQ, [Pos], () => {
+    w.reactive.observeQuery(posQ, () => {
       w.addTag(e, Selected); // forbidden mid-notify — callbacks may only SCHEDULE work
     });
 
@@ -557,7 +580,7 @@ describe("001 Rule 3 enforcement (armed by the first observer)", () => {
   it("col() on an undeclared component throws in DEV, naming the system", () => {
     const w = createWorld();
     w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
-    w.reactive.observeQuery(posQ, [Pos], () => {}); // arms enforcement
+    w.reactive.observeQuery(posQ, () => {}); // arms enforcement
 
     const BadReader = defineSystem(
       posQ,
@@ -573,7 +596,7 @@ describe("001 Rule 3 enforcement (armed by the first observer)", () => {
     const w = createWorld();
     w.spawn({ components: [[Pos, { x: 0, y: 0 }]] }); // drives the [Pos] body
     const ve = w.spawn({ components: [[Vel, { x: 0, y: 0 }]] }); // written outside the query
-    w.reactive.observeQuery(posQ, [Pos], () => {});
+    w.reactive.observeQuery(posQ, () => {});
 
     const BadWriter = defineSystem(
       posQ,
@@ -586,7 +609,7 @@ describe("001 Rule 3 enforcement (armed by the first observer)", () => {
   it("a pure-reader system reading its query components is fine", () => {
     const w = createWorld();
     w.spawn({ components: [[Pos, { x: 3, y: 4 }]] });
-    w.reactive.observeQuery(posQ, [Pos], () => {});
+    w.reactive.observeQuery(posQ, () => {});
 
     let sum = 0;
     const Reader = defineSystem(
@@ -604,7 +627,7 @@ describe("001 Rule 3 enforcement (armed by the first observer)", () => {
   it("a component that appears only inside a mixed Any(...) is a legal read", () => {
     const w = createWorld();
     w.spawn({ components: [[Pos, { x: 3, y: 0 }], [Vel, { x: 2, y: 0 }]] }); // matches [Pos, Any(Vel, Selected)] via Vel
-    w.reactive.observeQuery(posQ, [Pos], () => {}); // arms enforcement
+    w.reactive.observeQuery(posQ, () => {}); // arms enforcement
 
     const anyQ = defineQuery([Pos, Any(Vel, Selected)]); // mixed Any → a row filter carrying Vel
     let sum = 0;
@@ -885,37 +908,77 @@ describe("resource removal (005 §6.1)", () => {
     expect(fired).toBe(1); // no second fire
   });
 
-  it("removeResource from inside a reactive callback DEV-warns (stamps the current frame — unobservable)", () => {
+  it("removeResource from inside a reactive callback is legal and delivered as undefined at the next notify", () => {
     const w = createWorld();
     const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
     w.setResource(Camera, { x: 1, y: 0, zoom: 1 });
-    w.reactive.observeResource(Camera, () => {
-      w.removeResource(Camera); // from inside a callback — the removal is silently unobservable this pass
+    const seen: unknown[] = [];
+    // The callback removes Camera from inside the emit. Legal now: the removal stamps the NEXT frame
+    // (like every resource write from a callback), so it is delivered deterministically next notify.
+    w.reactive.observeResource(Camera, (v) => {
+      seen.push(v);
+      w.removeResource(Camera);
     });
     w.setResource(Camera, { x: 2, y: 0, zoom: 1 }); // a real change → fires the callback
-    w.reactive.notify();
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining('removeResource("RCTCamera") from inside a reactive callback'),
-    );
+    w.reactive.notify(); // pass 1: fires with { x: 2, … }; the callback removes Camera
+    w.reactive.notify(); // pass 2: the removal is delivered as undefined
+    w.reactive.notify(); // idle
+
+    expect(seen).toEqual([{ x: 2, y: 0, zoom: 1 }, undefined]);
+    expect(w.getResource(Camera)).toBeUndefined();
+    expect(spy).not.toHaveBeenCalled(); // the retired in-emit devWarn no longer fires
     spy.mockRestore();
   });
 });
 
-describe("writeComponent-in-emit devWarn (005 §5.5 / 006 §C2)", () => {
-  it("a value write (edit().set) from inside a reactive callback DEV-warns; the write still lands", () => {
+describe("a value write from inside a reactive callback is legal and deterministic (002 §4.1a)", () => {
+  it("edit().set inside a callback lands immediately and is delivered to a value watch exactly once — no warn", () => {
     const w = createWorld();
     const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const seen: unknown[] = [];
+    w.reactive.observeValue(e, Pos, (v) => seen.push(v));
+    // A resource watch whose callback writes Pos from inside the emit. This is legal now: the write
+    // stamps the NEXT frame, so it is delivered deterministically — never nondeterministically lost,
+    // the failure mode the old current-frame stamp (and its devWarn) had.
     w.reactive.observeResource(Camera, () => {
-      w.edit(e).set(Pos, { x: 5, y: 5 }); // value write inside a callback — stamps current frame, unobservable
+      w.edit(e).set(Pos, { x: 5, y: 5 });
     });
-    w.setResource(Camera, { x: 1, y: 0, zoom: 1 }); // fires the callback
-    w.reactive.notify();
 
-    expect(w.read(e, Pos)).toEqual({ x: 5, y: 5 }); // diagnostic only — the write is applied
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining('writeComponent("RCTPos") from inside a reactive callback'),
-    );
+    w.setResource(Camera, { x: 1, y: 0, zoom: 1 }); // fires the resource callback
+    w.reactive.notify();
+    expect(w.read(e, Pos)).toEqual({ x: 5, y: 5 }); // the write landed immediately
+
+    w.reactive.notify();
+    w.reactive.notify();
+    expect(seen).toEqual([{ x: 5, y: 5 }]); // delivered to the Pos value watch exactly once — never lost, never doubled
+    expect(spy).not.toHaveBeenCalled(); // the retired in-emit devWarn no longer fires
     spy.mockRestore();
+  });
+
+  it("a value write from a DEV-TOOL observer callback (onSpawn) fires a Tier-1 watch exactly once — no frame+1 leak", () => {
+    // The frame+1 stamp is only correct inside notify() (its trailing advanceFrame consumes it). The
+    // WorldObserver emits also set the in-emit flag but never advance the frame — a +1 there left the
+    // stamp one frame ahead and a Tier-1 watch (no equality check) fired at TWO consecutive notifies
+    // for one write (triage-review confirmed finding; the fix keys stampFrame off notify-only state).
+    const w = createWorld();
+    const hud = w.spawn({ components: [[Driver, { n: 0 }]] });
+    let fires = 0;
+    w.reactive.observeQuery(driverQ, () => fires++);
+    w.reactive.notify(); // settle registration
+    expect(fires).toBe(0);
+
+    w.observe({
+      onSpawn: () => {
+        w.edit(hud).set(Driver, { n: 1 }); // value write from a telemetry callback — legal
+      },
+    });
+    w.spawn(); // emits onSpawn → the callback writes Driver
+
+    w.reactive.notify();
+    expect(fires).toBe(1); // delivered at the next notify…
+    w.reactive.notify();
+    w.reactive.notify();
+    expect(fires).toBe(1); // …and exactly once — no double-fire from a stamp stranded in the future
   });
 });

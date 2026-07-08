@@ -149,7 +149,7 @@ describe("presence flow end-to-end (§15.3/§15.4)", () => {
 
     // Arm an observeQuery on B BEFORE the remote arrives — it must fire once at the next notify (005 §5.3).
     let fired = 0;
-    B.world.reactive.observeQuery(remoteCursors, [CursorPos], () => {
+    B.world.reactive.observeQuery(remoteCursors, () => {
       fired++;
     });
     B.world.reactive.notify(); // baseline the watch

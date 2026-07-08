@@ -133,7 +133,7 @@ describe("reactive Tier-1 (query) on reset", () => {
     const w = createWorld();
     w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++);
+    w.reactive.observeQuery(posQ, () => fired++);
     w.reactive.notify(); // baseline — nothing stamped since registration
     expect(fired).toBe(0);
 
@@ -147,7 +147,7 @@ describe("reactive Tier-1 (query) on reset", () => {
     w.spawn({ components: [[Pos, { x: 1, y: 1 }]] });
     const bytes = w.export();
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++);
+    w.reactive.observeQuery(posQ, () => fired++);
     w.reactive.notify();
     expect(fired).toBe(0);
 
@@ -169,7 +169,7 @@ describe("reactive Tier-1 (query) on reset", () => {
     w.addTag(e, Selected);
     const tagQ = defineQuery([Pos, Selected]);
     let fired = 0;
-    w.reactive.observeQuery(tagQ, [Pos], () => fired++);
+    w.reactive.observeQuery(tagQ, () => fired++);
     w.reactive.notify();
     expect(fired).toBe(0);
 
@@ -184,7 +184,7 @@ describe("reactive frame coherence around reset (registration is a boundary)", (
     const w = createWorld();
     w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++);
+    w.reactive.observeQuery(posQ, () => fired++);
     w.reactive.notify();
     w.reset();
     w.reactive.notify();
@@ -198,7 +198,7 @@ describe("reactive frame coherence around reset (registration is a boundary)", (
     w.reset();
 
     let fired = 0;
-    w.reactive.observeQuery(posQ, [Pos], () => fired++); // baselined AFTER the reset
+    w.reactive.observeQuery(posQ, () => fired++); // baselined AFTER the reset
     w.reactive.notify();
     expect(fired).toBe(0); // the wipe predates the subscription — not observed
   });
@@ -265,7 +265,7 @@ describe("reset rejection (mid-tick / mid-emit)", () => {
     const w = createWorld();
     const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     let threw = false;
-    w.reactive.observeQuery(posQ, [Pos], () => {
+    w.reactive.observeQuery(posQ, () => {
       try {
         w.reset();
       } catch {

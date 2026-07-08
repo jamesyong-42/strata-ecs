@@ -117,7 +117,7 @@ describe("attach — two-phase projection seeding the baseline (§13.1)", () => 
 
     const w = createWorld();
     let fires = 0;
-    w.reactive.observeQuery(defineQuery([BPos]), [BPos], () => {
+    w.reactive.observeQuery(defineQuery([BPos]), () => {
       fires++;
     });
     attachDurable(w, store);
@@ -160,7 +160,7 @@ describe("drain — convergence smoke (§13.3, 005 §5.3)", () => {
 
     const wB = createWorld();
     let bFires = 0;
-    wB.reactive.observeQuery(defineQuery([BPos]), [BPos], () => {
+    wB.reactive.observeQuery(defineQuery([BPos]), () => {
       bFires++;
     });
     const attB = attachDurable(wB, b);

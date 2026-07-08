@@ -313,7 +313,7 @@ function runCell(cell: Cell): () => void {
     });
     // "armed" = a reactive observer has registered (which calls armAccessEnforcement). The observer
     // itself never fires here (we never notify) — it exists only to flip the enforcement switch on.
-    if (cell.armed) world.reactive.observeQuery(qBase, [], () => {});
+    if (cell.armed) world.reactive.observeQuery(qBase, () => {}, { cols: [] });
 
     const act =
       cell.loc === "in"
@@ -355,7 +355,7 @@ describe("001 Rule 3 — the throw is actionable", () => {
         [UNDECL, { v: 0 }],
       ],
     });
-    world.reactive.observeQuery(qBase, [], () => {});
+    world.reactive.observeQuery(qBase, () => {}, { cols: [] });
     const sys = defineSystem(qBase, (batch) => batch.col(UNDECL), {
       name: "Painter",
       access: { write: [] },
@@ -374,7 +374,7 @@ describe("001 Rule 3 — the throw is actionable", () => {
         [UNDECL, { v: 0 }],
       ],
     });
-    world.reactive.observeQuery(qBase, [], () => {});
+    world.reactive.observeQuery(qBase, () => {}, { cols: [] });
     const sys = defineSystem(qBase, (_batch, ctx) => ctx.edit(e).set(UNDECL, { v: 9 }), {
       name: "Mover",
       access: { write: [] },

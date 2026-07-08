@@ -220,10 +220,10 @@ export class DurableStore {
    */
   transaction<R>(fn: (tx: Mutator) => R): R {
     if (this.txRuntime === null) {
-      throw new Error("strata: doc.transaction requires an attached store — call attachDurable(world, store) first (§12.4).");
+      throw new Error("strata: doc.transaction requires an attached store — call attachDurable(world, store) first.");
     }
     if (this.txOpen) {
-      throw new Error("strata: nested doc.transaction is not allowed — one open transaction per store (§12.2).");
+      throw new Error("strata: nested doc.transaction is not allowed — one open transaction per store.");
     }
     this.txOpen = true;
     try {
@@ -311,7 +311,7 @@ export class DurableStore {
   /** History ops are illegal mid-transaction: the recorder's buffered ops aren't sealed yet (§12.2). */
   private assertNoOpenTx(op: string): void {
     if (this.txOpen) {
-      throw new Error(`strata: ${op} inside doc.transaction is not allowed — commit the transaction first (§12.2).`);
+      throw new Error(`strata: ${op} inside doc.transaction is not allowed — commit the transaction first.`);
     }
   }
 

@@ -10,7 +10,7 @@
  * despawn cascade land in M3; queries in M4; the deferring `ctx` and tick in M5.
  */
 
-import { type Entity, slotOf } from "./entity";
+import { type Entity, genOf, slotOf } from "./entity";
 import { EntityTable } from "./entity-table";
 import { Archetype } from "./archetype";
 import { TagStore } from "./tags";
@@ -155,9 +155,15 @@ export class RuntimeStore implements ECSStore {
    */
   private reactiveOn = false;
 
-  /** @internal Arm reactive bookkeeping — one-way, flipped on first `world.reactive` access. */
+  /** @internal Arm reactive bookkeeping — one-way, flipped on the first `observe*` registration
+   *  (reading `world.reactive` is side-effect-free; only registering an observer arms stamping). */
   enableReactive(): void {
     this.reactiveOn = true;
+  }
+
+  /** @internal Side-effect-free probe for `world.isReactiveEnabled` (review-part1 Tier-3). */
+  get reactiveEnabled(): boolean {
+    return this.reactiveOn;
   }
 
   /**
@@ -294,6 +300,37 @@ export class RuntimeStore implements ECSStore {
   }
 
   /**
+   * True ONLY while `reactive.notify()` dispatches callbacks — NOT during the dev-tool
+   * WorldObserver emits (onSpawn/onDestroy/onReset), which also set `inObserverEmit` for the
+   * structural-rejection guards but have NO trailing `advanceFrame()` to consume a frame+1 stamp.
+   * `stampFrame` keys off THIS flag: stamping ahead from a spawn-observer callback left the stamp
+   * one frame in the future with nothing to consume it, and a Tier-1 watch (no equality check)
+   * fired at TWO consecutive notifies for one write (triage-review confirmed finding).
+   */
+  private inNotifyStamping = false;
+
+  /** @internal Set by `reactive.notify()` around its callback dispatch; returns the prior value. */
+  setNotifyStamping(active: boolean): boolean {
+    const prev = this.inNotifyStamping;
+    this.inNotifyStamping = active;
+    return prev;
+  }
+
+  /**
+   * The frame VALUE writes stamp at. Outside notify callbacks: the current frame. Inside a
+   * `reactive.notify()` callback: the NEXT frame — the current frame is already seen by every watch
+   * processed this pass, so a current-frame stamp was nondeterministically lost (fired only if its
+   * watch happened to be later in the walk). Stamping `frame + 1` makes a callback write
+   * deterministic: `notify()`'s trailing `advanceFrame()` moves the world to exactly that frame,
+   * and the NEXT notify delivers it (review-part1 Tier-3 fix). Dev-tool observer emits stamp the
+   * CURRENT frame (see {@link inNotifyStamping}). Structural mutation stays rejected in callbacks —
+   * only the value paths (stampComponent / bumpComponentMax / bumpResource) consult this.
+   */
+  private get stampFrame(): number {
+    return this.inNotifyStamping ? this.frameCounter + 1 : this.frameCounter;
+  }
+
+  /**
    * DEV guard (002 §6): a STRUCTURAL mutation issued from inside an observer / reactive callback is
    * rejected — mid-flush it would corrupt the command-buffer drain, mid-notify it would re-enter
    * iteration; callbacks must SCHEDULE work instead. Returns true when blocked so the caller
@@ -412,7 +449,7 @@ export class RuntimeStore implements ECSStore {
       next.set(this.resourceFrames);
       this.resourceFrames = next;
     }
-    this.resourceFrames[id] = this.frameCounter;
+    this.resourceFrames[id] = this.stampFrame; // frame+1 inside a callback — deterministic next-notify delivery
   }
 
   /** @internal The frame of the most recent `setResource(id)` — 0 when never stamped/out of range (003 §1.2). */
@@ -431,7 +468,9 @@ export class RuntimeStore implements ECSStore {
       next.set(this.componentMaxFrame);
       this.componentMaxFrame = next;
     }
-    this.componentMaxFrame[cid] = this.frameCounter;
+    // stampFrame, not frameCounter: a callback write stamps frame+1, and the R5 skip gate must not
+    // eat it (max < the column stamp would skip the whole component map next notify).
+    if (this.stampFrame > this.componentMaxFrame[cid]) this.componentMaxFrame[cid] = this.stampFrame;
   }
 
   /**
@@ -465,7 +504,7 @@ export class RuntimeStore implements ECSStore {
     if (!this.reactiveOn) return;
     const slot = A.componentSlot(cid);
     if (slot >= 0) {
-      A.lastWrittenFrame[slot] = this.frameCounter;
+      A.lastWrittenFrame[slot] = this.stampFrame; // frame+1 inside a callback (see stampFrame)
       this.bumpComponentMax(cid);
     }
   }
@@ -555,7 +594,7 @@ export class RuntimeStore implements ECSStore {
     if (system === null) return;
     if (!this.allowedFor(system).has(c.id)) {
       throw new Error(
-        `strata: system "${system.name}" accessed component "${c.name}" via col() but did not declare it in access (add it to access.read or access.write, 001 Rule 3).`,
+        `strata: system "${system.name}" accessed component "${c.name}" via col() but did not declare it in access (add it to access.read or access.write).`,
       );
     }
   }
@@ -572,7 +611,7 @@ export class RuntimeStore implements ECSStore {
     const w = system.access?.write;
     if (w === undefined || !w.some((x) => x.id === c.id)) {
       throw new Error(
-        `strata: system "${system.name}" wrote component "${c.name}" via edit().set but did not declare it in access.write (001 Rule 3).`,
+        `strata: system "${system.name}" wrote component "${c.name}" via edit().set but did not declare it in access.write.`,
       );
     }
   }
@@ -860,7 +899,9 @@ export class RuntimeStore implements ECSStore {
    */
   private assertAlive(e: Entity, op: string): void {
     if (!this.table.isAlive(e)) {
-      throw new Error(`strata: ${op} called on a dead or stale entity handle.`);
+      throw new Error(
+        `strata: ${op} called on a dead or stale entity handle (slot ${slotOf(e)}, generation ${genOf(e)}) — the entity was destroyed, or the handle predates a world reset/reload. Re-fetch a live handle before mutating.`,
+      );
     }
   }
 
@@ -915,15 +956,9 @@ export class RuntimeStore implements ECSStore {
     if (!this.has(e, c)) {
       throw new Error(`strata: component "${c.name}" is not present — use addComponent to attach it first.`);
     }
-    if (DEV && this.inObserverEmit) {
-      // A value write is exempt from the structural rejection (immediate, non-structural), but a
-      // writeComponent from inside a reactive callback stamps the CURRENT frame — already seen by
-      // every watch processed this pass — so it is silently unobservable. Mirrors setResource's warn
-      // (005 §5.5, 006 §C2). This is a diagnostic only; the write still lands.
-      devWarn(
-        `writeComponent("${c.name}") from inside a reactive callback is stamped at the current frame and will not be observed — schedule it for the next frame instead (002 §6).`,
-      );
-    }
+    // A value write from inside a reactive callback is legal and DETERMINISTIC: it stamps the NEXT
+    // frame (see stampFrame), so the next notify() delivers it. (The old behavior — current-frame
+    // stamp, nondeterministically lost — carried a DEV warn here; the fix retires it.)
     if (DEV) this.enforceWriteAccess(c); // 001 Rule 3: undeclared edit-path write throws before mutating
     this.doWriteCells(e, c, encodeComponentValue(c, value as Record<string, unknown>));
   }
@@ -1126,14 +1161,9 @@ export class RuntimeStore implements ECSStore {
   // ---------------------------------------------------------------------------
 
   setResource<S>(res: Resource<S>, value: S): void {
-    if (DEV && this.inObserverEmit) {
-      // Value writes are exempt from the structural rejection, but a setResource from inside a
-      // reactive callback stamps the CURRENT frame — already seen by every watch processed this
-      // pass — so it would be silently unobservable forever. Diagnose loudly; schedule instead.
-      devWarn(
-        `setResource("${res.name}") from inside a reactive callback is stamped at the current frame and will not be observed — schedule it for the next frame instead (002 §6).`,
-      );
-    }
+    // A setResource from inside a reactive callback is legal and DETERMINISTIC: it stamps the NEXT
+    // frame (see stampFrame), so the next notify() delivers it. (Previously it stamped the current,
+    // already-seen frame and was silently unobservable — that behavior and its DEV warn are retired.)
     const obj: Record<string, unknown> = {};
     const v = value as Record<string, unknown>;
     for (const f of res.fields) {
@@ -1151,20 +1181,13 @@ export class RuntimeStore implements ECSStore {
 
   /**
    * Remove a resource — the reconcile path's `resource-remove` lands here (005 §6.1). Mirrors
-   * {@link setResource}: same in-emit devWarn, same `bumpResource` stamp — but stamps ONLY if the
-   * resource was present. Removing an ABSENT resource is a stampless no-op (`Map.delete` returns
-   * false), which makes projection idempotent — replaying a `resource-remove` for a resource already
-   * gone changes nothing and notifies no one (conformance P7).
+   * {@link setResource}: same `bumpResource` stamp — including its frame+1 stamp inside a reactive
+   * callback, so a remove issued from a callback is legal and delivered at the next notify (see
+   * stampFrame) — but stamps ONLY if the resource was present. Removing an ABSENT resource is a
+   * stampless no-op (`Map.delete` returns false), which makes projection idempotent — replaying a
+   * `resource-remove` for a resource already gone changes nothing and notifies no one (conformance P7).
    */
   removeResource<S>(res: Resource<S>): void {
-    if (DEV && this.inObserverEmit) {
-      // Mirrors setResource's in-emit devWarn: a remove from inside a reactive callback stamps the
-      // CURRENT frame — already seen by every watch processed this pass — so the transition to
-      // undefined would be silently unobservable forever. Diagnose loudly; schedule instead (002 §6).
-      devWarn(
-        `removeResource("${res.name}") from inside a reactive callback is stamped at the current frame and will not be observed — schedule it for the next frame instead (002 §6).`,
-      );
-    }
     if (this.resources.delete(res.id)) this.bumpResource(res.id); // stamp ONLY if it was present
   }
 
@@ -1194,7 +1217,7 @@ export class RuntimeStore implements ECSStore {
     // Fires once as the buffer crosses the cap (length resets to 0 at flush, so each phase re-arms).
     if (DEV && arr.length === this.commandBufferWarnThreshold) {
       devWarn(
-        `command buffer reached ${arr.length} deferred ops in one phase — this is unbounded and may exhaust memory. Split the work across phases/ticks, or apply changes immediately outside iteration (§5.4).`,
+        `command buffer reached ${arr.length} deferred ops in one phase — this is unbounded and may exhaust memory. Split the work across phases/ticks, or apply changes immediately outside iteration.`,
       );
     }
   }
@@ -1588,15 +1611,6 @@ class ArchetypeChunk implements Batch {
     // The dynamic build is typed as a loose column bag; ColumnsOf<Sch> is the field-precise view of
     // the same object (each key routes to its declared column, verified by columnKindOf/allocColumn).
     return out as ColumnsOf<Sch>;
-  }
-
-  get columns(): Record<string, Record<string, Column>> {
-    const out: Record<string, Record<string, Column>> = {};
-    for (const id of this.arch.componentIds) {
-      const c = componentById(id);
-      if (c !== undefined) out[c.name] = this.col(c);
-    }
-    return out;
   }
 
   entity(r: number): Entity {

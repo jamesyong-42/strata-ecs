@@ -212,7 +212,7 @@ export class EphemeralStore {
       );
     }
     if (typeof opts.send !== "function") {
-      throw new Error("strata: createEphemeralStore requires a send(bytes) callback — the outbound transport sink (§15.5).");
+      throw new Error("strata: createEphemeralStore requires a send(bytes) callback — the outbound transport sink.");
     }
     this.source = source;
     this.peerId = opts.peerId;
@@ -253,7 +253,7 @@ export class EphemeralStore {
       // proceeding would half-apply (`Local` swallowed by the runtime's in-emit addTag guard), so it
       // throws in DEV. Production has no in-emit guards, so it applies fully there (the runtime's posture).
       throw new Error(
-        "strata: eph.spawn() cannot run from inside an observer or reactive callback — schedule presence updates for the next frame (002 §6, §C2).",
+        "strata: eph.spawn() cannot run from inside an observer or reactive callback — schedule presence updates for the next frame.",
       );
     }
 
@@ -453,7 +453,7 @@ export class EphemeralStore {
   private requireSeam(op: string): EphemeralRuntime {
     if (this.seam === null) {
       throw new Error(
-        `strata: eph.${op}() requires an attached store — call attachEphemeral(world, eph) first (§15.2).`,
+        `strata: eph.${op}() requires an attached store — call attachEphemeral(world, eph) first.`,
       );
     }
     return this.seam;
@@ -463,7 +463,7 @@ export class EphemeralStore {
   private rejectStructuralInSystem(op: string, seam: EphemeralRuntime): void {
     if (seam.isIterating()) {
       throw new Error(
-        `strata: structural eph.${op}() cannot run during query iteration or a tick — a mid-iteration archetype migration corrupts the walk (memory safety, not style). Ephemeral structural mutation is designed for input handlers, outside the tick; to derive ephemeral state from a system, stage the intent during the tick and apply it after tick() returns (§15.2, 006 §A4).`,
+        `strata: structural eph.${op}() cannot run during query iteration or a tick — a mid-iteration archetype migration corrupts the walk (memory safety, not style). Ephemeral structural mutation is designed for input handlers, outside the tick; to derive ephemeral state from a system, stage the intent during the tick and apply it after tick() returns.`,
       );
     }
   }
@@ -477,7 +477,7 @@ export class EphemeralStore {
   private rejectInEmit(op: string, seam: EphemeralRuntime): boolean {
     if (DEV && seam.isInEmit()) {
       devError(
-        `eph.${op}() from inside an observer or reactive callback is ignored — a mutation there half-applies through the runtime's mixed in-emit guards; schedule it for the next frame (002 §6, §C2).`,
+        `eph.${op}() from inside an observer or reactive callback is ignored — a mutation there half-applies through the runtime's mixed in-emit guards; schedule it for the next frame.`,
       );
       return true;
     }
@@ -494,7 +494,7 @@ export class EphemeralStore {
     const key = seam.projector.keyFor(e);
     if (key === undefined || !key.startsWith(this.prefix)) {
       throw new Error(
-        `strata: eph.${op}() on an entity outside your partition — remote peers' ephemeral entities are read-only projections; you may only mutate entities you spawned (§15.1/§15.4).`,
+        `strata: eph.${op}() on an entity outside your partition — remote peers' ephemeral entities are read-only projections; you may only mutate entities you spawned.`,
       );
     }
     const oe = this.ownEntities.get(key);
@@ -510,7 +510,7 @@ export class EphemeralStore {
   private assertNotLocal(t: Tag, op: string): void {
     if (t === Local) {
       throw new Error(
-        `strata: eph.${op}(Local) is not allowed — Local is applied automatically by the store to your own partition and is query-only; manually mutating it desynchronizes every Local/Not(Local) query (§15.4).`,
+        `strata: eph.${op}(Local) is not allowed — Local is applied automatically by the store to your own partition and is query-only; manually mutating it desynchronizes every Local/Not(Local) query.`,
       );
     }
   }
@@ -527,7 +527,7 @@ export class EphemeralStore {
       for (const f of c.fields) {
         if (f.spec.type === "eid") {
           throw new Error(
-            `strata: ephemeral component "${c.name}" declares an eid field "${f.name}" — an eid is a packed runtime handle, meaningless across the wire. Reference entities with a key field instead (005 §7).`,
+            `strata: ephemeral component "${c.name}" declares an eid field "${f.name}" — an eid is a packed runtime handle, meaningless across the wire. Reference entities with a key field instead.`,
           );
         }
       }

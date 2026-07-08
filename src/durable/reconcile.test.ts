@@ -243,7 +243,7 @@ describe("the drag flow — §18.5, the architecture in miniature", () => {
     // Phase 4 — exchange: both converge to A's committed value (committer-wins as the later op). B's
     // observeQuery lights up with zero wiring (005 §5.3).
     let bFires = 0;
-    h.wB.reactive.observeQuery(defineQuery([MPos]), [MPos], () => {
+    h.wB.reactive.observeQuery(defineQuery([MPos]), () => {
       bFires++;
     });
     h.deliverToB();
@@ -268,7 +268,7 @@ describe("silent-reconverge — the held-cell sweep (006 C5)", () => {
 
     h.wA.edit(hA).set(MPos, { x: 0, y: 0 }); // reconverge to baseline exactly (NO commit)
     let fires = 0;
-    h.wA.reactive.observeQuery(defineQuery([MPos]), [MPos], () => {
+    h.wA.reactive.observeQuery(defineQuery([MPos]), () => {
       fires++;
     });
     h.wA.sync(); // the sweep sees runtime == baseline → applies the held {7,7} (a projector write → stamps)
@@ -628,7 +628,7 @@ describe("frame-loop integration — in-system durable commit + concurrent remot
     );
     // Arming an observer also arms 001 enforcement (001 §2.4), so the C4 chokepoint is live this run.
     let aFires = 0;
-    h.wA.reactive.observeQuery(defineQuery([MPos]), [MPos], () => {
+    h.wA.reactive.observeQuery(defineQuery([MPos]), () => {
       aFires++;
     });
 

@@ -71,16 +71,22 @@ export class World {
   }
 
   /**
-   * The reactive observer layer (Patch Note 002). Lazily created + cached; accessing it is what
-   * turns the feature on (its first observer arms 001's dev-enforcement, §2.4). Each World has its
-   * own — it belongs to this world's store and dies with it (002 §6).
+   * The reactive observer layer (Patch Note 002). Lazily created + cached; READING this getter is
+   * side-effect-free — the stamp/bump sites arm when the FIRST observe* call registers, not on
+   * property access (review-part1 Tier-3 fix: a stray console.log of the world must not flip a
+   * +17–28% profile switch). Each World has its own — it belongs to this world's store and dies
+   * with it (002 §6).
    */
   get reactive(): Reactive {
     if (this.reactiveInstance === null) {
-      this.store.enableReactive(); // arms the store's stamp/bump sites — zero stores before this
       this.reactiveInstance = new Reactive(this.store);
     }
     return this.reactiveInstance;
+  }
+
+  /** Whether reactive stamping is armed (side-effect-free probe; arms on the first observe* call). */
+  get isReactiveEnabled(): boolean {
+    return this.store.reactiveEnabled;
   }
 
   /**
@@ -99,7 +105,7 @@ export class World {
   private assertNotIterating(op: string): void {
     if (this.iterationDepth > 0) {
       throw new Error(
-        `strata: world.${op}() cannot run during query iteration — a mid-iteration structural change reorders archetype rows and corrupts the walk; use the deferred ctx.* form inside a system, or mutate outside the query body (§5.2, 006 §A4).`,
+        `strata: world.${op}() cannot run during query iteration — a mid-iteration structural change reorders archetype rows and corrupts the walk; use the deferred ctx.* form inside a system, or mutate outside the query body.`,
       );
     }
   }
@@ -214,6 +220,32 @@ export class World {
     const source = this.store.query(q);
     return { each: (fn) => this.eachGuarded(source, fn) };
   }
+
+  /**
+   * Count the entities matching `q` — the sum of matched rows across every chunk (§6.2). Reuses the
+   * query machinery and is iteration-safe (brackets the walk with the same guard as {@link World.query});
+   * a pure read, so it may run mid-iteration.
+   */
+  count(q: Query): number {
+    let n = 0;
+    this.eachGuarded(this.store.query(q), (batch) => {
+      n += batch.count;
+    });
+    return n;
+  }
+
+  /**
+   * Materialize the entity handles matching `q` into a fresh array (§6.2). Convenience over a manual
+   * walk; iteration-safe (brackets the walk with the query guard). Prefer {@link World.query} on the
+   * hot path — this allocates the array plus one handle per match.
+   */
+  entities(q: Query): Entity[] {
+    const out: Entity[] = [];
+    this.eachGuarded(this.store.query(q), (batch) => {
+      for (let i = 0; i < batch.count; i++) out.push(batch.entity(batch.rows[i]));
+    });
+    return out;
+  }
   setResource<S>(res: Resource<S>, value: S): void {
     this.store.setResource(res, value);
   }
@@ -224,6 +256,21 @@ export class World {
   }
   getResource<S>(res: Resource<S>): S | undefined {
     return this.store.getResource(res);
+  }
+  /**
+   * Read a resource, apply `fn` to its current value, and write the result back — the read-modify-write
+   * in one call, replacing the `const v = getResource(R)!; setResource(R, { ...v, ... })` mirror pattern.
+   * Value-shaped like {@link World.setResource} (it reorders no columns), so it is legal mid-iteration.
+   * Throws if the resource is unset — there is no current value to update; call setResource first.
+   */
+  updateResource<S>(res: Resource<S>, fn: (v: S) => S): void {
+    const current = this.store.getResource(res);
+    if (current === undefined) {
+      throw new Error(
+        `strata: updateResource("${res.name}") requires the resource to be set first — there is no current value to update. Call setResource to initialize it.`,
+      );
+    }
+    this.store.setResource(res, fn(current));
   }
 
   // --- the frame ---
@@ -241,7 +288,7 @@ export class World {
       // ALL builds: a tick dispatched mid query-walk would run systems that migrate archetypes under
       // the walk — memory corruption, not a style violation (rides the §A4 guard).
       throw new Error(
-        "strata: world.tick() cannot run during query iteration — ticks are driven from the frame boundary (sync() → tick() → notify() → render) and never nest inside a query walk or a system body (006 §A4, §16.4).",
+        "strata: world.tick() cannot run during query iteration — ticks are driven from the frame boundary (sync() → tick() → notify() → render) and never nest inside a query walk or a system body.",
       );
     }
     if (this.ticking) {
@@ -249,7 +296,7 @@ export class World {
       // nested tick's finally would clear `ticking` while the outer tick still runs, letting reset()
       // slip its mid-tick guard.
       throw new Error(
-        "strata: world.tick() cannot run inside another tick() — one tick per frame boundary; a system must not drive the frame (006 §16.4).",
+        "strata: world.tick() cannot run inside another tick() — one tick per frame boundary; a system must not drive the frame.",
       );
     }
     if (DEV && this.store.inObserverEmitActive) {
@@ -257,7 +304,7 @@ export class World {
       // would half-apply its phase flushes — the mixed in-emit guards swallow structural commands
       // while value writes land — so it is forbidden. Schedule it for the next frame boundary.
       throw new Error(
-        "strata: world.tick() cannot run from inside an observer or reactive callback — schedule it for the next frame boundary (005 §5.5, 006 §C2).",
+        "strata: world.tick() cannot run from inside an observer or reactive callback — schedule it for the next frame boundary.",
       );
     }
     const tick = ++this.tickCounter;
@@ -359,12 +406,12 @@ export class World {
   sync(): void {
     if (this.iterationDepth > 0) {
       throw new Error(
-        "strata: world.sync() cannot run during query iteration — draining inbound facts mid-iteration would migrate archetypes under the walk; call sync() at the frame boundary, before tick() (006 §A4, §C2).",
+        "strata: world.sync() cannot run during query iteration — draining inbound facts mid-iteration would migrate archetypes under the walk; call sync() at the frame boundary, before tick().",
       );
     }
     if (DEV && this.store.inObserverEmitActive) {
       throw new Error(
-        "strata: world.sync() cannot run from inside an observer or reactive callback — a drain there would half-apply a ChangeBatch (adds land, removes are swallowed); schedule it for the next frame boundary (005 §5.5, 006 §C2).",
+        "strata: world.sync() cannot run from inside an observer or reactive callback — a drain there would half-apply a ChangeBatch (adds land, removes are swallowed); schedule it for the next frame boundary.",
       );
     }
     // Iterate a SNAPSHOT and re-check registration: a source may unregister itself (or a peer) from
@@ -411,7 +458,7 @@ export class World {
       // SWALLOWS the structural relation-edge writes (the mixed in-emit guards reject them) — a
       // half-applied document. Reject before parsing, both arms; schedule for the next frame boundary.
       throw new Error(
-        "strata: world.import() cannot run from inside an observer or reactive callback — a wholesale load there lands entities but silently swallows relation edges; schedule it for the next frame boundary (005 §5.5, 006 §C2).",
+        "strata: world.import() cannot run from inside an observer or reactive callback — a wholesale load there lands entities but silently swallows relation edges; schedule it for the next frame boundary.",
       );
     }
     if (opts?.replace) {
@@ -436,7 +483,7 @@ export class World {
    */
   reset(): void {
     if (this.ticking) {
-      throw new Error("strata: world.reset() cannot run during tick() — reset only outside iteration (§5.2).");
+      throw new Error("strata: world.reset() cannot run during tick() — reset only outside iteration.");
     }
     this.assertNotIterating("reset"); // also refuse a reset issued from inside world.query().each() (006 §A4)
     this.store.reset(); // throws if called from inside an observer / reactive callback

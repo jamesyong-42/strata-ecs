@@ -246,7 +246,7 @@ class Transaction implements Mutator {
   addComponent<S>(e: Entity, c: Component<S>, v: S): void {
     const { key, overlay } = this.touch(e);
     if (overlay.components.has(c.id)) {
-      throw new Error(`strata: tx.addComponent("${c.name}") — component already present; use tx.edit().set to overwrite (§12.2).`);
+      throw new Error(`strata: tx.addComponent("${c.name}") — component already present; use tx.edit().set to overwrite.`);
     }
     const value = canon(c, v as ComponentValue); // 006 A1 + record-time validation
     const op = { kind: "addComponent" as const, key, comp: c as Component, value };
@@ -263,7 +263,7 @@ class Transaction implements Mutator {
   removeComponent(e: Entity, c: Component): void {
     const { key, overlay } = this.touch(e);
     if (!overlay.components.has(c.id)) {
-      throw new Error(`strata: tx.removeComponent("${c.name}") — component is not present on this entity (§12.2).`);
+      throw new Error(`strata: tx.removeComponent("${c.name}") — component is not present on this entity.`);
     }
     overlay.components.delete(c.id); // now absent → a later addComponent may re-introduce it (no coalesce)
     this.ops.push({ kind: "removeComponent", key, comp: c });
@@ -275,7 +275,7 @@ class Transaction implements Mutator {
       set: <S>(c: Component<S>, v: S) => {
         const state = overlay.components.get(c.id);
         if (state === undefined) {
-          throw new Error(`strata: tx.edit().set("${c.name}") — component is not present; add it with tx.addComponent first (§12.2).`);
+          throw new Error(`strata: tx.edit().set("${c.name}") — component is not present; add it with tx.addComponent first.`);
         }
         const value = canon(c, v as ComponentValue); // 006 A1 + record-time validation
         if (state.provenance === "introduced") {

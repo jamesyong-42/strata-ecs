@@ -393,7 +393,7 @@ describe("the full loop — two attached stores", () => {
     b.subscribeOutbound((x) => toA.push(x));
 
     let bFires = 0;
-    wB.reactive.observeQuery(defineQuery([TXPos]), [TXPos], () => {
+    wB.reactive.observeQuery(defineQuery([TXPos]), () => {
       bFires++;
     });
 
@@ -432,7 +432,7 @@ describe("the full loop — two attached stores", () => {
 describe("006 C4 — in-system value commit rides 001 enforcement", () => {
   it("an undeclared in-system value commit DEV-throws once enforcement is armed; declaring access.write passes", () => {
     const { store, w, h } = attachedWithPos({ x: 1, y: 1 });
-    w.reactive.observeQuery(defineQuery([TXPos]), [TXPos], () => {}); // first observer arms 001 (001 §2.4)
+    w.reactive.observeQuery(defineQuery([TXPos]), () => {}); // first observer arms 001 (001 §2.4)
 
     // No access.write → the synchronous writeComponent hits the 001 chokepoint (006 C4).
     const Undeclared = defineSystem(

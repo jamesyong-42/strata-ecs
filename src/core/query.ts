@@ -9,7 +9,7 @@
  * archetypes against it.
  */
 
-import type { Column, ColumnsOf } from "./field";
+import type { ColumnsOf } from "./field";
 import type { Entity } from "./entity";
 import type { Component, ComponentId, Relation, Tag, TagId } from "./schema";
 
@@ -130,28 +130,22 @@ export interface Query {
  * ```
  *
  * `for (const r of batch)` is equivalent (row filters fused) and ergonomic — now backed by `rows`,
- * not a generator. `denseCount` is the raw archetype row count; the raw `for (r < denseCount)` loop
- * is valid ONLY when `isDense`. Read columns via `col`. `rows`/columns/`entity` are valid only inside
- * the current `each` callback (chunk-scoped; the row buffer may be reused for the next chunk).
+ * not a generator. Read columns via `col`. `rows` / the columns / `entity` are valid only inside the
+ * current `each` callback (chunk-scoped; the row buffer may be reused for the next chunk).
  */
 export interface Batch extends Iterable<number> {
   /** Number of MATCHED rows in this chunk (row filters applied). Loop bound for {@link Batch.rows}. */
   readonly count: number;
   /** Matched row indices; valid for `rows[0 .. count)`. Chunk-scoped (do not retain past `each`). */
   readonly rows: Int32Array;
-  /** Raw archetype row count. Not a matched-row count (§6.2). */
+  /** @internal Raw archetype row count (§6.2) — the `for (r < denseCount)` bound, valid only when `isDense`. */
   readonly denseCount: number;
-  /** True only for a dense, unseeded, no-row-filter chunk (the raw `denseCount` loop is valid). */
+  /** @internal True only for a dense, unseeded, no-row-filter chunk (the raw `denseCount` loop is valid). */
   readonly isDense: boolean;
   /** Raw columns for a component in this chunk, keyed by field name — typed from the component's
    *  schema literal (`col(Position).x` is a `Float32Array`, no cast). A bare {@link Component}
    *  degrades to the loose `{ [name: string]: Column }`. */
   col<S, Sch>(c: Component<S, Sch>): ColumnsOf<Sch>;
-  /**
-   * Name-keyed columns for every component in this chunk's archetype (`const { Position } =
-   * batch.columns`). Dev/demo sugar, loosely typed — prefer {@link Batch.col} in real code (§6.2).
-   */
-  readonly columns: Record<string, Record<string, Column>>;
   /** The entity handle at row `r`. */
   entity(r: number): Entity;
   /** A target of `rel` for the entity at row `r` (the first, for a many-relation), validated. */

@@ -23,10 +23,12 @@ const Selected = defineTag("STMSelected");
 const Owns = defineRelation("STMOwns", { arity: "one" });
 const Links = defineRelation("STMLinks", { arity: "many" });
 
-/** Stamping is gated on the reactive layer being touched (002 §2.2's master gate) — arm it. */
+/** Stamping is gated on the reactive layer being armed (002 §2.2's master gate). These tests probe
+ *  the stamp SUBSTRATE directly (no observers), so arm the store explicitly — reading `world.reactive`
+ *  is side-effect-free now; arming happens on the first observe* call or this internal entry point. */
 function reactiveWorld(): World {
   const w = createWorld();
-  void w.reactive;
+  w.runtime.enableReactive();
   return w;
 }
 
