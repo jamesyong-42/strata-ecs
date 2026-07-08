@@ -3,6 +3,13 @@ import { defineConfig } from "vite";
 import wasm from "vite-plugin-wasm";
 import topLevelAwait from "vite-plugin-top-level-await";
 
+// Extra HTML entry points beyond index.html (multi-page build). probe.html is the transport
+// bootstrap-stall measurement harness (src/collab/stall-probe.ts) — not part of the shipped demo.
+const inputs = {
+  main: fileURLToPath(new URL("./index.html", import.meta.url)),
+  probe: fileURLToPath(new URL("./probe.html", import.meta.url)),
+};
+
 // Live-source mode (default): `@vibecook/strata-ecs` resolves straight to ../../src so framework edits
 // hot-reload the example instantly — this example exists to drive strata-ecs's development.
 // Set STRATA_DIST=1 to drop the alias and exercise the built dist through the exports map
@@ -28,7 +35,7 @@ export default defineConfig({
   // topLevelAwait's transform emits syntax esbuild refuses to down-level to the es2020 default,
   // so the production build needs a target with native top-level await (every evergreen browser
   // has it). Dev is unaffected; this only gates `vite build`.
-  build: { target: "esnext" },
+  build: { target: "esnext", rollupOptions: { input: inputs } },
   resolve: {
     alias: useDist
       ? []
