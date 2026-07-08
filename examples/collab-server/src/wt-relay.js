@@ -25,7 +25,7 @@
  * session just leaves; a reconnect triggers the client's full re-bootstrap, so the relay needs no memory
  * of who saw what. TLS/cert provisioning is src/certs.js; the combined launcher is src/start.js.
  *
- * Demo only — no auth, no authorization, no rate limiting. See the README's warning. The 14-day pinned-hash
+ * Demo only — no auth, no authorization, no rate limiting. See the README's warning. The 13-day pinned-hash
  * cert is a demo escape hatch from a real PKI, not a production posture.
  */
 

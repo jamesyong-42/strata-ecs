@@ -20,9 +20,17 @@ const wtHost = process.env.WT_HOST ?? "127.0.0.1";
 
 const cert = await loadOrCreateCert();
 
-// WS relay (unchanged behavior — the same dumb byte-relay src/server.js exposes).
+// WS relay (unchanged behavior — the same dumb byte-relay src/server.js exposes). A bind failure
+// (port in use) emits "error" and "listening" never fires — exit loudly instead of awaiting forever
+// (review finding: the bare listening-await hung the launcher with no message).
 const wss = startRelay(wsPort);
-await new Promise((res) => wss.on("listening", res));
+await new Promise((res, rej) => {
+  wss.on("listening", res);
+  wss.on("error", rej);
+}).catch((err) => {
+  console.error(`[collab] WS relay failed to start on :${wsPort} — ${err.message}`);
+  process.exit(1);
+});
 
 // WT relay (dual-class over one QUIC connection).
 const { close: closeWt } = await startWtRelay({

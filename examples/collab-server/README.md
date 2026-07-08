@@ -54,9 +54,9 @@ inter-arrival):
 
 | link | WS p99 / max | WebTransport p99 / max |
 |---|---|---|
-| clean | **49 / 77 ms** | 54 / 91–153 ms |
-| 50 ms delay | 52–58 / 68 ms | 57–59 / 73 ms |
-| 25 ms delay + 1% loss | 88–99 / 175 ms | **58–61 / 83 ms** |
+| clean | **49–50 / 73–82 ms** | 51–55 / 91–153 ms |
+| 50 ms delay | 52–58 / 66–68 ms | 57–59 / 67–73 ms |
+| 25 ms delay + 1% loss | 50–99 / 109–175 ms | **57–61 / 78–83 ms** |
 | 25 ms delay + 3% loss | 101–107 / **341–348 ms** | **67–74 / 92–143 ms** |
 
 On a clean link WS is slightly *tighter* (QUIC datagram scheduling costs a few ms of tail). Under
@@ -67,8 +67,8 @@ gap balloons to 10× the send cadence, while datagrams just drop the stale frame
 a joiner pulls the snapshot, an unrelated observer's cursor feed stalls **1.9–3.4 s over WS** vs
 **~0.5 s over WebTransport** — the snapshot burst saturates the shared queue and the observer's TCP
 stream collapses into retransmission, where datagrams degrade to a few lost frames. (The joiner's
-own ~16 s freeze at 10k entities is the snapshot *import* CPU cost — identical on both transports,
-and a framework work item, not a transport one.)
+own ~16.5 s freeze at 10k entities is the snapshot *import* CPU cost — identical on both
+transports, and a framework work item, not a transport one.)
 
 Also measured en route: a fixed hello window breaks bootstrap on slow links — at 20 mbit the
 1.84 MB snapshot answer takes ~750 ms and *loses the race* against an 800 ms hello timeout, forking

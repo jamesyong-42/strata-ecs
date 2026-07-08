@@ -214,7 +214,16 @@ export function createWebTransportChannel(opts: WebTransportChannelOptions): Web
     if (env === null) return;
     if (env.from === self) return; // never act on our own echo (the relay excludes the sender; defensive)
     if (env.to !== undefined && env.to !== self) return; // addressed to a different peer
-    handler?.(env);
+    // PER-FRAME ISOLATION (review finding): both read loops are single async iterators — an uncaught
+    // handler throw would unwind into the loop's catch and END the pump for good while the QUIC
+    // connection stays "healthy" (no drop, no reconnect, silent permanent divergence). The WS client
+    // self-heals because each frame is a fresh onmessage dispatch; match those semantics here. One
+    // undecodable durable payload from a version-skewed peer must cost one frame, not the session.
+    try {
+      handler?.(env);
+    } catch (err) {
+      console.error("strata collab: inbound handler threw — frame dropped, channel stays live.", err);
+    }
   };
 
   // A dropped/errored connection: drop back to un-bootstrapped and schedule a re-dial. Funnels BOTH
@@ -247,7 +256,13 @@ export function createWebTransportChannel(opts: WebTransportChannelOptions): Web
             0,
             true,
           );
-          if (blobLen > MAX_FRAME_BYTES) return; // hostile/torn framing — stop; transport.closed reconnects
+          if (blobLen > MAX_FRAME_BYTES) {
+            // Hostile/torn framing: byte-offset trust is gone for the WHOLE stream. A bare return
+            // would leave a dead read loop on a "healthy" connection (no reconnect) — close instead,
+            // so transport.closed settles → handleDrop → backoff re-dial → full re-bootstrap.
+            wt.close();
+            return;
+          }
           const total = 4 + blobLen;
           if (buf.byteLength < total) break; // frame not fully arrived yet
           deliver(buf.subarray(4, total));

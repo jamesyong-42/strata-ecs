@@ -43,6 +43,8 @@ jobs:
           mkdir -p _site/demo
           cp docs/*.html _site/
           cp -r examples/canvas-editor/dist/. _site/demo/
+          # The stall-probe is a dev measurement harness (plan-transport), not part of the public demo.
+          rm -f _site/demo/probe.html
 
       - uses: actions/upload-pages-artifact@v3
         with:
