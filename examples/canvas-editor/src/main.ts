@@ -49,6 +49,12 @@ const collabRoom = params.has("collab") ? params.get("collab") || "demo" : null;
 // same-origin BroadcastChannel (tabs). Bare ?ws = "" → ws://localhost:8787; ?ws=<origin> overrides.
 // null (no ?ws) keeps the BroadcastChannel transport unchanged.
 const wsOrigin = params.has("ws") ? (params.get("ws") ?? "") : null;
+// ?wt[=<origin>] + ?certHash=<hex> selects the WebTransport relay (plan-transport Tier 2) and wins
+// over ?ws. Both values are printed ready-to-paste by the relay's `pnpm start:wt`; certHash is
+// required (the demo cert is pinned by hash, no CA).
+const certHash = params.get("certHash");
+const wtSpec =
+  params.has("wt") && certHash !== null ? { origin: params.get("wt") ?? "", certHash } : null;
 
 const content = document.getElementById("content") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLCanvasElement;
@@ -129,7 +135,7 @@ fitCanvases();
 // ?fresh=1) always seeds; otherwise the autosave — world.export() bytes in localStorage — restores the
 // last session, viewport included; an incompatible autosave (schema drift) is quarantined, never a brick.
 if (collabRoom !== null) {
-  startCollabBoot(collabRoom, count, notify, (chips) => hud.setCollabChips(chips), wsOrigin);
+  startCollabBoot(collabRoom, count, notify, (chips) => hud.setCollabChips(chips), wsOrigin, wtSpec);
   // Undo/redo is collab-only (it needs the DurableStore's history door): install the selection
   // side-channel + the reactive HUD buttons now the session is attached (collab/history.ts).
   installHistory(hud);
@@ -246,7 +252,10 @@ if (params.get("script") === "collab-smoke") {
   // &transport=ws runs the SAME suite over a live WebSocket relay (both in-page worlds open their own
   // socket to it) instead of the in-memory loopback, and adds a relay-drop → re-bootstrap scenario. The
   // relay must be running (`pnpm collab:server`); default origin ws://localhost:8787, or ?ws=<origin>.
+  // &transport=wt runs it over the live WebTransport relay instead (`pnpm start:wt` in collab-server;
+  // needs &certHash=<hex> from its output; origin override via ?wt=<origin>).
   const wsSmoke = params.get("transport") === "ws";
+  const wtSmoke = params.get("transport") === "wt" && certHash !== null;
   // The verdict is the page's deliverable, but the app's OWN collab boot also posts to the note —
   // its first-peer hello window times out at ~800ms and its "seeded the board" message would STOMP
   // a verdict posted earlier (the fast loopback suite finishes in milliseconds; this looked like a
@@ -259,7 +268,16 @@ if (params.get("script") === "collab-smoke") {
   setTimeout(() => {
     void (async () => {
       try {
-        if (wsSmoke) {
+        if (wtSmoke) {
+          const origin = params.get("wt") ?? "";
+          const r = await runCollabSmoke({ kind: "wt", origin, certHash: certHash! });
+          if (r.failed.length > 0) console.error("collab-smoke (wt) failing checks:", r.failed);
+          postVerdict(
+            r.passed === r.total
+              ? `collab-smoke (wt): PASS ${r.passed}/${r.total} — QUIC stream+datagrams · app-ops · undo/redo · late-join · reconnect re-bootstrap all converged`
+              : `collab-smoke (wt): FAIL — ${r.passed}/${r.total}${r.firstFail ? ` [${r.firstFail}]` : ""}`,
+          );
+        } else if (wsSmoke) {
           const origin = params.has("ws") ? (params.get("ws") ?? "") : "";
           const r = await runCollabSmoke({ kind: "ws", origin });
           if (r.failed.length > 0) console.error("collab-smoke (ws) failing checks:", r.failed);

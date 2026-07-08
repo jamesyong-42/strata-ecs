@@ -64,6 +64,11 @@ import { Loopback, type LoopbackMode } from "./loopback";
 import { wireCollab } from "./boot";
 import type { Channel } from "./transport";
 import { createWebSocketChannel, resolveRelayUrl, type WebSocketChannel } from "./transport-ws";
+import {
+  createWebTransportChannel,
+  resolveWebTransportUrl,
+  type WebTransportChannel,
+} from "./transport-webtransport";
 
 interface Check {
   ok: boolean;
@@ -110,9 +115,17 @@ function spawnRect(tx: Mutator, x: number, y: number, z: number): Entity {
  *  - `loopback` — the in-memory shim, one `mode`; deterministic, no server (the default; D2's two modes).
  *  - `ws` — a live WebSocket relay at `origin` (`""` → ws://localhost:8787): both in-page worlds open
  *    their OWN socket to it and converge over real frames. Adds the relay-drop → re-bootstrap scenario.
+ *  - `wt` — the live WebTransport relay (`""` → https://127.0.0.1:4433; `certHash` from the relay's
+ *    `pnpm start:wt`). Same live semantics as `ws` — but durable/hello/snapshot ride the reliable QUIC
+ *    stream while ephemeral rides datagrams (the delivery-class split, plan-transport).
  */
 export type SmokeTransport =
-  { kind: "loopback"; mode: LoopbackMode } | { kind: "ws"; origin: string };
+  | { kind: "loopback"; mode: LoopbackMode }
+  | { kind: "ws"; origin: string }
+  | { kind: "wt"; origin: string; certHash: string };
+
+/** The live channels' shared test surface — WS and WT expose the identical pair (never on Channel). */
+type LiveChannel = WebSocketChannel | WebTransportChannel;
 
 // WS timing caps — localhost relay round-trips are sub-millisecond, so these are generous safety nets,
 // not tuned latencies. A step that blows its cap leaves its `check` false, which reports the failure.
@@ -138,22 +151,30 @@ export async function runCollabSmoke(
     checks.push({ label, ok });
   };
 
-  const isWS = transport.kind === "ws";
+  const isLive = transport.kind !== "loopback"; // ws + wt share the live-socket semantics end to end
   const loop = transport.kind === "loopback" ? new Loopback(transport.mode) : null;
-  // A FRESH room per ws run — the relay persists rooms across runs, so distinct runs must not collide.
+  // A FRESH room per live run — the relay persists rooms across runs, so distinct runs must not collide.
   const wsRoom = `smoke-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const wsChannels: WebSocketChannel[] = [];
+  const wsChannels: LiveChannel[] = [];
   const mkChannel = (peerId: string): Channel => {
     if (transport.kind === "loopback") return loop!.channel(peerId);
-    const ch = createWebSocketChannel({
-      room: wsRoom,
-      self: peerId,
-      url: resolveRelayUrl(transport.origin, wsRoom),
-    });
+    const ch =
+      transport.kind === "wt"
+        ? createWebTransportChannel({
+            room: wsRoom,
+            self: peerId,
+            url: resolveWebTransportUrl(transport.origin, wsRoom),
+            certHashHex: transport.certHash,
+          })
+        : createWebSocketChannel({
+            room: wsRoom,
+            self: peerId,
+            url: resolveRelayUrl(transport.origin, wsRoom),
+          });
     wsChannels.push(ch);
     return ch;
   };
-  const helloTimeoutMs = isWS ? WS_HELLO_TIMEOUT_MS : undefined;
+  const helloTimeoutMs = isLive ? WS_HELLO_TIMEOUT_MS : undefined;
   const statusLog: string[] = [];
 
   // Cross-peer barrier. Loopback: drain, then project. WS: poll (project each round) until `pred` holds or
@@ -217,9 +238,9 @@ export async function runCollabSmoke(
 
   // WS: A must have JOINED the relay room (socket open) before B hellos, else B hears no answer and forks
   // its own seed. Bounded so a down relay reports "unreachable" instead of hanging. Loopback is inline.
-  if (isWS) {
+  if (isLive) {
     const connected = await Promise.race([
-      (channelA as WebSocketChannel).ready().then(() => true),
+      (channelA as LiveChannel).ready().then(() => true),
       delay(WS_CONNECT_TIMEOUT_MS).then(() => false),
     ]);
     check("A's socket connected to the relay", connected);
@@ -672,7 +693,7 @@ export async function runCollabSmoke(
   // relay restart from the clients' view (a real relay-process restart is exercised in headless verify).
   // The edit below is made WHILE DISCONNECTED, so its increment is DROPPED by the closed socket — it can
   // reach the peers ONLY via the reconnect snapshot (the 006 re-bootstrap policy), never as a live increment.
-  if (isWS) {
+  if (isLive) {
     for (const ch of wsChannels) ch.dropForTest();
     const reEntity = docA.transaction((tx) => spawnRect(tx, -900, -900, 12));
     worldA.sync();

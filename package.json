@@ -76,7 +76,8 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "esbuild"
+      "esbuild",
+      "@fails-components/webtransport-transport-http3-quiche"
     ]
   },
   "peerDependencies": {

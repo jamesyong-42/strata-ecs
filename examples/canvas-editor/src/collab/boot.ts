@@ -27,6 +27,7 @@ import { setActiveCollab } from "./mode";
 import { startPresence } from "./presence";
 import { createBroadcastChannel, type Channel } from "./transport";
 import { createWebSocketChannel, resolveRelayUrl } from "./transport-ws";
+import { createWebTransportChannel, resolveWebTransportUrl } from "./transport-webtransport";
 
 /** How long a joiner waits for a `snapshot` before deciding it is the first peer and seeding. */
 const HELLO_TIMEOUT_MS = 800;
@@ -231,7 +232,10 @@ export function wireCollab(opts: WireOptions): CollabWiring {
  * TRANSPORT: `wsOrigin === null` (the default, no `?ws` param) uses a same-origin `BroadcastChannel`
  * between tabs — no server. Any string switches on the real WebSocket relay client (across machines): a
  * bare `?ws` is `""` → `ws://localhost:8787`; `?ws=<origin>` overrides the origin. The room rides in the
- * URL path. Both satisfy the identical {@link Channel} surface; only the WS one carries a reconnect
+ * URL path. `wt` (from `?wt[=<origin>]` + `?certHash=<hex>`, both printed by the relay's
+ * `pnpm start:wt`) selects the WebTransport channel instead and WINS over `?ws`: one QUIC connection,
+ * reliable stream for hello/snapshot/durable + datagrams for ephemeral (the delivery-class split,
+ * plan-transport). All satisfy the identical {@link Channel} surface; WS and WT carry a reconnect
  * `lifecycle`, which drives wireCollab's re-bootstrap.
  */
 export function startCollabBoot(
@@ -240,6 +244,7 @@ export function startCollabBoot(
   notify: (msg: string) => void,
   renderChips: (text: string) => void,
   wsOrigin: string | null = null,
+  wt: { origin: string; certHash: string } | null = null,
 ): CollabWiring {
   const peerId = crypto.randomUUID();
   const doc = createDurableStore(new LoroDoc()); // the ONE place a LoroDoc enters (§14.2)
@@ -250,7 +255,11 @@ export function startCollabBoot(
   // ONE channel, shared by durable + presence (a single `onMessage` handler in wireCollab routes both
   // envelope kinds — the transport's handler is replace-on-set, so the two layers cannot each register).
   let channel: Channel;
-  if (wsOrigin !== null) {
+  if (wt !== null) {
+    const url = resolveWebTransportUrl(wt.origin, room);
+    notify(`collab: connecting to WebTransport relay ${url} …`);
+    channel = createWebTransportChannel({ room, self: peerId, url, certHashHex: wt.certHash });
+  } else if (wsOrigin !== null) {
     const url = resolveRelayUrl(wsOrigin, room);
     notify(`collab: connecting to relay ${url} …`);
     channel = createWebSocketChannel({ room, self: peerId, url });

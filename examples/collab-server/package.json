@@ -2,16 +2,21 @@
   "name": "@strata-ecs/collab-server",
   "version": "0.0.0",
   "private": true,
-  "description": "A dumb WebSocket byte-relay for the strata-ecs canvas-editor collab demo. Rooms by URL path; broadcasts each frame to the other members of the room; holds no document state.",
+  "description": "A dumb byte-relay for the strata-ecs canvas-editor collab demo. Rooms by URL path; broadcasts each frame to the other members of the room; holds no document state. A WebSocket relay (src/server.js) and an optional WebTransport relay (src/wt-relay.js) alongside it.",
   "type": "module",
   "bin": {
     "collab-server": "src/server.js"
   },
   "scripts": {
     "start": "node src/server.js",
+    "start:wt": "node src/start.js",
+    "cert": "node src/certs.js",
     "test": "node --test"
   },
   "dependencies": {
+    "@fails-components/webtransport": "^1.6.5",
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.5",
+    "node-forge": "^1.4.0",
     "ws": "^8.18.0"
   }
 }

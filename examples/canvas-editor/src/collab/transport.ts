@@ -29,6 +29,26 @@ export interface Envelope {
 }
 
 /**
+ * What an envelope kind REQUIRES of its transport — the delivery-class seam (plan-transport).
+ *  - `reliable-ordered` — must arrive, in per-sender order. The durable layer QUARANTINES on a gap
+ *    (PendingImportError), and the hello/snapshot bootstrap is a stateful handshake — no transport may
+ *    drop or reorder these.
+ *  - `latest-lossy` — may be dropped or reordered. The ephemeral store is per-key LWW with timestamps,
+ *    TTL expiry, and keepalive re-stamps: a lost update is superseded by the next (~16ms), a stale
+ *    arrival is rejected by timestamp. Reliability here is pure overhead (TCP head-of-line blocking,
+ *    queueing behind a bootstrap snapshot on a shared socket).
+ * Every transport MUST honor `reliable-ordered`. A transport MAY map `latest-lossy` onto a cheaper
+ * lossy path (WebTransport datagrams); one that can't (BroadcastChannel, loopback, a single WebSocket)
+ * simply carries both classes on its reliable path — degradation is always toward MORE reliability.
+ */
+export type DeliveryClass = "reliable-ordered" | "latest-lossy";
+
+/** The kind → class mapping every transport binds against. */
+export function deliveryClassOf(kind: Envelope["kind"]): DeliveryClass {
+  return kind === "ephemeral" ? "latest-lossy" : "reliable-ordered";
+}
+
+/**
  * OPTIONAL connection lifecycle — a connection-oriented transport (the WebSocket relay client,
  * collab/transport-ws.ts) exposes its socket's open/close transitions here so the bootstrap can re-run
  * on reconnect. A dropped socket may have dropped increments → quarantine risk on both sides, so the

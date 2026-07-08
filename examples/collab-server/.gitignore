@@ -1,0 +1,3 @@
+# Ephemeral dev TLS cert for the WebTransport relay (src/certs.js) — regenerated on demand,
+# secret-free, machine-local, and short-lived. Never commit it.
+.wt-cert.json
