@@ -751,6 +751,9 @@ export class LoroSnapshot implements CRDTSnapshot {
     if (this.inHistoryHook) throw new Error("strata: applyRemote() inside a history hook (capture/restore) is not allowed.");
     if (this.committing) throw new Error("strata: applyRemote() during commit() is not allowed.");
     if (this.quarantined) throw new PendingImportError();
+    // Bootstrap detection MUST read the maps BEFORE the import fills them. Staged-but-unsealed local
+    // ops are immediately readable (loro finding 6), so any local writing disqualifies — conservative.
+    const emptyBefore = this.entitiesMap.keys().length === 0 && this.resourcesMap.keys().length === 0;
     const beforeVV = this.doc.version();
     const beforeFrontiers = this.doc.frontiers();
     const status = this.doc.import(bytes);
@@ -760,6 +763,28 @@ export class LoroSnapshot implements CRDTSnapshot {
     }
     // No new ops (empty or fully-duplicate buffer) → no batches.
     if (this.doc.cmpFrontiers(beforeFrontiers, this.doc.frontiers()) === 0) return [];
+
+    // BOOTSTRAP FAST PATH (task #75, probe-verified): importing into a doc with NO local entities and
+    // NO local resources — the fresh joiner pulling a snapshot. The per-change path below costs
+    // O(changes × doc) in wasm calls (`doc.diff` per change + `getPathToContainer` per child pair),
+    // measured QUADRATIC end to end: ~8s of main-thread translation for a 10k-entity board (98% of
+    // applyRemote; loro's own import is ~8ms), and since loro splits one big commit into ~n/250
+    // changes a joiner also saw ~40 batches for ONE transaction. With no local state there is nothing
+    // to interleave with — per-commit boundaries exist for reconcile's local-vs-remote cell
+    // classification and carry no information here — so translate the CONVERGED state once: O(cells),
+    // ONE batch, same event vocabulary through the same per-cell translator (name resolution,
+    // poisoned-cell skips, and spawn-first ordering shared with the diff path by construction).
+    if (emptyBefore) {
+      const batch = this.translateConverged("remote");
+      this.sealedTo = this.doc.frontiers(); // the next local seal diffs from the imported head
+      if (batch.events.length === 0) {
+        this.notifyHistoryChange();
+        return []; // meta-only / empty-board snapshot — nothing a world needs to hear
+      }
+      this.emit(batch);
+      this.notifyHistoryChange();
+      return [batch];
+    }
 
     const schema = this.doc.exportJsonUpdates(beforeVV, this.doc.version(), false); // false: real peer ids
     const batches: ChangeBatch[] = [];
@@ -1120,6 +1145,47 @@ export class LoroSnapshot implements CRDTSnapshot {
       }
     }
     return { origin, commitId, events: [...spawns, ...mutations, ...despawns] };
+  }
+
+  /**
+   * Translate the WHOLE converged document into ONE batch — the bootstrap fast path (task #75).
+   * Legal ONLY when the local doc held no entities/resources before the import: with no local state
+   * there is nothing for reconcile to interleave, so the per-commit boundaries the diff path
+   * reconstructs carry no information. Every cell routes through {@link translateChildKey}, so name
+   * resolution, poisoned-cell skips, and spawn-first ordering are IDENTICAL to the diff path.
+   * Despawns cannot occur (a converged read has no key→undefined pairs); a despawned entity's empty
+   * container yields no keys and therefore no events — it reads absent, exactly like the diff path's
+   * net effect. An exists-less partially-resurrected entity yields cell facts without a spawn, which
+   * the binding classifies as a structural add on an absent baseline — also the diff path's behavior.
+   */
+  private translateConverged(origin: Origin): ChangeBatch {
+    const spawns: ChangeEvent[] = [];
+    const mutations: ChangeEvent[] = [];
+    const despawns: ChangeEvent[] = []; // stays empty; keeps translateChildKey's contract exact
+    for (const rawKey of this.entitiesMap.keys()) {
+      const key = entityKey(String(rawKey));
+      const m = this.childMap(key);
+      if (m === undefined) continue; // poisoned root entry (non-map value) — childMap warned
+      for (const mk of m.keys()) {
+        const mapKey = String(mk);
+        this.translateChildKey(key, mapKey, m.get(mapKey), origin, spawns, mutations, despawns);
+      }
+    }
+    for (const rawName of this.resourcesMap.keys()) {
+      const name = String(rawName);
+      const res = resourceByName(name);
+      if (res === undefined) {
+        this.warnUnknown("resource", name);
+        continue;
+      }
+      const val = this.resourcesMap.get(name);
+      if (isContainer(val)) {
+        this.warnUnknown("resource container", name); // hostile setContainer at a resource key
+        continue;
+      }
+      mutations.push({ kind: "resource-set", res, value: val as ComponentValue, origin });
+    }
+    return { origin, commitId: "bootstrap", events: [...spawns, ...mutations, ...despawns] };
   }
 
   /** Translate one child-map key change into its doc-fact, resolving the name (unknown → skip + warn). */

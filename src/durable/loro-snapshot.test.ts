@@ -105,7 +105,10 @@ describe("batch boundaries — one ChangeBatch per commit (005 §1.3)", () => {
     sender.snap.commit(() => sender.snap.setComponent(K("e1"), Pos, { x: 2, y: 2 })); // commit 1
     sender.snap.commit(() => sender.snap.addTag(K("e1"), Sel)); // commit 2
 
+    // Per-commit boundaries are reconstructed only into a NON-EMPTY doc (something to interleave
+    // with); a fresh doc coalesces via the bootstrap fast path — pinned separately (task #75).
     const receiver = peer(20);
+    receiver.snap.commit(() => receiver.snap.spawn(K("r0")));
     const batches = receiver.snap.applyRemote(sender.snap.export());
 
     expect(batches).toHaveLength(3);
@@ -447,6 +450,7 @@ describe("commit-boundary integrity (review fix 2)", () => {
     s2.commit(() => s2.setComponent(K("e1"), Pos, { x: 2, y: 2 })); // must be strata:1, not a reused strata:0
 
     const receiver = peer(60);
+    receiver.snap.commit(() => receiver.snap.spawn(K("r0"))); // non-empty → per-commit path (task #75)
     const batches = receiver.snap.applyRemote(s2.export());
     expect(batches).toHaveLength(2); // one reused "strata:0" would COALESCE the two into a single batch
     expect(receiver.snap.getComponent(K("e1"), Pos)).toEqual({ x: 2, y: 2 });
@@ -461,7 +465,11 @@ describe("commit-boundary integrity (review fix 2)", () => {
     child.set("comp:LSPos", { x: 1, y: 1 });
     raw.commit({ message: "appB" }); // NOT a strata tag — a second, distinct foreign change
 
-    peer(20).snap.applyRemote(raw.export({ mode: "snapshot" }));
+    // The untagged-writer diagnostic lives on the per-commit path; a fresh doc's bootstrap import
+    // never inspects commit boundaries (task #75) — seed local state so the boundary path runs.
+    const receiver = peer(20);
+    receiver.snap.commit(() => receiver.snap.spawn(K("r0")));
+    receiver.snap.applyRemote(raw.export({ mode: "snapshot" }));
     const untagged = warn.mock.calls.filter((c) => String(c[0]).includes("untagged"));
     expect(untagged).toHaveLength(1);
   });
@@ -478,7 +486,9 @@ describe("the no-delete layout (review fix 3)", () => {
     sender.snap.commit(() => sender.snap.setComponent(K("e1"), Pos, { x: 2, y: 2 })); // commit 1
     sender.snap.commit(() => sender.snap.despawn(K("e1"))); // commit 2
 
-    const batches = peer(20).snap.applyRemote(sender.snap.export());
+    const receiver = peer(20);
+    receiver.snap.commit(() => receiver.snap.spawn(K("r0"))); // non-empty → per-commit path (task #75)
+    const batches = receiver.snap.applyRemote(sender.snap.export());
     expect(batches).toHaveLength(3);
     expect(batches[0].events).toContainEqual(
       expect.objectContaining({ kind: "component-set", comp: Pos, value: { x: 1, y: 1 } }),
@@ -487,6 +497,28 @@ describe("the no-delete layout (review fix 3)", () => {
       expect.objectContaining({ kind: "component-set", comp: Pos, value: { x: 2, y: 2 } }),
     );
     expect(batches[2].events).toContainEqual(expect.objectContaining({ kind: "despawn", key: K("e1") }));
+  });
+
+  it("[spawn+set][set][despawn] into a FRESH doc → NO batch: the bootstrap nets to absence (task #75)", () => {
+    const sender = peer(10);
+    sender.snap.commit(() => {
+      sender.snap.spawn(K("e1"));
+      sender.snap.setComponent(K("e1"), Pos, { x: 1, y: 1 });
+    });
+    sender.snap.commit(() => sender.snap.setComponent(K("e1"), Pos, { x: 2, y: 2 }));
+    sender.snap.commit(() => sender.snap.despawn(K("e1")));
+
+    const receiver = peer(20);
+    const batches = receiver.snap.applyRemote(sender.snap.export());
+    // The converged doc holds only e1's empty container (reads absent) — a world attached to the
+    // receiver has nothing to hear. The doc state still imported fully (a later resurrect works).
+    expect(batches).toEqual([]);
+    expect(receiver.snap.hasEntity(K("e1"))).toBe(false);
+    // sealedTo advanced past the import: the receiver's next LOCAL commit emits ONLY its own facts.
+    const seen: string[] = [];
+    receiver.snap.subscribe((b) => seen.push(...b.events.map((e) => e.kind)));
+    receiver.snap.commit(() => receiver.snap.spawn(K("20-0")));
+    expect(seen).toEqual(["spawn"]); // no re-emission of the imported history as "local"
   });
 
   it("concurrent resurrect into the shared container → BOTH peers' cells converge per-cell", () => {
@@ -720,16 +752,25 @@ describe("CRDT-path fuzz — commit/export/applyRemote reproduce the ladder (the
         i += n;
       }
 
+      // FRESH receiver → the bootstrap fast path (task #75): the whole history coalesces to at most
+      // ONE converged batch, and replaying it must reproduce A's ladder state exactly — the same
+      // oracle the per-commit path answers to.
       const b = peer(seed * 2 + 2);
       const bBatches = b.snap.applyRemote(a.snap.export());
-
-      // One batch per NON-EMPTY commit on both sides (A's local echo and B's derived split agree in count).
-      expect(bBatches.length).toBe(aLocal.length);
-
-      // Replaying B's derived batches into a BaselineSnapshot reproduces A's ladder state exactly...
+      expect(bBatches.length).toBeLessThanOrEqual(1);
       const fromB = new BaselineSnapshot();
       for (const bt of bBatches) for (const e of normalizeBatch(bt.events)) applyEvent(fromB, e);
       expect(diffStores(fromB, a.snap, keys, CFM_SCHEMA)).toBeNull();
+
+      // NON-EMPTY receiver → the per-commit path: one batch per non-empty commit (A's local echo and
+      // B2's derived split agree in count), and the replay reproduces the same ladder state.
+      const b2 = peer(seed * 2 + 200);
+      b2.snap.commit(() => b2.snap.spawn(K("zz-preseed"))); // outside the fuzz key pool
+      const b2Batches = b2.snap.applyRemote(a.snap.export());
+      expect(b2Batches.length).toBe(aLocal.length);
+      const fromB2 = new BaselineSnapshot();
+      for (const bt of b2Batches) for (const e of normalizeBatch(bt.events)) applyEvent(fromB2, e);
+      expect(diffStores(fromB2, a.snap, keys, CFM_SCHEMA)).toBeNull();
 
       // ...and so does replaying A's OWN local stream (A's subscribe stream ≡ B's derived stream at the state level).
       const fromA = new BaselineSnapshot();

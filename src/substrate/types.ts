@@ -92,7 +92,11 @@ export interface MutableSnapshot extends Snapshot {
 /**
  * The CRDT capability extension — ONLY the Loro-backed snapshot implements this (§1.2, §1.3). It is
  * frozen here as the interface Part III codes against; no implementation lands in Part II (§9).
- * `applyRemote` returns one {@link ChangeBatch} PER COMMIT (a received buffer may carry several).
+ * `applyRemote` returns one {@link ChangeBatch} PER COMMIT (a received buffer may carry several) —
+ * EXCEPT when the local doc held no entities/resources before the import (a fresh joiner's
+ * bootstrap): then the whole history coalesces into at most ONE converged batch (005 §10 as-built
+ * amendment, task #75). Boundaries exist for reconcile's local-vs-remote interleaving; an empty doc
+ * has nothing to interleave, and the per-commit reconstruction was measured quadratic in doc size.
  * `commit` is a SCOPE — the writes happen inside `body`, sealed on return (the caller cannot forget
  * to seal, and the batch is pinned to this one document). `undo`/`redo` are local-ops-only (§1.3).
  */

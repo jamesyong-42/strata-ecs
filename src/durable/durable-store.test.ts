@@ -110,19 +110,42 @@ describe("docId — stable GUID in the reserved meta map (§14.1)", () => {
 
 // ---------------------------------------------------------------------------------------------------
 describe("applyRemote — inbound wire → binding queue (§14.2)", () => {
-  it("enqueues one batch per remote commit; drainPending empties", () => {
+  it("enqueues one batch per remote commit into a NON-EMPTY doc; drainPending empties", () => {
     const sender = store(10);
     sender.store.snapshot.commit(() => sender.store.snapshot.spawn(K("10-0"))); // commit 1
     sender.store.snapshot.commit(() => sender.store.snapshot.setComponent(K("10-0"), DSPos, { x: 1, y: 2 })); // 2
     sender.store.snapshot.commit(() => sender.store.snapshot.addTag(K("10-0"), DSSel)); // 3
 
+    // Local state first: per-commit boundaries are reconstructed only when there is something to
+    // interleave with — a fresh doc takes the coalescing bootstrap fast path instead (task #75).
     const recv = store(20);
+    recv.store.snapshot.commit(() => recv.store.snapshot.spawn(K("20-0"))); // local echoes ride outbound, not this queue
     recv.store.applyRemote(sender.store.snapshot.export()); // returns void — batches go to the queue
 
     const drained = recv.store.drainPending();
     expect(drained).toHaveLength(3); // 3 entity commits (the docId meta commit surfaces no batch)
     expect(drained.every((b) => b.origin === "remote")).toBe(true);
     expect(recv.store.drainPending()).toEqual([]); // emptied by the first drain
+  });
+
+  it("a FRESH doc's first import coalesces to ONE bootstrap batch with the converged facts (task #75)", () => {
+    const sender = store(10);
+    sender.store.snapshot.commit(() => sender.store.snapshot.spawn(K("10-0"))); // commit 1
+    sender.store.snapshot.commit(() => sender.store.snapshot.setComponent(K("10-0"), DSPos, { x: 1, y: 2 })); // 2
+    sender.store.snapshot.commit(() => sender.store.snapshot.addTag(K("10-0"), DSSel)); // 3
+
+    const recv = store(20);
+    recv.store.applyRemote(sender.store.snapshot.export());
+
+    const drained = recv.store.drainPending();
+    expect(drained).toHaveLength(1); // the whole history, converged, as one bootstrap batch
+    expect(drained[0]!.commitId).toBe("bootstrap");
+    expect(drained[0]!.origin).toBe("remote");
+    const kinds = drained[0]!.events.map((e) => e.kind);
+    expect(kinds[0]).toBe("spawn"); // spawn-first ordering, same as the diff path
+    expect(kinds).toContain("component-set");
+    expect(kinds).toContain("tag-add");
+    expect(recv.store.snapshot.getComponent(K("10-0"), DSPos)).toEqual({ x: 1, y: 2 });
   });
 
   it("a pending (missing-deps) import propagates PendingImportError and quarantines; the queue rejects further batches", () => {
