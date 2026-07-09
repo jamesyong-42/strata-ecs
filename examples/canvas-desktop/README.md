@@ -64,3 +64,35 @@ The renderer-side channel lives with its siblings in
 `canvas-editor/src/collab/transport-ipc.ts` and satisfies the same `Channel` surface as
 BroadcastChannel / the WS relay client / WebTransport — the bootstrap state machine cannot tell the
 difference.
+
+## Measured: what the tsnet mesh costs
+
+P3 drove the real `mesh.mjs` link manager (truffle 0.5.1) over three lanes, all timed **round-trip on
+one clock** (≥2 reps/cell, warmup discarded, every snapshot sha256-verified). The clean number is the
+**tsnet tax on one physical path**: same-host loopback, raw QUIC/UDP vs plain `ws`, so the only
+variable is the transport stack.
+
+| lane (same-host loopback) | tsnet + raw QUIC/UDP | plain `ws` (TCP) |
+|---|---|---|
+| echo RTT p50 · p99 | **0.95 · 6.5 ms** | 0.15 · 0.36 ms |
+| 1.84 MiB snapshot | ~40 MB/s peak (17 mean) | 151 MB/s |
+| 30 Hz UDP echo p50 · loss | 1.4 ms · **0%** | — |
+
+So the embedded tsnet + QUIC framing adds **~0.8 ms per round trip** and caps a bootstrap snapshot at
+**~40 MB/s** (vs 151) on the identical loopback path — the price of "the app is the tailnet node, no
+server, no host Tailscale install". Snapshots are bimodal: the first few back-to-back transfers hit
+40–46 MB/s, then degrade toward ~6 MB/s (per-transfer QUIC-stream + copy + sha cost, not the
+network) — a single join stays in the fast mode.
+
+**Relay worst case** (forced via `TS_DEBUG_ALWAYS_USE_DERP=1`): RTT jumps to **~40 ms p50** (p99 143,
+relay jitter), snapshot to **2.5 MB/s** — but UDP presence still delivered with **0% loss** over 3.5k
+datagrams. **UDP ceiling**: 100% delivery through **10 kHz** (>150× the 30–60 Hz presence cadence),
+collapsing past ~30 kHz. **Idle survival**: a relayed link held 12 min on only the 60 s heartbeats
+still delivered both lanes — the heartbeat clears the sidecar's ~10-min reap.
+
+Two honesty notes: (1) truffle's `connectionType` is an unreliable path label here — it reports the
+home DERP region (`relay:sfo`) even when data flows direct over loopback, so paths above are asserted
+by measured latency, not that field. (2) The cross-machine tsnet-QUIC *direct* number is unmeasured:
+embedded tsnet won't start on Windows alongside the host Tailscale service (`syspolicy … Access is
+denied`). Plain `ws` over the host tailnet between the same two machines (direct WireGuard, 6 ms ping)
+ran **5.25 ms p50 RTT / 5.95 MB/s** as a networked reference.
