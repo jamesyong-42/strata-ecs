@@ -248,6 +248,20 @@ function parseJsonOpId(id: string): { peer: `${number}`; counter: number } {
  */
 const META_ORIGIN = "strata-meta";
 
+/**
+ * The reserved commit ORIGIN for APP transactions that opt out of undo — `transaction(fn, { undoable:
+ * false })`: document migrations, read-repair, and janitorial transforms that MUST NOT nuke the user's
+ * undo history with `clearHistory()`. Like {@link META_ORIGIN} it is matched by the UndoManager's
+ * `excludeOriginPrefixes`, so a commit tagged with it pushes NO undo step (the user's next undo skips
+ * straight past it to their own last edit). DISTINCT from META_ORIGIN so meta stays semantically "the
+ * durable layer's OWN out-of-band writes (docId etc.)" while this names app-authored-but-unundoable
+ * commits — two independent reasons a commit sits off the undo stack. The origin travels no further than
+ * this peer's UndoManager: the ChangeBatch pipeline derives local/remote from the delivery path (frontier
+ * diffs), so an origin-tagged commit still flows to subscribers and peers as an ordinary batch, and peers
+ * (who never had it on their stacks) receive it as a normal remote commit.
+ */
+const NON_UNDOABLE_ORIGIN = "strata-nonundoable";
+
 /** The durable layer's reserved commit-message namespace (finding 3): `strata:<monotonic per-doc n>`. */
 const MSG_PREFIX = "strata:";
 const strataMsg = (n: number): string => MSG_PREFIX + n;
@@ -394,13 +408,17 @@ export class LoroSnapshot implements CRDTSnapshot {
     // default TIME-merges rapid commits into a single step, but the transaction model (M3) is
     // one-transaction = one-commit = one-undo-step, so we opt out of time grouping. Constructed here so
     // it tracks only this session's commits (pre-existing history is not undoable — "before our session").
-    // `excludeOriginPrefixes: [META_ORIGIN]` keeps out-of-band meta writes (docId, `ensureMeta`) OUT of
-    // the undo stack — a user's undo must never roll back the document id.
+    // `excludeOriginPrefixes` keeps two classes of commit OFF the undo stack: META_ORIGIN — out-of-band
+    // meta writes (docId, `ensureMeta`), a user's undo must never roll back the document id; and
+    // NON_UNDOABLE_ORIGIN — app transactions that opted out via `transaction(fn, { undoable: false })`
+    // (migrations / read-repair / janitorial transforms), which must not push a step the user could undo
+    // into. Both still surface as ordinary batches to subscribers and peers (the origin is a LOCAL undo
+    // concern only).
     this.undoManager = new UndoManager(doc, {
       mergeInterval: 0,
       // Explicit loro default — the public knob is createDurableStore's `maxUndoSteps` (plan-undo U1).
       maxUndoSteps: opts?.maxUndoSteps ?? 100,
-      excludeOriginPrefixes: [META_ORIGIN],
+      excludeOriginPrefixes: [META_ORIGIN, NON_UNDOABLE_ORIGIN],
     });
     // History-hook multiplex (plan-undo U1): loro's onPush/onPop are SINGLE-SLOT setters, so the adapter
     // owns both once and fans out. onPush captures the app's metadata for the step being pushed
@@ -706,22 +724,46 @@ export class LoroSnapshot implements CRDTSnapshot {
    * The sealed batch (origin "local") is derived from the frontier diff and delivered to subscribers.
    * Nested commit throws (the pinned choice). A no-op body (no ops staged) delivers nothing.
    *
+   * `opts.undoable === false` tags the seal with {@link NON_UNDOABLE_ORIGIN}, so the UndoManager
+   * (excludeOriginPrefixes) excludes it from the LOCAL undo stack — the `transaction(fn, { undoable:
+   * false })` path for migrations / read-repair / janitorial transforms that must not become an undo step.
+   * The `strata:<n>` MESSAGE and the batch delivery are unchanged (origin is a LOCAL-undo concern only —
+   * finding 7): subscribers and peers see an ordinary batch. The seal options are built CONDITIONALLY so
+   * an undoable commit never passes `origin: undefined` (loro distinguishes an absent key from an explicit
+   * undefined), and the origin is passed ONLY when ops were actually STAGED (see the inline note).
+   *
    * A THROWING body still SEALS whatever it staged, in `finally`, with a message, and emits that partial
    * batch to local subscribers BEFORE the error propagates — so the local echo and every receiver's stream
    * always agree on what the doc contains (a bare loro export/frontier read would otherwise absorb the
-   * dangling staged ops into the NEXT batch locally while receivers already saw them: streams diverge).
+   * dangling staged ops into the NEXT batch locally while receivers already saw them: streams diverge). A
+   * partial batch keeps the SAME undoability as the full one would have — the origin rides the `finally`
+   * seal regardless of whether body returned or threw.
    * ATOMIC-ABORT (discard-on-throw) is NOT this layer's job — it is the M3 transaction recorder's, which
    * buffers ops and only writes the doc after `fn` returns (design.md §12.2/§12.3); this adapter faithfully
    * surfaces whatever reached the doc.
    */
-  commit(body: () => void): void {
+  commit(body: () => void, opts?: { undoable?: boolean }): void {
     if (this.inHistoryHook) throw new Error("strata: commit() inside a history hook (capture/restore) is not allowed.");
     if (this.committing) throw new Error("strata: nested commit() is not allowed.");
     this.committing = true;
     try {
       body();
     } finally {
-      this.doc.commit({ message: this.nextMsg() });
+      // LINGERING-ORIGIN GUARD (finding: petition 2). The worry was that loro carries a commit's options
+      // forward to the NEXT commit when nothing is staged (the mechanism finding 7 documents for
+      // `setNextCommitMessage`), so an EMPTY `undoable: false` transaction would drop the FOLLOWING user
+      // transaction off the undo stack. Probe-verified in loro-crdt@1.13.6 that origin does NOT linger this
+      // way (an empty `commit({ origin })` leaves the next message-only commit fully undoable), so this is
+      // not a live bug today. We still gate the origin on staged ops, cheaply: a no-op seal has no commit to
+      // exclude, so tagging it is pointless, and gating keeps the empty-tx case correct-by-construction if a
+      // future loro ever does linger. Never pass `origin: undefined` (loro distinguishes absent from
+      // explicit-undefined), hence the conditional object rather than a spread.
+      const staged = this.doc.getPendingTxnLength() > 0;
+      const options =
+        opts?.undoable === false && staged
+          ? { message: this.nextMsg(), origin: NON_UNDOABLE_ORIGIN }
+          : { message: this.nextMsg() };
+      this.doc.commit(options);
       this.committing = false;
       this.flushLocal(); // diff from `sealedTo` (the last-emitted head) → everything this commit sealed
     }

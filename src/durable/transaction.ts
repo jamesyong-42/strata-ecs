@@ -338,8 +338,13 @@ class Transaction implements Mutator {
    *      despawns-last (an entity must exist before it is referenced; no edge is orphaned). Structural
    *      facts touch ONLY the document here; the runtime + baseline advance via projection (§12.3).
    *      Resources are value-like — runtime + baseline advance here too (§12.3 "resources analogously").
+   *
+   * `opts.undoable === false` rides through to `snapshot.commit` so the single Loro seal is excluded from
+   * the LOCAL undo stack (migrations / read-repair / janitorial transforms — petition 2). Stage 1's
+   * synchronous runtime + baseline writes are undo-agnostic (undo is a document-op concern), so the option
+   * only reaches the seal.
    */
-  seal(): void {
+  seal(opts?: { undoable?: boolean }): void {
     // Stage 1 — synchronous pre-existing value writes (the §13.2 agreement point), before any doc write.
     for (const op of this.ops) {
       if (op.kind === "write") {
@@ -350,7 +355,8 @@ class Transaction implements Mutator {
     }
 
     // Stage 2 — one sealed document commit. Nothing below can throw under normal operation (values are
-    // already canonical/valid), so the commit is never a partial seal.
+    // already canonical/valid), so the commit is never a partial seal. `opts` carries the undoability
+    // (default undoable; `undoable: false` excludes this seal from the LOCAL undo stack — petition 2).
     this.snapshot.commit(() => {
       const despawns: EntityKey[] = [];
       for (const op of this.ops) {
@@ -410,7 +416,7 @@ class Transaction implements Mutator {
         }
       }
       for (const key of despawns) this.snapshot.despawn(key);
-    });
+    }, opts);
   }
 
   /**
@@ -431,12 +437,21 @@ class Transaction implements Mutator {
  * an in-system 006-C4 enforcement throw at seal's stage 1 — roll back (burn minted identities) and
  * rethrow the original error, having committed nothing (decision A/D). The caller
  * ({@link DurableStore.transaction}) owns the attached-only and one-open-transaction-per-store guards.
+ *
+ * `opts.undoable === false` (petition 2) makes the single Loro seal non-undoable (excluded from the LOCAL
+ * undo stack) — for migrations / read-repair / janitorial transforms that must not clobber user history.
+ * It reaches only the seal; recording and rollback are undo-agnostic.
  */
-export function runTransaction<R>(snapshot: CRDTSnapshot, tr: TxRuntime, fn: (tx: Mutator) => R): R {
+export function runTransaction<R>(
+  snapshot: CRDTSnapshot,
+  tr: TxRuntime,
+  fn: (tx: Mutator) => R,
+  opts?: { undoable?: boolean },
+): R {
   const tx = new Transaction(snapshot, tr);
   try {
     const result = fn(tx);
-    tx.seal();
+    tx.seal(opts);
     return result;
   } catch (err) {
     tx.rollback();

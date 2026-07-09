@@ -215,10 +215,19 @@ export class DurableStore {
    * iteration-safe; structure rides projection) — no iteration guard. On any throw nothing commits
    * and the transaction rolls back (minted identities invalidated, keys burned — transaction.ts).
    *
+   * `opts.undoable` (default `true`: one transaction = one undo step) governs the LOCAL undo stack only.
+   * `undoable: false` excludes this transaction's commit from THIS peer's undo stack — a later `undo()`
+   * skips straight past it to the user's last real edit, and the history hooks (`capture`) do NOT fire for
+   * it. It is otherwise a completely ordinary commit: peers receive it as a normal remote batch (they never
+   * had it on their stacks anyway), and the document converges identically. Intended for document
+   * migrations, format upgrades, and read-repair at open — janitorial transforms that must not become
+   * something the user can undo. Contrast {@link clearHistory}, which empties BOTH stacks wholesale;
+   * `undoable: false` leaves the user's existing undo history intact and simply adds no step of its own.
+   *
    * Legal ONLY on an ATTACHED store (the recorder needs the projector + baseline the binding installs)
    * and NOT re-entrantly (one open transaction per store — a nested `transaction` throws).
    */
-  transaction<R>(fn: (tx: Mutator) => R): R {
+  transaction<R>(fn: (tx: Mutator) => R, opts?: { undoable?: boolean }): R {
     if (this.txRuntime === null) {
       throw new Error("strata: doc.transaction requires an attached store — call attachDurable(world, store) first.");
     }
@@ -227,7 +236,7 @@ export class DurableStore {
     }
     this.txOpen = true;
     try {
-      return runTransaction(this.snapshot, this.txRuntime, fn);
+      return runTransaction(this.snapshot, this.txRuntime, fn, opts);
     } finally {
       this.txOpen = false;
     }

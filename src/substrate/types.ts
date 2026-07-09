@@ -98,11 +98,15 @@ export interface MutableSnapshot extends Snapshot {
  * amendment, task #75). Boundaries exist for reconcile's local-vs-remote interleaving; an empty doc
  * has nothing to interleave, and the per-commit reconstruction was measured quadratic in doc size.
  * `commit` is a SCOPE — the writes happen inside `body`, sealed on return (the caller cannot forget
- * to seal, and the batch is pinned to this one document). `undo`/`redo` are local-ops-only (§1.3).
+ * to seal, and the batch is pinned to this one document). Its optional `opts.undoable: false` marks the
+ * sealed commit as EXCLUDED from the implementation's LOCAL undo history — honored by history-capable
+ * snapshots (the Loro adapter), a no-op elsewhere; default `true` (one commit = one undo step). The
+ * param is OPTIONAL so prior implementers of this frozen interface stay assignable. `undo`/`redo` are
+ * local-ops-only (§1.3).
  */
 export interface CRDTSnapshot extends MutableSnapshot {
   applyRemote(bytes: Uint8Array): ChangeBatch[];
-  commit(body: () => void): void;
+  commit(body: () => void, opts?: { undoable?: boolean }): void;
   export(): Uint8Array;
   subscribe(fn: (batch: ChangeBatch) => void): Unsubscribe;
   undo(): void;
