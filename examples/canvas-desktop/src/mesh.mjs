@@ -62,6 +62,7 @@ export function loadDotEnv(dir) {
  *
  * @param {{
  *   authKey?: string, stateDir: string, deviceName: string,
+ *   sidecarPath?: string,
  *   openUrl?: (url: string) => void,
  *   log: (msg: string) => void,
  *   onFrame: (header: object, payload: Buffer | undefined, fromPeer: string) => void,
@@ -83,6 +84,7 @@ export async function startMesh(opts) {
     deviceName,
     stateDir,
     authKey,
+    sidecarPath: opts.sidecarPath, // test knob: a locally built sidecar (undefined = auto-resolve)
     ephemeral: true, // a closed app must leave the tailnet, not accumulate ghost nodes
     openUrl,
     onAuthRequired: (url) => log(`tailscale auth required → ${url}`),
