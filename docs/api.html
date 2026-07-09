@@ -934,6 +934,7 @@
       <ul class="notes">
         <li><span class="nl">Registration</span> Subscribing is a frame boundary: a change made in the same frame surfaces at the very next <code>notify()</code>; nothing stamped before you subscribed ever fires. No priming needed.</li>
         <li><span class="nl">Guarantee</span> <code>observeQuery</code> may over-fire but never misses; <code>observeValue</code> / <code>observeResource</code> are equality-suppressed. All zero-cost until the first observer registers.</li>
+        <li><span class="nl">Precision</span> A row-filtered <code>observeQuery</code> (tag / relation filters, <code>Not</code>, mixed <code>Any</code>, concrete-target <code>Related</code>) wakes only when a tag or relation <em>its own plan depends on</em> changes membership — unrelated tag/relation churn elsewhere in the world stays silent, so interaction-rate state (hover, drop targets, gesture claims) needs no change-only write discipline to keep other observers quiet.</li>
         <li><span class="nl">Lifetime</span> Per-world and mortal — it does not survive a <code>world.import()</code> swap; entity watches on a reset world fire <code>undefined</code> once and self-remove. Every <code>observe*</code> returns an idempotent <code>Unsubscribe</code>.</li>
         <li><span class="nl">Callbacks</span> A value write from inside a callback — <code>edit().set</code>, <code>setResource</code>, <code>removeResource</code> — is legal and deterministic: it lands at the <em>next</em> <code>notify()</code>, delivered exactly once. A <strong>structural</strong> mutation from inside one is still dev-rejected; schedule it for the next frame boundary.</li>
         <li><span class="nl">See</span> <a href="index.html#reactivity">Reactivity</a></li>
@@ -1164,6 +1165,7 @@
       <ul class="notes">
         <li><span class="nl d">Legal only</span> On an attached store, and not re-entrantly — one open transaction per store (a nested <code>transaction</code> throws).</li>
         <li><span class="nl d">Access</span> A value commit to a pre-existing component <em>inside a system</em> rides 001 enforcement — the system must declare it in <code>access.write</code>, or a dev build throws once an observer has armed enforcement.</li>
+        <li><span class="nl">Undoability</span> <code>opts.undoable: false</code> excludes this transaction's commit from the <strong>local</strong> undo stack — for document migrations, format upgrades, and read-repair at open. It is otherwise an ordinary commit: peers receive it as a normal remote batch, history hooks don't fire for it, and a pending redo survives it. Contrast <code>clearHistory()</code>, which empties both stacks wholesale.</li>
       </ul>
     </article>
 
@@ -1174,7 +1176,9 @@
         Undo and redo on the <a href="#durable-DurableStore"><code>DurableStore</code></a> — <strong>local
         history only</strong>, the collaborative-undo consensus rule (Figma, Liveblocks, Google Docs): a
         peer's ops are never on your stack, and yours never land on theirs. One <code>transaction</code> is
-        one undoable step; <code>undoGroup(fn)</code> collapses a gesture's several commits into one.
+        one undoable step — unless it opted out with
+        <a href="#durable-transaction"><code>{ undoable: false }</code></a> (migrations, read-repair), which
+        adds no step at all; <code>undoGroup(fn)</code> collapses a gesture's several commits into one.
         <code>undo</code> / <code>redo</code> return <code>false</code> on an empty stack (drive UI
         disablement from <code>canUndo</code> / <code>canRedo</code>, or read
         <a href="#durable-undo-status"><code>DurableUndoStatus</code></a> reactively). The redo stack clears
@@ -1628,7 +1632,7 @@ interface DurableStoreOptions {
   subscribeOutbound(fn: (bytes: Uint8Array) => void): Unsubscribe;  // OUTBOUND wire
 }</script>
 
-<script type="text/plain" data-code="durable-transaction">transaction<R>(fn: (tx: Mutator) => R): R;
+<script type="text/plain" data-code="durable-transaction">transaction<R>(fn: (tx: Mutator) => R, opts?: { undoable?: boolean }): R;
 
 interface Mutator {   // the tx vocabulary — same surface as world/ctx, sealed as one commit
   spawn(init?: SpawnInit): Entity;      // identity minted NOW; placement rides projection

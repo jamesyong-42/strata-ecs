@@ -1168,6 +1168,7 @@
     <figure class="code" data-file="undo.ts"></figure>
     <ul>
       <li><strong>A transaction is one step.</strong> Each <code>doc.transaction</code> is one undoable unit; wrap a multi-part gesture in <code>doc.undoGroup(fn)</code> to collapse its commits into a single step.</li>
+      <li><strong>Engine work can opt out.</strong> <code>doc.transaction(fn, { undoable: false })</code> commits without adding an undo step — for document migrations, format upgrades, and read-repair at open. The user's existing history (and any pending redo) stays intact, and peers just see a normal commit.</li>
       <li><strong>Redo survives a teammate's edit.</strong> A new <em>local</em> commit clears the redo stack — you've branched — but a remote edit arriving over the wire does not, so you can still redo what you just undid.</li>
       <li><strong>Drive the toolbar from <code>DurableUndoStatus</code>.</strong> The runtime-local <code>{ canUndo, canRedo }</code> resource updates exactly when a button's enabled state flips, so an idle stack re-renders nothing. Detached, the store's <code>canUndo()</code> / <code>canRedo()</code> methods are the pull-based equivalent.</li>
       <li><strong>Selection rides the stack.</strong> <code>setHistoryHooks</code> stores a JSON-safe snapshot (typically the selected keys) with each step and restores it on undo — so undo puts the selection back where it was, the way users expect.</li>

@@ -4,6 +4,24 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [0.3.0] — 2026-07-09
+
+Two additive quality features, both born from editor-integration reviews (no breaking changes).
+
+### Added
+
+- **Non-undoable transactions** (`@vibecook/strata-ecs/durable`) —
+  `doc.transaction(fn, { undoable: false })` runs a transaction whose commit is excluded from the
+  **local** undo stack: document migrations, format upgrades, and read-repair at open no longer have
+  to wipe the user's history with `clearHistory()`. The commit is otherwise ordinary — peers receive
+  it as a normal remote batch, history hooks don't fire for it, and a pending redo survives it.
+- **Per-tag/relation observer precision** — a row-filtered `observeQuery` (tag / relation filters,
+  `Not`, mixed `Any`, concrete-target `Related` seeds) now wakes only when a tag or relation **its
+  own plan depends on** changes membership, instead of on any tag/relation churn anywhere in the
+  world. Interaction-rate state (hover targets, drop targets, gesture claims) no longer needs
+  change-only write discipline to keep selection/render observers quiet. The Tier-1 contract is
+  unchanged: may over-fire, never miss.
+
 ## [0.2.0] — 2026-07-08
 
 Pre-1.0, so this minor carries breaking API changes; each one below has a one-line migration.
