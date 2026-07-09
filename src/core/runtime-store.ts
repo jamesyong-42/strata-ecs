@@ -216,6 +216,12 @@ export class RuntimeStore implements ECSStore {
     }
     this.relFrames[id] = this.frameCounter;
   }
+
+  /** {@link destroy}'s teardown report callbacks (§4.2 per-id), bound ONCE — a destroy-heavy frame with
+   *  reactivity on must not allocate two fresh closures per entity (the R5 no-allocation discipline). */
+  private readonly onTagTeardown = (id: TagId): void => this.bumpTag(id);
+  private readonly onRelTeardown = (id: RelationId): void => this.bumpRel(id);
+
   /**
    * Access enforcement state (001 Rule 3, armed by the reactive layer §2.4). `accessArmed` flips on
    * when the first reactive observer registers and stays on for the world's life; `currentSystem` is
@@ -846,8 +852,8 @@ export class RuntimeStore implements ECSStore {
     // are undefined and the substores skip the bookkeeping, keeping the non-reactive path zero-cost).
     // This covers watches on a tag the entity carried, rel-filtered watches on its outgoing edges, and
     // seeded watches whose target was this entity (its incoming edges clear → that relation is reported).
-    const onRel = this.reactiveOn ? (id: RelationId) => this.bumpRel(id) : undefined;
-    const onTag = this.reactiveOn ? (id: TagId) => this.bumpTag(id) : undefined;
+    const onRel = this.reactiveOn ? this.onRelTeardown : undefined;
+    const onTag = this.reactiveOn ? this.onTagTeardown : undefined;
     this.relations.clearEntity(e, onRel); // both directions, inline, terminal
     this.tags.clearAll(slot, onTag); // mandatory — bitsets are slot-indexed, not generation-indexed (§3.2)
     if (this.table.isPlaced(e)) {
