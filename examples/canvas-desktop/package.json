@@ -6,12 +6,14 @@
   "type": "module",
   "main": "src/main.mjs",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "package": "node scripts/package.mjs"
   },
   "dependencies": {
     "@vibecook/truffle": "0.5.1"
   },
   "devDependencies": {
+    "@electron/packager": "^20.0.2",
     "electron": "^43.1.0"
   }
 }

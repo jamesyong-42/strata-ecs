@@ -49,6 +49,61 @@ replay, so re-bootstrap IS the recovery path.
 Dev knobs: `STRATA_STATE_DIR` (tsnet state; set distinct dirs to run several instances on ONE
 machine — each is its own tailnet node), `STRATA_DEVICE_NAME`, `STRATA_WINDOWS`, `STRATA_SCRIPT`.
 
+## Packaging (a distributable .app)
+
+Everything above runs against the vite dev server. To build a **standalone macOS app** that ships the
+built UI and the truffle sidecar and launches with no server:
+
+```bash
+pnpm --filter @strata-ecs/example-canvas-desktop package
+# → examples/canvas-desktop/dist/canvas-desktop-darwin-arm64/canvas-desktop.app  (~306 MB)
+```
+
+Target is **darwin-arm64** (the only verified platform). The app is unsigned — first launch needs a
+Gatekeeper right-click → Open, or `xattr -dr com.apple.quarantine <app>`.
+
+**How it's built** (`scripts/package.mjs`): the renderer is `vite build`'d, then a *flat, symlink-free*
+`node_modules` holding exactly the runtime closure — `@vibecook/truffle`, its `truffle-native` (the
+`.node`), the `truffle-sidecar-darwin-arm64` binary, and `ws` — is staged beside `src/` and the built
+renderer, and [`@electron/packager`](https://github.com/electron/packager) wraps it into a `.app`.
+Materializing those four packages as real directories sidesteps pnpm's symlinked `.pnpm` store, which
+is the classic packager pain (and `pnpm deploy` keeps that store *and* ships every platform's `.node`
+plus the gitignored `.env`). Only `darwin-arm64` binaries are kept; the rest are pruned.
+
+**`asarUnpack` — the two native bits that can't live in the asar** (`asar: { unpack, unpackDir }`):
+
+- `**/*.node` — `truffle-native`'s addon. `process.dlopen` needs a real file path; it can't load from
+  inside an asar archive.
+- `**/truffle-sidecar-darwin-arm64` — the Go sidecar binary. It's **spawned as a subprocess**, so it
+  must be an executable file on disk. `main.mjs` points truffle's `sidecarPath` explicitly at
+  `Resources/app.asar.unpacked/…/bin/sidecar-slim` (truffle's own auto-resolution would hand back an
+  in-asar path that can't be spawned).
+
+**The renderer is served over http, not `file://`.** Packaged, `main.mjs` starts a tiny loopback
+static server (`src/static-server.mjs`) over the built dist and points `CANVAS_URL` at it — every
+other line of the window code stays identical to the dev path. http (not `file://`) is required because
+the renderer `fetch()`es loro's wasm, and browsers refuse `fetch` of `file://` URLs. The server
+replicates vite's `Cross-Origin-Opener-Policy`/`Embedder-Policy` headers so the page stays
+cross-origin-isolated (the HUD's `performance.now()` precision). `base` stays `/` (absolute
+`/assets/…` served from the origin root) — **no change to `vite.config.ts`**, so the dev and Pages
+builds are untouched.
+
+**Config, packaged** — `TS_AUTHKEY` (and the other `STRATA_*` knobs) are read with this precedence,
+lowest to highest:
+
+1. `.env` beside `src/` — the dev location; inside the asar when packaged, so nothing is read there
+   (the secret is deliberately **not** bundled).
+2. **`~/Library/Application Support/canvas-desktop/.env`** — the packaged user's config file.
+3. real environment variables — override everything (how the smoke injects the key).
+
+So a distributed app reads its auth key from `~/Library/Application Support/canvas-desktop/.env`; tsnet
+state lives in that same userData dir (`tsnet/`).
+
+**Later, for Windows/Linux** (not built here): swap the sidecar package + `.node` for the target
+triple (`truffle-sidecar-${platform}-${arch}`, `sidecar-slim.exe` on Windows — `packagedSidecarPath()`
+already computes this), package on/for that OS, and note that embedded tsnet **won't start on Windows
+alongside a host Tailscale service** (`syspolicy … Access is denied`, measured in the mesh section).
+
 ## How the pieces meet
 
 ```

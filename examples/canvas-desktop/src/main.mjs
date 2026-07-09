@@ -21,13 +21,24 @@
  * With a tailnet auth key in .env (TS_AUTHKEY), other machines running this app join the same rooms.
  */
 import { app, BrowserWindow, Menu, ipcMain, shell } from "electron";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { loadDotEnv, startMesh } from "./mesh.mjs";
+import { startStaticServer } from "./static-server.mjs";
 
-/** The canvas-editor UI origin (its vite dev server); packaged loading is P3's problem. */
-const CANVAS_URL = process.env.CANVAS_URL ?? "http://localhost:5173";
+/**
+ * The canvas-editor UI origin. Dev: the vite server (default :5173, `CANVAS_URL` overrides). Packaged:
+ * there is no dev server, so an in-main loopback server (static-server.mjs) serves the BUILT renderer
+ * and this is set to its origin before the first window opens. `CANVAS_URL` still wins everywhere, so
+ * a packaged app can be pointed at a live dev server for debugging. `let`, not `const`: the packaged
+ * branch replaces it in `app.whenReady`, and `createWindow` reads whatever it then holds.
+ */
+const CANVAS_URL_OVERRIDE = process.env.CANVAS_URL ?? null;
+let CANVAS_URL = CANVAS_URL_OVERRIDE ?? "http://localhost:5173";
+/** The packaged renderer server, kept for shutdown; null in dev / when CANVAS_URL is overridden. */
+let staticServer = null;
 /** Every window of this instance joins one room (multi-room needs no more than a param later). */
 const ROOM = process.env.STRATA_ROOM ?? "demo";
 /** Test knobs (the CDP smoke + P3 harness): open N windows at launch; run ?script=<…> in the FIRST. */
@@ -127,14 +138,39 @@ function bounceWindows(why) {
 /** Resolvers waiting on the first link (meshHold). */
 const linkWaiters = new Set();
 
+/**
+ * Where the packaged app finds the truffle sidecar binary. Auto-resolution (require.resolve of the
+ * platform package) returns an IN-asar path that cannot be spawned; asarUnpack puts a real copy under
+ * `Resources/app.asar.unpacked/…`, and mesh.mjs takes an explicit `sidecarPath` for exactly this. The
+ * package/binary names mirror truffle's own resolveSidecarPath so this stays right on other platforms.
+ * Returns undefined in dev (auto-resolve from node_modules is correct there).
+ */
+function packagedSidecarPath() {
+  if (!app.isPackaged) return undefined;
+  const pkg = `@vibecook/truffle-sidecar-${process.platform}-${process.arch}`;
+  const bin = process.platform === "win32" ? "sidecar-slim.exe" : "sidecar-slim";
+  const p = path.join(process.resourcesPath, "app.asar.unpacked", "node_modules", ...pkg.split("/"), "bin", bin);
+  if (existsSync(p)) return p;
+  console.warn(`[canvas-desktop] packaged sidecar not found at ${p}; falling back to auto-resolve`);
+  return undefined;
+}
+
 async function startMeshBridge() {
-  const env = { ...loadDotEnv(path.join(srcDir, "..")), ...process.env };
+  // Config precedence (lowest→highest): the dev .env beside src, then the packaged user's .env in
+  // userData, then real env vars. Packaged, `srcDir/..` is inside the asar (no .env shipped there —
+  // the secret stays out of the bundle), so config comes from ~/…/canvas-desktop/.env or the env.
+  const env = {
+    ...loadDotEnv(path.join(srcDir, "..")),
+    ...loadDotEnv(app.getPath("userData")),
+    ...process.env,
+  };
   const stateDir = process.env.STRATA_STATE_DIR ?? path.join(app.getPath("userData"), "tsnet");
   try {
     const api = await startMesh({
       authKey: env.TS_AUTHKEY,
       stateDir,
       deviceName: process.env.STRATA_DEVICE_NAME ?? `${os.hostname()}-canvas`,
+      sidecarPath: packagedSidecarPath(),
       openUrl: (url) => void shell.openExternal(url),
       log: (msg) => console.log(`[mesh] ${msg}`),
       onFrame: onMeshFrame,
@@ -203,12 +239,27 @@ function createWindow(script = null) {
     `${CANVAS_URL}/?collab=${encodeURIComponent(ROOM)}` +
     (script !== null ? `&script=${encodeURIComponent(script)}` : "");
   win.loadURL(url).catch(() => {
-    // The one setup mistake everyone will make: the UI dev server isn't running. Say so, in-window.
-    const msg = `canvas-desktop could not reach the canvas-editor dev server at ${CANVAS_URL}.<br/>` +
-      `Start it first: <code>pnpm example:canvas</code> &nbsp;(then reload with Cmd/Ctrl+R)`;
+    // Dev's one common mistake: the UI server isn't running. Packaged, a load failure means the
+    // in-main renderer server didn't come up (unexpected) — either way, say so in-window.
+    const msg = app.isPackaged
+      ? `canvas-desktop could not load the packaged renderer from ${CANVAS_URL}.`
+      : `canvas-desktop could not reach the canvas-editor dev server at ${CANVAS_URL}.<br/>` +
+        `Start it first: <code>pnpm example:canvas</code> &nbsp;(then reload with Cmd/Ctrl+R)`;
     void win.loadURL(`data:text/html,<body style="font:16px system-ui;padding:2rem">${encodeURIComponent(msg)}</body>`);
   });
   return win;
+}
+
+/**
+ * Packaged, there is no dev server: serve the built renderer (staged beside the app as `renderer/`)
+ * over a loopback http origin and point CANVAS_URL at it. Skipped when CANVAS_URL is overridden (a
+ * packaged app aimed at a live dev server) or in dev (the vite server is the origin).
+ */
+async function startRendererServer() {
+  if (CANVAS_URL_OVERRIDE !== null || !app.isPackaged) return;
+  const rendererDir = path.join(app.getAppPath(), "renderer");
+  staticServer = await startStaticServer(rendererDir, (m) => console.log(`[canvas-desktop] ${m}`));
+  CANVAS_URL = staticServer.origin;
 }
 
 const meshStart = app.whenReady().then(startMeshBridge);
@@ -230,6 +281,7 @@ app.whenReady().then(async () => {
     { role: "windowMenu" },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  await startRendererServer(); // packaged: bring up the loopback renderer origin before any window
   await meshHold(meshStart);
   createWindow(FIRST_WINDOW_SCRIPT);
   // STAGGERED, not simultaneous: two windows booting inside the same hello window (~800ms) both see
@@ -251,6 +303,7 @@ app.on("window-all-closed", () => {
 // way out (best-effort, capped: quit must not hang on a wedged sidecar).
 let meshStopped = false;
 app.on("will-quit", (event) => {
+  void staticServer?.close(); // release the loopback port (best-effort; the OS reclaims it regardless)
   if (meshStopped || mesh === null) return;
   event.preventDefault();
   meshStopped = true;
