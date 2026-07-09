@@ -39,14 +39,24 @@ export class TagStore {
   /**
    * Clear `slot`'s bit in EVERY tag bitset. Called on despawn so a reused slot never inherits
    * the previous occupant's tags — a correctness requirement, since bitsets carry no generation
-   * (§3.2, §5.5).
+   * (§3.2, §5.5). `onCleared` (passed only on the reactive teardown path) reports each tag id whose
+   * bit WAS set for this slot, so the store can stamp exactly those per-id membership versions (§4.2).
    */
-  clearAll(slot: number): void {
+  clearAll(slot: number, onCleared?: (id: TagId) => void): void {
     const w = slot >>> 5;
-    const mask = ~(1 << (slot & 31));
-    for (const b of this.bitsets.values()) {
-      if (w < b.length) b[w] &= mask;
+    const bit = 1 << (slot & 31);
+    for (const [id, b] of this.bitsets) {
+      if (w >= b.length) continue;
+      if ((b[w] & bit) !== 0) {
+        b[w] &= ~bit;
+        onCleared?.(id); // this slot carried tag `id` — report it so the store bumps tagFrame(id)
+      }
     }
+  }
+
+  /** @internal Every tag id that has a bitset — reset's per-id membership stamping walks these (§4.2). */
+  knownIds(): IterableIterator<TagId> {
+    return this.bitsets.keys();
   }
 
   /** The raw bitset for a tag, or `undefined` if none has been created (for query row-probes, §6). */

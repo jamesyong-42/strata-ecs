@@ -11,7 +11,7 @@
 
 import type { ColumnsOf } from "./field";
 import type { Entity } from "./entity";
-import type { Component, ComponentId, Relation, Tag, TagId } from "./schema";
+import type { Component, ComponentId, Relation, RelationId, Tag, TagId } from "./schema";
 
 // --- term inputs -------------------------------------------------------------
 
@@ -114,6 +114,19 @@ export interface Query {
   readonly rowFilters: readonly RowFilter[];
   /** @internal Set when a relation term has a concrete target — flips to reverse-index iteration. */
   readonly seed?: SeedSpec;
+  /**
+   * @internal Deduped tag ids this query's membership depends on (002 §4.2 per-id stamps): every tag
+   * row filter (negated included) and every tag member of a mixed `Any`. A row-filtered Tier-1
+   * observer wakes only when one of THESE tags moved, not on world-wide tag churn.
+   */
+  readonly membershipTagIds: readonly TagId[];
+  /**
+   * @internal Deduped relation ids this query's membership depends on (002 §4.2 per-id stamps): every
+   * relation row filter (negated and demoted concrete-target included), every relation member of a
+   * mixed `Any`, and the concrete-target `seed`'s relation. Component membership is EXCLUDED — a
+   * component gain/loss migrates the row, so it rides the archetype's structural stamp, not these.
+   */
+  readonly membershipRelIds: readonly RelationId[];
 }
 
 // --- the batch (chunk) the system body receives ------------------------------
@@ -244,8 +257,42 @@ export function defineQuery(terms: readonly QueryTerm[]): Query {
 
   for (const term of terms) addTop(term);
 
+  // Extract the per-id membership dependencies (002 §4.2 per-id stamps): the tags/relations whose
+  // membership can turn over a row-filtered / seeded query's rows WITHOUT moving an archetype row
+  // (so no structural stamp catches them). A component member of a mixed `Any` is skipped — a
+  // component gain/loss migrates the row, covered by the archetype's `lastStructuralFrame`.
+  const membershipTagIds: TagId[] = [];
+  const membershipRelIds: RelationId[] = [];
+  const addTagDep = (id: TagId): void => {
+    if (!membershipTagIds.includes(id)) membershipTagIds.push(id);
+  };
+  const addRelDep = (id: RelationId): void => {
+    if (!membershipRelIds.includes(id)) membershipRelIds.push(id);
+  };
+  const walkMember = (m: MemberCheck): void => {
+    switch (m.kind) {
+      case "tag":
+        addTagDep(m.tagId as TagId);
+        return;
+      case "rel":
+        addRelDep((m.relation as Relation).id);
+        return;
+      case "component":
+        return; // component membership rides the archetype's structural stamp, not §4.2
+      case "all":
+        for (const mm of m.members as readonly MemberCheck[]) walkMember(mm);
+        return;
+    }
+  };
+  for (const rf of rowFilters) {
+    if (rf.kind === "tag") addTagDep(rf.tagId as TagId);
+    else if (rf.kind === "rel") addRelDep((rf.relation as Relation).id);
+    else for (const m of rf.members as readonly MemberCheck[]) walkMember(m); // "any"
+  }
+  if (seed !== undefined) addRelDep(seed.relation.id); // the seed's relation turns over on set/remove
+
   // The one sanctioned unsafe cast (Query is opaque + `never`-branded): defineQuery is the SOLE
   // producer, so it builds the plan and stamps the phantom brand here. The `satisfies` keeps the
   // plan shape checked; nothing outside this function can construct a Query.
-  return { required, excluded, anyComponentGroups, rowFilters, seed } satisfies Omit<Query, "__brand"> as unknown as Query;
+  return { required, excluded, anyComponentGroups, rowFilters, seed, membershipTagIds, membershipRelIds } satisfies Omit<Query, "__brand"> as unknown as Query;
 }

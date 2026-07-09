@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Batch, Entity, SystemCtx, Unsubscribe } from "./index";
 import {
   Any,
+  Not,
   Related,
   createWorld,
   defineComponent,
@@ -30,7 +31,9 @@ const Vel = defineComponent("RCTVel", { x: "f32", y: "f32" });
 const Other = defineComponent("RCTOther", { n: "u32" });
 const Driver = defineComponent("RCTDriver", { n: "u32" });
 const Selected = defineTag("RCTSelected");
+const Hovered = defineTag("RCTHovered"); // an unrelated tag — its churn must not wake a Selected watch
 const Rel = defineRelation("RCTRel", { arity: "one" });
+const DropTarget = defineRelation("RCTDropTarget", { arity: "one" }); // an unrelated relation
 const Camera = defineResource("RCTCamera", { x: "f32", y: "f32", zoom: "f32" });
 
 const posQ = defineQuery([Pos]);
@@ -195,6 +198,172 @@ describe("Tier 1 — query-level (002 §3.1)", () => {
     w.reactive.notify();
     w.reactive.notify();
     expect(fired).toBe(1); // and only once — the flag self-cleared
+  });
+});
+
+describe("Tier 1 — per-id membership deps (002 §4.2): a row-filtered watch wakes only for ITS tags/relations", () => {
+  it("(a) a tag-filtered watch ignores unrelated tag/relation churn and fires on its own tag's add and remove", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const other = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const dropee = w.spawn();
+    const selQ = defineQuery([Pos, Selected]);
+    let fired = 0;
+    w.reactive.observeQuery(selQ, () => fired++);
+
+    w.addTag(other, Hovered); // a DIFFERENT tag on another entity — not one of selQ's deps
+    w.setRelation(other, DropTarget, dropee); // a DIFFERENT relation
+    w.reactive.notify();
+    expect(fired).toBe(0); // neither dep of selQ moved
+
+    w.addTag(e, Selected); // pure tag membership, moving no rows
+    w.reactive.notify();
+    expect(fired).toBe(1);
+
+    w.removeTag(e, Selected);
+    w.reactive.notify();
+    expect(fired).toBe(2);
+  });
+
+  it("(b) destroying an entity that carried the watched tag fires the watch (never-miss)", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    w.addTag(e, Selected);
+    const selQ = defineQuery([Pos, Selected]);
+    let fired = 0;
+    w.reactive.observeQuery(selQ, () => fired++);
+    w.reactive.notify(); // settle
+    expect(fired).toBe(0);
+
+    w.destroy(e); // teardown clears Selected → stamps tagFrame(Selected)
+    w.reactive.notify();
+    expect(fired).toBe(1);
+  });
+
+  it("(c) a seeded Related(rel, target) watch fires on its relation's churn and on the target's destroy, ignoring another relation", () => {
+    const w = createWorld();
+    const target = w.spawn(); // identity-only target — its teardown never structurally touches [Pos]
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const bystander = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const dropee = w.spawn();
+    const relQ = defineQuery([Pos, Related(Rel, target)]); // concrete target → a seed, no row filter
+    let fired = 0;
+    w.reactive.observeQuery(relQ, () => fired++);
+
+    w.setRelation(bystander, DropTarget, dropee); // a DIFFERENT relation, moving no rows
+    w.reactive.notify();
+    expect(fired).toBe(0);
+
+    w.setRelation(e, Rel, target);
+    w.reactive.notify();
+    expect(fired).toBe(1);
+
+    w.removeRelation(e, Rel, target);
+    w.reactive.notify();
+    expect(fired).toBe(2);
+
+    w.setRelation(e, Rel, target); // re-establish the edge
+    w.reactive.notify();
+    expect(fired).toBe(3);
+
+    w.destroy(target); // incoming-edge teardown reports Rel (§4.2) — no structural bump on [Pos]
+    w.reactive.notify();
+    expect(fired).toBe(4);
+  });
+
+  it("(d) an any-target Related(rel) row filter fires on its relation and ignores another", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const t = w.spawn();
+    const bystander = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const dropee = w.spawn();
+    const anyRelQ = defineQuery([Pos, Related(Rel)]); // no concrete target → a rel row filter
+    let fired = 0;
+    w.reactive.observeQuery(anyRelQ, () => fired++);
+
+    w.setRelation(bystander, DropTarget, dropee); // different relation
+    w.reactive.notify();
+    expect(fired).toBe(0);
+
+    w.setRelation(e, Rel, t);
+    w.reactive.notify();
+    expect(fired).toBe(1);
+
+    w.removeRelation(e, Rel);
+    w.reactive.notify();
+    expect(fired).toBe(2);
+  });
+
+  it("(e) a Not(tag) watch fires on that tag's add and remove and ignores other tags", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const other = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const notQ = defineQuery([Pos, Not(Selected)]); // negated tag is still a membership dep
+    let fired = 0;
+    w.reactive.observeQuery(notQ, () => fired++);
+
+    w.addTag(other, Hovered); // a different tag
+    w.reactive.notify();
+    expect(fired).toBe(0);
+
+    w.addTag(e, Selected);
+    w.reactive.notify();
+    expect(fired).toBe(1);
+
+    w.removeTag(e, Selected);
+    w.reactive.notify();
+    expect(fired).toBe(2);
+  });
+
+  it("(f) a mixed Any(tag, component) watch fires on the tag AND on gaining/losing the component (structural)", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const mixedQ = defineQuery([Any(Selected, Other)]); // tag member → membership dep; component member → structural
+    let fired = 0;
+    w.reactive.observeQuery(mixedQ, () => fired++);
+
+    w.addTag(e, Selected); // the tag member moved → per-id membership stamp
+    w.reactive.notify();
+    expect(fired).toBe(1);
+
+    w.addComponent(e, Other, { n: 1 }); // the component member — migrate → structural stamp
+    w.reactive.notify();
+    expect(fired).toBe(2);
+
+    w.removeComponent(e, Other);
+    w.reactive.notify();
+    expect(fired).toBe(3);
+  });
+
+  it("(f') an all-component Any watch has empty membership deps yet still fires on component gain (structural regression guard)", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const compQ = defineQuery([Any(Pos, Other)]); // all bare components → anyComponentGroups, NO membership deps
+    let fired = 0;
+    w.reactive.observeQuery(compQ, () => fired++);
+
+    w.addTag(e, Selected); // pure tag churn — the empty dep list must NOT consult it
+    w.reactive.notify();
+    expect(fired).toBe(0);
+
+    w.addComponent(e, Other, { n: 1 }); // structural — the component path still wakes it
+    w.reactive.notify();
+    expect(fired).toBe(1);
+  });
+
+  it("(g) world.reset() wakes a row-filtered watch whose tag was in use", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    w.addTag(e, Selected); // Selected is now a known tag
+    const selQ = defineQuery([Pos, Selected]);
+    let fired = 0;
+    w.reactive.observeQuery(selQ, () => fired++);
+    w.reactive.notify(); // settle
+    expect(fired).toBe(0);
+
+    w.reset(); // stamps every known tag/relation id (Selected among them) before clearing
+    w.reactive.notify();
+    expect(fired).toBe(1);
   });
 });
 
@@ -680,7 +849,7 @@ describe("master gate + advisory diagnostics wiring", () => {
       expect(arch.lastStructuralFrame).toBe(0);
       for (let i = 0; i < arch.lastWrittenFrame.length; i++) expect(arch.lastWrittenFrame[i]).toBe(0);
     }
-    expect(rt.lastTagRelFrame).toBe(0);
+    expect(rt.tagFrame(Selected.id)).toBe(0); // the addTag above did not stamp — reactive never armed (§4.2)
     expect(rt.resourceFrame(Camera.id)).toBe(0); // setResource did not stamp — reactive never armed (003 §1.2)
   });
 

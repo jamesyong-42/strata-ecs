@@ -69,14 +69,20 @@ export class RelationStore {
    * Remove every edge touching `e`, both directions, inline (§5.5). Outgoing: drop `e`'s forward
    * entries and unlink it from each target's reverse set. Incoming: for each source pointing at
    * `e`, drop `e` from that source's forward entry; then drop `e`'s reverse entry.
+   *
+   * `onCleared` (passed only on the reactive teardown path) reports each relation id `e` actually
+   * touched — as a forward source (one/many) OR an incoming target — so the store stamps exactly those
+   * per-id membership versions (§4.2). Reporting the incoming case is what wakes a concrete-target
+   * seeded watch when its target is destroyed. Duplicate reports for one id are fine (idempotent stamp).
    */
-  clearEntity(e: Entity): void {
+  clearEntity(e: Entity, onCleared?: (id: RelationId) => void): void {
     // Outgoing (e as source), arity "one".
     for (const [rid, fwd] of this.oneForward) {
       const target = fwd.get(e);
       if (target !== undefined) {
         this.reverse.get(rid)?.get(target)?.delete(e);
         fwd.delete(e);
+        onCleared?.(rid);
       }
     }
     // Outgoing (e as source), arity "many".
@@ -85,6 +91,7 @@ export class RelationStore {
       if (targets !== undefined) {
         for (const t of targets) this.reverse.get(rid)?.get(t)?.delete(e);
         fwd.delete(e);
+        onCleared?.(rid);
       }
     }
     // Incoming (e as target): sources pointing at e, via the reverse index.
@@ -97,6 +104,7 @@ export class RelationStore {
         else this.oneForward.get(rid)?.delete(src);
       }
       rev.delete(e);
+      onCleared?.(rid); // e had incoming edges under rid — wakes a seeded watch whose target was e
     }
   }
 
@@ -146,6 +154,15 @@ export class RelationStore {
     this.oneForward.clear();
     this.manyForward.clear();
     this.reverse.clear();
+  }
+
+  /** @internal Every relation id with any stored edge in any direction — reset's per-id membership
+   *  stamping walks these (§4.2). Yields duplicates across the three indices; the caller's stamp is
+   *  idempotent within a frame, so no dedup is needed. */
+  *knownIds(): IterableIterator<RelationId> {
+    yield* this.oneForward.keys();
+    yield* this.manyForward.keys();
+    yield* this.reverse.keys();
   }
 
   private mapFor<V>(index: Map<RelationId, Map<Entity, V>>, rid: RelationId): Map<Entity, V> {

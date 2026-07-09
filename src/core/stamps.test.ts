@@ -3,7 +3,7 @@
  *
  * Covers the frame counter (§2.1/§4.1a), per-(archetype, component) value stamps at every write
  * chokepoint (writeComponent/edit, migrate's added columns, projection), the per-archetype
- * rows-version (`lastStructuralFrame`, §4.2), the global tag/relation membership version, and the
+ * rows-version (`lastStructuralFrame`, §4.2), the per-id tag/relation membership versions, and the
  * two internal fan-out helpers (`stampWrites` — 001 §3.1 route 1, `invalidateComponent` — §2.2).
  * Internals are reached through `world.runtime`, the @internal seam the store tests already use.
  */
@@ -20,6 +20,7 @@ const Pos = defineComponent("STMPosition", { x: "f32", y: "f32" });
 const Vel = defineComponent("STMVelocity", { x: "f32", y: "f32" });
 const Driver = defineComponent("STMDriver", { v: "u8" });
 const Selected = defineTag("STMSelected");
+const Unrelated = defineTag("STMUnrelated"); // a tag no test entity ever carries — its stamp must stay 0
 const Owns = defineRelation("STMOwns", { arity: "one" });
 const Links = defineRelation("STMLinks", { arity: "many" });
 
@@ -160,49 +161,94 @@ describe("rows-version on the flush path converges on place/unplace (§4.2)", ()
   });
 });
 
-describe("tag/relation membership version (§4.2)", () => {
-  it("addTag / removeTag / setRelation / addRelation / removeRelation / destroy each bump lastTagRelFrame", () => {
+describe("tag/relation membership version — per-id (§4.2)", () => {
+  it("each of the five ops bumps ONLY its own id's stamp to the current frame; unrelated ids stay 0", () => {
     const w = reactiveWorld();
     const rt = w.runtime;
     const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
     const t1 = w.spawn();
     const t2 = w.spawn();
-    expect(rt.lastTagRelFrame).toBe(0); // no tag/relation mutation yet
+    // Nothing stamped yet — every membership id reads 0.
+    expect(rt.tagFrame(Selected.id)).toBe(0);
+    expect(rt.relFrame(Owns.id)).toBe(0);
+    expect(rt.relFrame(Links.id)).toBe(0);
 
     rt.advanceFrame(); // 2
     w.addTag(e, Selected);
-    expect(rt.lastTagRelFrame).toBe(2);
+    expect(rt.tagFrame(Selected.id)).toBe(2);
+    expect(rt.relFrame(Owns.id)).toBe(0); // an unrelated relation id is untouched by a tag op
+    expect(rt.relFrame(Links.id)).toBe(0);
 
     rt.advanceFrame(); // 3
     w.removeTag(e, Selected);
-    expect(rt.lastTagRelFrame).toBe(3);
+    expect(rt.tagFrame(Selected.id)).toBe(3);
 
     rt.advanceFrame(); // 4
     w.setRelation(e, Owns, t1);
-    expect(rt.lastTagRelFrame).toBe(4);
+    expect(rt.relFrame(Owns.id)).toBe(4);
+    expect(rt.relFrame(Links.id)).toBe(0); // a sibling relation stays dark
+    expect(rt.tagFrame(Selected.id)).toBe(3); // and the tag stamp is not disturbed
 
     rt.advanceFrame(); // 5
     w.addRelation(e, Links, t2);
-    expect(rt.lastTagRelFrame).toBe(5);
+    expect(rt.relFrame(Links.id)).toBe(5);
+    expect(rt.relFrame(Owns.id)).toBe(4); // Owns not re-stamped
 
     rt.advanceFrame(); // 6
     w.removeRelation(e, Links, t2);
-    expect(rt.lastTagRelFrame).toBe(6);
-
-    rt.advanceFrame(); // 7
-    w.destroy(e); // teardown of tags/relations changes filtered membership
-    expect(rt.lastTagRelFrame).toBe(7);
+    expect(rt.relFrame(Links.id)).toBe(6);
   });
 
-  it("a plain spawn/place does NOT bump lastTagRelFrame (rows-version only)", () => {
+  it("destroy bumps every membership id the dying entity touched — carried tag, outgoing + incoming relation — and no others", () => {
+    const w = reactiveWorld();
+    const rt = w.runtime;
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const target = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] }); // e → target via Owns (e is SOURCE)
+    const source = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] }); // source → e via Links (e is TARGET)
+    w.addTag(e, Selected);
+    w.setRelation(e, Owns, target);
+    w.addRelation(source, Links, e);
+
+    rt.advanceFrame();
+    rt.advanceFrame(); // frame 3
+    const F = rt.frame;
+    w.destroy(e); // teardown clears the tag + both edge directions
+
+    expect(rt.tagFrame(Selected.id)).toBe(F); // the tag it carried
+    expect(rt.relFrame(Owns.id)).toBe(F); // the relation it was the source of (outgoing edge)
+    expect(rt.relFrame(Links.id)).toBe(F); // the relation it was an incoming target of (seed teardown)
+    expect(rt.tagFrame(Unrelated.id)).toBe(0); // a tag e never carried is never stamped
+  });
+
+  it("a plain spawn/place bumps no membership id (rows-version only)", () => {
     const w = reactiveWorld();
     const rt = w.runtime;
     rt.advanceFrame(); // 2
     w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
-    expect(rt.lastTagRelFrame).toBe(0); // untouched by structural-only work
+    expect(rt.tagFrame(Selected.id)).toBe(0); // untouched by structural-only work
+    expect(rt.relFrame(Owns.id)).toBe(0);
   });
 
-  it("ctx.addTag through a tick bumps lastTagRelFrame at flush (applyCommand path)", () => {
+  it("reset stamps every KNOWN tag/relation id (before-clear ordering), leaving never-used ids at 0", () => {
+    const w = reactiveWorld();
+    const rt = w.runtime;
+    const e = w.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+    const t1 = w.spawn();
+    w.addTag(e, Selected); // Selected now KNOWN (has a bitset)
+    w.setRelation(e, Owns, t1); // Owns now KNOWN (has an edge)
+
+    rt.advanceFrame();
+    rt.advanceFrame(); // frame 3
+    const F = rt.frame;
+    w.reset();
+
+    // reset stamps at the current frame BEFORE clearing the substores — the ids were still enumerable.
+    expect(rt.tagFrame(Selected.id)).toBe(F);
+    expect(rt.relFrame(Owns.id)).toBe(F);
+    expect(rt.relFrame(Links.id)).toBe(0); // Links never held an edge → never known → not stamped
+  });
+
+  it("ctx.addTag through a tick bumps its tag's stamp at flush (applyCommand path)", () => {
     const w = reactiveWorld();
     const rt = w.runtime;
     const e = w.spawn({ components: [[Driver, { v: 0 }]] });
@@ -215,13 +261,12 @@ describe("tag/relation membership version (§4.2)", () => {
     w.tick([phase("tag", [Tagger])]);
 
     expect(w.hasTag(e, Selected)).toBe(true);
-    expect(rt.lastTagRelFrame).toBe(3);
+    expect(rt.tagFrame(Selected.id)).toBe(3);
   });
 
-  // The other four flush arms' bumpTagRel were untested before R6 (only ctx.addTag was covered) —
-  // each is now routed through the shared do* primitive, so each must still advance lastTagRelFrame
-  // at flush. A row-filtered Tier-1 watch keys off exactly this version (§4.2).
-  it("ctx.removeTag through a tick bumps lastTagRelFrame at flush (applyCommand path)", () => {
+  // The other four flush arms are each routed through the shared do* primitive, so each must stamp
+  // ITS OWN id at flush. A row-filtered Tier-1 watch keys off exactly that per-id version (§4.2).
+  it("ctx.removeTag through a tick bumps its tag's stamp at flush (applyCommand path)", () => {
     const w = reactiveWorld();
     const rt = w.runtime;
     const e = w.spawn({ components: [[Driver, { v: 0 }]] });
@@ -235,10 +280,10 @@ describe("tag/relation membership version (§4.2)", () => {
     w.tick([phase("untag", [Untagger])]);
 
     expect(w.hasTag(e, Selected)).toBe(false);
-    expect(rt.lastTagRelFrame).toBe(3);
+    expect(rt.tagFrame(Selected.id)).toBe(3);
   });
 
-  it("ctx.setRelation through a tick bumps lastTagRelFrame at flush (applyCommand path)", () => {
+  it("ctx.setRelation through a tick bumps its relation's stamp at flush (applyCommand path)", () => {
     const w = reactiveWorld();
     const rt = w.runtime;
     const e = w.spawn({ components: [[Driver, { v: 0 }]] });
@@ -252,10 +297,10 @@ describe("tag/relation membership version (§4.2)", () => {
     w.tick([phase("set", [Setter])]);
 
     expect(w.getRelation(e, Owns)).toBe(target);
-    expect(rt.lastTagRelFrame).toBe(3);
+    expect(rt.relFrame(Owns.id)).toBe(3);
   });
 
-  it("ctx.addRelation through a tick bumps lastTagRelFrame at flush (applyCommand path)", () => {
+  it("ctx.addRelation through a tick bumps its relation's stamp at flush (applyCommand path)", () => {
     const w = reactiveWorld();
     const rt = w.runtime;
     const e = w.spawn({ components: [[Driver, { v: 0 }]] });
@@ -269,10 +314,10 @@ describe("tag/relation membership version (§4.2)", () => {
     w.tick([phase("add", [Adder])]);
 
     expect(w.getRelations(e, Links)).toContain(target);
-    expect(rt.lastTagRelFrame).toBe(3);
+    expect(rt.relFrame(Links.id)).toBe(3);
   });
 
-  it("ctx.removeRelation through a tick bumps lastTagRelFrame at flush (applyCommand path)", () => {
+  it("ctx.removeRelation through a tick bumps its relation's stamp at flush (applyCommand path)", () => {
     const w = reactiveWorld();
     const rt = w.runtime;
     const e = w.spawn({ components: [[Driver, { v: 0 }]] });
@@ -287,7 +332,7 @@ describe("tag/relation membership version (§4.2)", () => {
     w.tick([phase("rmrel", [Remover])]);
 
     expect(w.getRelations(e, Links)).not.toContain(target);
-    expect(rt.lastTagRelFrame).toBe(3);
+    expect(rt.relFrame(Links.id)).toBe(3);
   });
 });
 

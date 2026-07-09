@@ -23,7 +23,7 @@
 
 import type { Entity } from "./entity";
 import type { Archetype } from "./archetype";
-import type { Component, ComponentId, Resource, ResourceId } from "./schema";
+import type { Component, ComponentId, RelationId, Resource, ResourceId, TagId } from "./schema";
 import type { Query } from "./query";
 import type { RuntimeStore } from "./runtime-store";
 import { devError } from "./dev";
@@ -35,8 +35,15 @@ export type Unsubscribe = () => void;
 interface QueryWatch {
   readonly matches: readonly Archetype[];
   readonly colIds: readonly ComponentId[];
-  /** Whether membership can change without a column stamp — row filters OR a relation seed (§4.2). */
-  readonly rowFiltered: boolean;
+  /**
+   * The membership ids this watch depends on (§4.2 per-id): the tags/relations whose row filter or
+   * concrete-target seed the query's plan carries (query.ts `membershipTagIds`/`membershipRelIds`). A
+   * tag/relation mutation wakes the watch ONLY when it stamped one of THESE ids. Both are empty for a
+   * query with no row filter and no seed — it never consults membership stamps (its rows move only
+   * structurally), and empty too for a mixed-`Any` whose members are ALL components (they migrate rows).
+   */
+  readonly tagIds: readonly TagId[];
+  readonly relIds: readonly RelationId[];
   readonly cb: () => void;
   /** `opts.immediate` — fire once at the first notify() after registration regardless of stamps, then self-clears. */
   immediate: boolean;
@@ -133,9 +140,12 @@ export class Reactive {
     const watch: QueryWatch = {
       matches: this.store.matchesFor(q),
       colIds: opts?.cols !== undefined ? opts.cols.map((c) => c.id) : q.required,
-      // A concrete-target `Related(rel, target)` compiles to a `seed` with NO row filter, yet its
-      // membership still turns over on setRelation/removeRelation — consult `tagRelFrame` for it too.
-      rowFiltered: q.rowFilters.length > 0 || q.seed !== undefined,
+      // §4.2 per-id membership deps: the tags/relations whose row filter or concrete-target seed can
+      // move this query's rows without a column/structural stamp. A concrete-target `Related(rel,
+      // target)` compiles to a `seed` (no row filter) but still turns over on setRelation/removeRelation
+      // — query.ts folds the seed's relation into membershipRelIds, so it is covered here too.
+      tagIds: q.membershipTagIds,
+      relIds: q.membershipRelIds,
       cb,
       immediate: opts?.immediate === true,
       dead: false,
@@ -293,13 +303,13 @@ export class Reactive {
    * snapshot-every-pass form.
    */
   private notifyQueries(): void {
-    const tagRel = this.store.lastTagRelFrame;
+    const store = this.store;
     let dirty: QueryWatch[] | null = null;
     for (const w of this.queryWatches) {
-      if (!w.dead && (w.immediate || queryDirty(w, tagRel))) (dirty ??= []).push(w);
+      if (!w.dead && (w.immediate || queryDirty(w, store))) (dirty ??= []).push(w);
     }
     if (dirty === null) return; // no matching change since last seen — zero allocation
-    const frame = this.store.frame;
+    const frame = store.frame;
     for (const w of dirty) {
       if (w.dead) continue; // an earlier callback in this pass may have removed it
       w.immediate = false; // consume the one-shot immediate seed (fires once, at the first notify)
@@ -531,8 +541,13 @@ function fire(cb: (v: unknown) => void, v: unknown): void {
   }
 }
 
-/** Tier-1 dirtiness (002 §3.1/§4.2): a watched column stamped, rows moved, or (row-filtered) a tag/relation moved. */
-function queryDirty(w: QueryWatch, tagRel: number): boolean {
+/**
+ * Tier-1 dirtiness (002 §3.1/§4.2): a watched column stamped, rows moved, or a tag/relation THIS query's
+ * plan depends on had its per-id membership version bumped (§4.2). Allocation-free — the membership check
+ * walks the watch's own small dep lists and polls the store's dense per-id stamps (empty lists for a
+ * query with no row filter/seed, so it costs nothing there).
+ */
+function queryDirty(w: QueryWatch, store: RuntimeStore): boolean {
   const seen = w.lastSeen;
   for (const arch of w.matches) {
     if (arch.lastStructuralFrame > seen) return true;
@@ -542,5 +557,7 @@ function queryDirty(w: QueryWatch, tagRel: number): boolean {
       if (slot >= 0 && lwf[slot] > seen) return true;
     }
   }
-  return w.rowFiltered && tagRel > seen;
+  for (const id of w.tagIds) if (store.tagFrame(id) > seen) return true;
+  for (const id of w.relIds) if (store.relFrame(id) > seen) return true;
+  return false;
 }

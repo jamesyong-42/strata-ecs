@@ -13,10 +13,10 @@
  *   - the GENUINELY STAMPLESS structural no-ops (absent-resource `removeResource`, `remove` of an
  *     already-removed key, `projectRemoveComponent` of an absent component): no stamp, so nothing to see.
  * DEVIATION FROM THE LITERAL §8 P7 (documented): a duplicate `applyTag`/`applyRelationAdd` is STATE-
- * idempotent (neither runtime nor baseline changes) but is NOT Tier-1-silent — the store's membership
- * version (`lastTagRelFrame`, 002 §4.2) is a COARSE global stamp bumped UNCONDITIONALLY by every
- * tag/relation op, by design, so a Tier-1 query re-fires. Idempotence is asserted at the state +
- * Tier-3 level (where the reactive layer suppresses), not at that coarse membership signal.
+ * idempotent (neither runtime nor baseline changes) but is NOT Tier-1-silent — the store's per-id
+ * membership version (`tagFrame`/`relFrame`, 002 §4.2) is stamped UNCONDITIONALLY by every tag/relation
+ * op on THAT id, by design, so a Tier-1 query watching that tag/relation re-fires. Idempotence is
+ * asserted at the state + Tier-3 level (where the reactive layer suppresses), not at that membership signal.
  */
 
 import { describe, expect, it } from "vitest";
@@ -207,10 +207,15 @@ describe("P7 — projection idempotence fires no watch (§2.5, §6.1)", () => {
     reactive.observeQuery(defineQuery([CPos]), () => fired++);
     reactive.notify(); // settle
     fired = 0;
-    const before = rt.lastTagRelFrame;
+    // Nothing is bound under this key, so remove destroys nothing → no per-id membership stamp advances.
+    const beforeTag = rt.tagFrame(TSel.id);
+    const beforeParent = rt.relFrame(RParent.id);
+    const beforeChild = rt.relFrame(RChild.id);
 
     expect(() => proj.remove(entityKey("never-bound"))).not.toThrow();
-    expect(rt.lastTagRelFrame).toBe(before); // no destroy → no bumpTagRel
+    expect(rt.tagFrame(TSel.id)).toBe(beforeTag); // no destroy → no bumpTag/bumpRel on any id (§4.2 per-id)
+    expect(rt.relFrame(RParent.id)).toBe(beforeParent);
+    expect(rt.relFrame(RChild.id)).toBe(beforeChild);
     reactive.notify();
 
     expect(fired).toBe(0);

@@ -30,9 +30,11 @@ import {
   type FieldId,
   type FieldMeta,
   type Relation,
+  type RelationId,
   type Resource,
   type ResourceId,
   type Tag,
+  type TagId,
   componentById,
   componentCount,
   encodeComponentValue,
@@ -106,11 +108,17 @@ export class RuntimeStore implements ECSStore {
    */
   private frameCounter = 1;
   /**
-   * The §4.2 global tag/relation membership version — set to `frameCounter` at every tag/relation
-   * mutation (which move no archetype rows yet change tag/relation-filtered query membership). Only
-   * row-filtered Tier-1 observers consult it; a coarse single counter is sufficient (§4.2).
+   * Per-tag and per-relation membership versions (§4.2) — dense arrays indexed by `TagId` / `RelationId`
+   * (both dense). A tag/relation mutation moves no archetype row yet CAN change a row-filtered query's
+   * membership, so membership needs its own stamp; but only the ids a given observer actually watches
+   * should wake it. Each op stamps ONLY its own id ({@link bumpTag}/{@link bumpRel}), and a row-filtered
+   * Tier-1 observer consults the stamps of exactly the tags/relations its plan depends on (the query
+   * plan's per-id membership dep lists, compiled in query.ts) — so unrelated tag/relation churn no
+   * longer wakes it. Grown lazily like {@link resourceFrames} (copy-forward, zero-fill); a never-stamped
+   * id (0) reads older than any observer.
    */
-  private tagRelFrame = 0;
+  private tagFrames = new Float64Array(0);
+  private relFrames = new Float64Array(0);
   /**
    * Per-resource `lastWrittenFrame` (Patch Note 003 §1.2), a dense array indexed by `ResourceId`
    * (ids are dense). Bumped in `setResource` only — resources have no column/structural path — behind
@@ -180,9 +188,33 @@ export class RuntimeStore implements ECSStore {
     this.reactiveDeathHook = hook;
   }
 
-  /** Set `tagRelFrame` (002 §4.2) — no-op until reactivity is enabled. */
-  private bumpTagRel(): void {
-    if (this.reactiveOn) this.tagRelFrame = this.frameCounter;
+  /**
+   * Stamp tag `id`'s membership version at the current frame (§4.2) — no-op until reactivity is enabled.
+   * Grows the dense array to fit `id` on first use (copy-forward, zero-fill). `frameCounter`, NOT
+   * `stampFrame`: tag/relation ops are rejected mid-emit, so a notify-callback stamp (frame+1) is
+   * unreachable here (parity with the retired `bumpTagRel`).
+   */
+  private bumpTag(id: TagId): void {
+    if (!this.reactiveOn) return;
+    if (id >= this.tagFrames.length) {
+      const next = new Float64Array(id + 1);
+      next.set(this.tagFrames);
+      this.tagFrames = next;
+    }
+    this.tagFrames[id] = this.frameCounter;
+  }
+
+  /** Stamp relation `id`'s membership version at the current frame (§4.2) — no-op until reactivity is
+   *  enabled. Grows the dense array to fit `id` (copy-forward, zero-fill). `frameCounter` for the same
+   *  reason as {@link bumpTag}: a relation op cannot run from inside a notify callback. */
+  private bumpRel(id: RelationId): void {
+    if (!this.reactiveOn) return;
+    if (id >= this.relFrames.length) {
+      const next = new Float64Array(id + 1);
+      next.set(this.relFrames);
+      this.relFrames = next;
+    }
+    this.relFrames[id] = this.frameCounter;
   }
   /**
    * Access enforcement state (001 Rule 3, armed by the reactive layer §2.4). `accessArmed` flips on
@@ -432,9 +464,16 @@ export class RuntimeStore implements ECSStore {
     this.frameCounter++;
   }
 
-  /** @internal The frame of the most recent tag/relation mutation (002 §4.2 membership). */
-  get lastTagRelFrame(): number {
-    return this.tagRelFrame;
+  /** @internal The frame of tag `id`'s most recent membership mutation — 0 when never stamped/out of
+   *  range (002 §4.2 per-id). A row-filtered Tier-1 observer polls this for each tag its plan depends on. */
+  tagFrame(id: TagId): number {
+    return id < this.tagFrames.length ? this.tagFrames[id] : 0;
+  }
+
+  /** @internal The frame of relation `id`'s most recent membership mutation — 0 when never stamped/out
+   *  of range (002 §4.2 per-id). Covers rel row filters, demoted concrete targets, and a seed's relation. */
+  relFrame(id: RelationId): number {
+    return id < this.relFrames.length ? this.relFrames[id] : 0;
   }
 
   /**
@@ -800,11 +839,17 @@ export class RuntimeStore implements ECSStore {
     // never lights up the T0 tick-telemetry path. Pre-teardown + queue-only (fires undefined at notify).
     if (this.reactiveDeathHook !== null) this.reactiveDeathHook(e);
     const slot = slotOf(e);
-    // Per-entity state living outside the archetype must be torn down for placed AND
-    // identity-only entities so a reused slot starts clean (§5.5):
-    this.relations.clearEntity(e); // both directions, inline, terminal
-    this.tags.clearAll(slot); // mandatory — bitsets are slot-indexed, not generation-indexed (§3.2)
-    this.bumpTagRel(); // teardown changes tag/relation-filtered membership (002 §4.2)
+    // Per-entity state living outside the archetype must be torn down for placed AND identity-only
+    // entities so a reused slot starts clean (§5.5). Teardown moves no archetype row but DOES change
+    // tag/relation-filtered membership, so it stamps every membership id it actually touched (§4.2
+    // per-id) — the substores report each cleared id, and only when reactive (else the report callbacks
+    // are undefined and the substores skip the bookkeeping, keeping the non-reactive path zero-cost).
+    // This covers watches on a tag the entity carried, rel-filtered watches on its outgoing edges, and
+    // seeded watches whose target was this entity (its incoming edges clear → that relation is reported).
+    const onRel = this.reactiveOn ? (id: RelationId) => this.bumpRel(id) : undefined;
+    const onTag = this.reactiveOn ? (id: TagId) => this.bumpTag(id) : undefined;
+    this.relations.clearEntity(e, onRel); // both directions, inline, terminal
+    this.tags.clearAll(slot, onTag); // mandatory — bitsets are slot-indexed, not generation-indexed (§3.2)
     if (this.table.isPlaced(e)) {
       const A = this.archetypesById[this.table.archetypeOf(slot)];
       this.unplace(A, this.table.rowOf(slot), e);
@@ -839,7 +884,8 @@ export class RuntimeStore implements ECSStore {
    * - **WorldObserver attachments SURVIVE.** Per-entity `onDestroy` is NOT fired; a single `onReset`
    *   fires AFTER teardown (observe.ts).
    * - **Reactive registrations SURVIVE and settle at the next `notify()`.** Tier-1 watches wake from
-   *   the emptied archetypes' bumped `lastStructuralFrame` + `tagRelFrame`; Tier-2/3 entity watches
+   *   the emptied archetypes' bumped `lastStructuralFrame` + the per-id tag/relation membership stamps
+   *   (every known id is bumped before the clear); Tier-2/3 entity watches
    *   see their now-dead entity (generation bumped) via notifyWatches' dead-entity path and fire
    *   `undefined` once + self-remove; resource watches see the cleared value via bumped resource
    *   stamps. All stamps sit at the CURRENT frame — reset is a normal mutation burst and does NOT
@@ -868,14 +914,20 @@ export class RuntimeStore implements ECSStore {
     // reactivity armed, whose stamp is still 0, is covered too; grows resourceFrames as needed. Runs
     // BEFORE the clear so the ids are still known. A never-set resource stays at 0 and does not fire.
     if (this.reactiveOn) for (const id of this.resources.keys()) this.bumpResource(id as ResourceId);
+    // Stamp EVERY known tag/relation id at the current frame so any row-filtered / relation-seeded
+    // Tier-1 watch wakes at the next notify (§4.2 per-id). Runs BEFORE the substores are cleared, like
+    // the resource loop above, so the ids are still enumerable; stamping an id whose membership was
+    // already empty is a harmless over-fire (may-over-fire-never-miss).
+    if (this.reactiveOn) {
+      for (const id of this.tags.knownIds()) this.bumpTag(id);
+      for (const id of this.relations.knownIds()) this.bumpRel(id);
+    }
     // Clear tags / relations / resources wholesale.
     this.tags.reset();
     this.relations.reset();
     this.resources.clear();
     // Free every live slot with a generation bump — stale handles now read dead, never aliased.
     this.table.reset();
-    // A single tag/relation bump wakes any row-filtered / relation-seeded Tier-1 watch once (§4.2).
-    if (this.reactiveOn) this.tagRelFrame = frame;
     // R5: every watched entity just went dead (generations bumped) but reset does NOT queue the death
     // hook, so the Tier-2/3 undefined-fires ride notifyWatches' fallback path — which the fast-path
     // skip gates on componentMaxFrame. Bump EVERY component id so no such fire can be skipped.
@@ -1046,39 +1098,41 @@ export class RuntimeStore implements ECSStore {
   // ---------------------------------------------------------------------------
   //
   // Each of the five (add/remove tag, set/add/remove relation) is the SOLE owner of its
-  // "mutate the tag/relation substore + bump the §4.2 membership version" shape. Both the guarded
-  // public ops below AND the flush arms in {@link applyCommand} call these — so the substore call
-  // and `bumpTagRel()` are written once, not hand-copied per surface. The public ops keep their own
-  // preconditions (rejectMutationInEmit / assertAlive / arity throws); the flush arms keep theirs
-  // (validate-on-read at the top of applyCommand, drop-on-dead-target). The `reactiveOn` gate lives
-  // inside {@link bumpTagRel}, so these are zero-cost when reactivity is untouched.
+  // "mutate the tag/relation substore + stamp the §4.2 per-id membership version" shape. Both the
+  // guarded public ops below AND the flush arms in {@link applyCommand} call these — so the substore
+  // call and the `bumpTag`/`bumpRel` are written once, not hand-copied per surface. Each stamps ONLY
+  // its own tag/relation id, so a row-filtered Tier-1 watch wakes per-id (see {@link tagFrames}). The
+  // public ops keep their own preconditions (rejectMutationInEmit / assertAlive / arity throws); the
+  // flush arms keep theirs (validate-on-read at the top of applyCommand, drop-on-dead-target). The
+  // `reactiveOn` gate lives inside {@link bumpTag}/{@link bumpRel}, so these are zero-cost when
+  // reactivity is untouched.
 
   private doAddTag(e: Entity, tagId: number): void {
     this.ensurePlaced(e); // an identity-only source becomes queryable once tagged (§5.2)
     this.tags.set(tagId, slotOf(e));
-    this.bumpTagRel(); // tag-filtered membership changed (002 §4.2)
+    this.bumpTag(tagId); // this tag's filtered membership changed (002 §4.2)
   }
 
   private doRemoveTag(e: Entity, tagId: number): void {
     this.tags.clear(tagId, slotOf(e)); // does not unplace the entity
-    this.bumpTagRel();
+    this.bumpTag(tagId);
   }
 
   private doSetRelation(e: Entity, rel: Relation, target: Entity): void {
     this.ensurePlaced(e); // places the source; the target is not placed (§5.2)
     this.relations.setOne(rel, e, target);
-    this.bumpTagRel(); // relation-filtered membership changed (002 §4.2)
+    this.bumpRel(rel.id); // this relation's filtered membership changed (002 §4.2)
   }
 
   private doAddRelation(e: Entity, rel: Relation, target: Entity): void {
     this.ensurePlaced(e);
     this.relations.addMany(rel, e, target);
-    this.bumpTagRel();
+    this.bumpRel(rel.id);
   }
 
   private doRemoveRelation(e: Entity, rel: Relation, target?: Entity): void {
     this.relations.remove(rel, e, target); // remove one edge (target given) or all; does not unplace
-    this.bumpTagRel();
+    this.bumpRel(rel.id);
   }
 
   // ---------------------------------------------------------------------------

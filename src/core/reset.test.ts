@@ -363,7 +363,7 @@ describe("reset with reactivity never armed pays nothing (no stamps)", () => {
       if (arch === undefined) continue;
       expect(arch.lastStructuralFrame).toBe(0);
     }
-    expect(rt.lastTagRelFrame).toBe(0);
+    expect(rt.tagFrame(Selected.id)).toBe(0); // reactivity never armed → the per-id membership stamp is 0
     expect(rt.resourceFrame(Cam.id)).toBe(0);
     expect(count(w)).toBe(0);
   });
