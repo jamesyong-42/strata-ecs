@@ -290,12 +290,14 @@ export async function startMesh(opts) {
     try {
       // Dial with the Peer HANDLE, not a tailscale-id string: the handle is generation-checked (a
       // stale handle — peer left/rejoined — rejects with PeerGone, caught below → scheduleRedial)
-      // and routes by the WhoIs-authenticated tailscale key. peer.online was just asserted, so
-      // peer.ip is a real 100.x for the UDP fast path.
+      // and routes by the WhoIs-authenticated tailscale key. peer.online usually means peer.ip is a
+      // real 100.x, but 0.6.0 types it as a REQUIRED string that is EMPTY until L3 has an address —
+      // `|| undefined` enforces the link.ip ∈ {non-empty, undefined} invariant udpAddr's `??` needs
+      // (the accept side's lazy resolve gates the same way).
       const conn = await mesh.quic.connect(peer, QUIC_PORT);
       const durable = await conn.openStream();
       const connPeer = { id: peerId };
-      const link = { peerId, conn, durable, ip: peer.ip, peer, sendFrame: () => {} };
+      const link = { peerId, conn, durable, ip: peer.ip || undefined, peer, sendFrame: () => {} };
 
       // Handshake: our hello, then their reply is the FIRST frame back on this stream.
       const replied = new Promise((resolve, reject) => {
