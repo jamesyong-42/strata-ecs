@@ -10,7 +10,7 @@
     "package": "node scripts/package.mjs"
   },
   "dependencies": {
-    "@vibecook/truffle": "0.5.1"
+    "@vibecook/truffle": "0.6.0"
   },
   "devDependencies": {
     "@electron/packager": "^20.0.2",

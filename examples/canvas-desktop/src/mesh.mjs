@@ -14,7 +14,7 @@
  *     oversize falls back to the durable stream (degradation is always toward MORE reliability —
  *     transport.ts). No hub-side coalescing: the renderer's ephemeral binding already throttles.
  *
- * Topology: full mesh, one QUIC connection per instance pair; the LOWER deviceId dials (ULIDs sort).
+ * Topology: full mesh, one QUIC connection per instance pair; the LOWER tailscaleId dials (they sort).
  * Discovery is truffle's: appId-scoped peers + onPeerChange. truffle does NO forwarding — every
  * instance links to every other; frames are never re-forwarded (one-hop, loop-free by construction).
  *
@@ -73,9 +73,9 @@ export async function startMesh(opts) {
   const { createMeshNode } = await import("@vibecook/truffle");
   const { authKey, stateDir, deviceName, openUrl, log, onFrame, onLinkChange } = opts;
 
-  /** @type {Map<string, Link>} live links by remote deviceId (handshake completed) */
+  /** @type {Map<string, Link>} live links by remote tailscaleId (handshake completed) */
   const links = new Map();
-  /** @type {Map<string, {timer: any, delay: number}>} pending redials by remote deviceId */
+  /** @type {Map<string, {timer: any, delay: number}>} pending redials by remote tailscaleId */
   const redials = new Map();
   let stopped = false;
 
@@ -90,20 +90,27 @@ export async function startMesh(opts) {
     onAuthRequired: (url) => log(`tailscale auth required → ${url}`),
     onPeerChange: (ev) => {
       if (stopped) return;
-      log(`peer ${ev.eventType}: ${ev.peer?.deviceName ?? ev.peer?.deviceId ?? "?"}`);
-      if (ev.eventType === "joined" || ev.eventType === "updated") void maybeDial(ev.peer);
-      if (ev.eventType === "left" && ev.peer?.deviceId !== undefined) dropLink(ev.peer.deviceId, "peer left");
+      // RFC 022 (0.6.0): the discriminant is `ev.type` (was `eventType`), and `ev.peerId` is the
+      // peer's TAILSCALE routing key — the key our links are keyed by — carried directly on the
+      // event (empty only for auth events). `ev.peer` is the interned handle, present for every
+      // peer-scoped event including `left` (its final offline view). Never key link teardown on
+      // `ev.peer.deviceId`: that is the honest ULID (null pre-hello) and a different id space.
+      log(`peer ${ev.type}: ${ev.peer?.displayName ?? ev.peerId}`);
+      if (ev.type === "joined" || ev.type === "updated") void maybeDial(ev.peer);
+      if (ev.type === "left" && ev.peerId) dropLink(ev.peerId, "peer left");
     },
   });
   const me = mesh.getLocalInfo();
-  // The canonical mesh identity is the TAILSCALE node id, not truffle's ULID deviceId: `getPeers()`
-  // exposes peers by tailscale id (their ULID only travels over truffle's envelope-bus WS session,
-  // which raw-transport links never open — probed 2026-07-08, wsConnected:false ⇒ no ULID). Dial
-  // direction, link keys, handshakes, and UDP gating must all live in that one id space.
+  // The canonical mesh identity is the TAILSCALE node id (Peer.tailscaleId), never truffle's ULID
+  // Peer.deviceId. Under RFC 022 (truffle 0.6.0) deviceId is an HONEST ULID-or-null: it is null
+  // until a peer's hello is seen and NEVER falls back to the tailscale id, so it cannot key links
+  // that must exist before identity is learned. tailscaleId is always present and is truffle's
+  // routing/identity key for raw transports (QUIC/UDP). Dial direction, link keys, handshakes, and
+  // UDP gating therefore all live in the one tailscale-id space.
   const myId = me.tailscaleId;
-  /** @type {Map<string, string>} link peerId → tailnet 100.x IP (UDP addressing + inbound gate) */
+  /** @type {Map<string, string>} link tailscaleId → tailnet 100.x IP (UDP addressing + inbound gate) */
   const linkIps = new Map();
-  const peerIdOf = (peer) => peer?.tailscaleId ?? peer?.deviceId;
+  const peerIdOf = (peer) => peer?.tailscaleId;
   log(`mesh up: ${me.deviceName} (${myId.slice(0, 8)}…) ip=${me.ip ?? "?"}`);
 
   // Initial sweep — peers already in the netmap at startup may never emit a `joined` event, and a
@@ -127,7 +134,11 @@ export async function startMesh(opts) {
 
   /**
    * A live peer link. `durable` is the long-lived stream; `conn` also carries per-snapshot streams.
-   * @typedef {{ peerId: string, conn: any, durable: any, sendFrame: (f: Buffer) => void }} Link
+   * `peerId` is the remote tailscaleId (the link key). `peer` is the interned RFC 022 Peer handle
+   * when known — held so UDP sends can address by handle (generation-checked routing) rather than by
+   * a bare tailscale-id string, which is no longer a documented query form. `ip` is the peer's tailnet
+   * 100.x when resolved (the zero-lookup UDP fast path).
+   * @typedef {{ peerId: string, conn: any, durable: any, ip?: string, peer?: object, sendFrame: (f: Buffer) => void }} Link
    */
 
   /** Wire a durable stream: outbound writes + inbound chunked frame pump feeding the switchboard. */
@@ -170,7 +181,8 @@ export async function startMesh(opts) {
           lane = decoded.header.lane;
           if (lane === "durable") {
             // Inbound handshake — the dialer's hello. Reply with ours on the same stream, then the
-            // stream IS the link's durable lane.
+            // stream IS the link's durable lane. The wire field is named `deviceId` for compat but
+            // carries the sender's TAILSCALE id (the mesh routing/identity key), not truffle's ULID.
             const peerId = decoded.header.deviceId;
             if (decoded.header.v !== PROTOCOL_V || typeof peerId !== "string") {
               log(`rejecting link: bad handshake (v=${decoded.header.v})`);
@@ -179,8 +191,10 @@ export async function startMesh(opts) {
             }
             connPeer.id = peerId;
             stream.off("data", pump); // wireDurable installs its own pump
-            const link = { peerId, conn, durable: stream, ip: undefined, sendFrame: () => {} };
+            // No Peer handle at accept/handshake time; adoptLink's lazy netmap resolve stashes one.
+            const link = { peerId, conn, durable: stream, ip: undefined, peer: undefined, sendFrame: () => {} };
             wireDurable(link, stream);
+            // `deviceId` here is OUR tailscale id (myId), same wire-compat naming as above.
             stream.write(chunk(encodeFrame({ lane: "durable", v: PROTOCOL_V, deviceId: myId })));
             adoptLink(link, "accepted");
           }
@@ -217,7 +231,7 @@ export async function startMesh(opts) {
     const existing = links.get(link.peerId);
     if (existing !== undefined) {
       // Simultaneous dial crossing (both sides raced a connection): deterministic winner — keep the
-      // one the LOWER deviceId dialed, i.e. accept the replacement only from the canonical dialer.
+      // one the LOWER tailscaleId dialed, i.e. accept the replacement only from the canonical dialer.
       log(`duplicate link to ${link.peerId.slice(0, 8)}… (${how}); keeping existing`);
       try {
         link.conn.close?.();
@@ -228,17 +242,22 @@ export async function startMesh(opts) {
     }
     links.set(link.peerId, link);
     redials.delete(link.peerId);
-    // The UDP lane needs the peer's tailnet IP (addressing out, gating in). The dial side knows it
-    // from the peer object; the accept side resolves it from the netmap — best-effort, the durable
-    // lane is fully usable meanwhile.
+    // The UDP lane needs the peer's tailnet IP (addressing out, gating in) and its Peer handle (the
+    // resolvable UDP fallback when the IP isn't known yet). The dial side knows both from the peer
+    // object; the accept side resolves them from the netmap — best-effort, the durable lane is fully
+    // usable meanwhile. `peer.ip` is a non-optional string in 0.6.0 (empty until L3 has an address),
+    // so gate on truthiness, not `!== undefined`; online peers always carry a real 100.x.
     if (link.ip !== undefined) linkIps.set(link.peerId, link.ip);
     else
       void (async () => {
         try {
           const peer = (await mesh.getPeers()).find((p) => peerIdOf(p) === link.peerId);
-          if (peer?.ip !== undefined && links.get(link.peerId) === link) {
-            link.ip = peer.ip;
-            linkIps.set(link.peerId, peer.ip);
+          if (peer !== undefined && links.get(link.peerId) === link) {
+            link.peer = peer; // stash the handle even if the IP isn't populated yet
+            if (peer.ip) {
+              link.ip = peer.ip;
+              linkIps.set(link.peerId, peer.ip);
+            }
           }
         } catch {
           /* node stopping */
@@ -269,10 +288,14 @@ export async function startMesh(opts) {
     if (stopped || peerId === undefined) return;
     if (!(myId < peerId) || links.has(peerId) || !peer.online) return;
     try {
-      const conn = await mesh.quic.connect(peerId, QUIC_PORT);
+      // Dial with the Peer HANDLE, not a tailscale-id string: the handle is generation-checked (a
+      // stale handle — peer left/rejoined — rejects with PeerGone, caught below → scheduleRedial)
+      // and routes by the WhoIs-authenticated tailscale key. peer.online was just asserted, so
+      // peer.ip is a real 100.x for the UDP fast path.
+      const conn = await mesh.quic.connect(peer, QUIC_PORT);
       const durable = await conn.openStream();
       const connPeer = { id: peerId };
-      const link = { peerId, conn, durable, ip: peer.ip, sendFrame: () => {} };
+      const link = { peerId, conn, durable, ip: peer.ip, peer, sendFrame: () => {} };
 
       // Handshake: our hello, then their reply is the FIRST frame back on this stream.
       const replied = new Promise((resolve, reject) => {
@@ -288,6 +311,8 @@ export async function startMesh(opts) {
         durable.on("data", pump);
         durable.once("error", (err) => reject(err));
       });
+      // Wire field `deviceId` carries OUR tailscale id (myId) — the mesh identity key, not truffle's
+      // ULID; the name is kept only for wire compat with the accept side.
       durable.write(chunk(encodeFrame({ lane: "durable", v: PROTOCOL_V, deviceId: myId })));
       const reply = decodeFrame(await replied);
       if (reply === null || reply.header.lane !== "durable" || reply.header.v !== PROTOCOL_V)
@@ -333,8 +358,11 @@ export async function startMesh(opts) {
   udp.on("message", (msg, rinfo) => {
     // WireGuard authenticated the source IP; gate on it mapping to a LINKED peer — raw UDP has no
     // ALPN, so this is the app-scoping equivalent (plus: no link, no bootstrap, no business here).
-    // rinfo.peerId is a best-effort netmap enrichment that can lag (cold cache) — the link IP index
-    // is the fallback so early datagrams aren't dropped on identity-cache timing.
+    // In 0.6.0 rinfo.peerId spans TWO id spaces (dgram fills it `deviceId ?? tailscaleId`): before
+    // the sender's identity is learned it is the tailscale id and matches a link key directly; once
+    // eager identity lands it becomes the ULID, which never matches a link key — the linkIps address
+    // index (WireGuard-authenticated source IP → link) covers that case AND cold-cache lag, so both
+    // the pre-identity fast path and the post-identity ULID resolve to the right link.
     const fromPeer =
       rinfo.peerId !== undefined && links.has(rinfo.peerId)
         ? rinfo.peerId
@@ -347,12 +375,21 @@ export async function startMesh(opts) {
   udp.on("error", (err) => log(`udp error: ${err.message}`));
   await udp.bind(UDP_PORT);
 
-  /** UDP addressing: the 100.x IP when known (no resolution hop), else the node id (resolvable). */
-  const udpAddr = (link) => link.ip ?? link.peerId;
+  /**
+   * UDP addressing: the 100.x IP when known (zero lookup), else the Peer handle (resolvable,
+   * generation-checked). A bare tailscale-id string is no longer a documented dgram query form, so
+   * we never fall back to link.peerId. Returns undefined when neither is known yet (accept-side link
+   * before the lazy resolve lands) — callers SKIP that link (ephemeral is latest-lossy; the durable
+   * lane is unaffected). `link.ip` is only ever a non-empty string or undefined, so `??` is correct.
+   */
+  const udpAddr = (link) => link.ip ?? link.peer;
 
   const heartbeat = setInterval(() => {
     const hb = encodeFrame({ lane: "hb", deviceId: myId });
-    for (const link of links.values()) udp.send(hb, UDP_PORT, udpAddr(link), () => {});
+    for (const link of links.values()) {
+      const addr = udpAddr(link);
+      if (addr !== undefined) udp.send(hb, UDP_PORT, addr, () => {});
+    }
   }, UDP_HEARTBEAT_MS);
   heartbeat.unref?.();
 
@@ -364,15 +401,19 @@ export async function startMesh(opts) {
     /** Online tailnet peers of this app (ephemeral nodes ≈ running instances) — meshHold's input. */
     onlinePeers: async () => (await mesh.getPeers()).filter((p) => p.online),
     /**
-     * Ship one already-headered frame ({room, kind, from, to?}) to the mesh. `toLink` (a deviceId)
-     * narrows an addressed frame to the link that owns its target — main.mjs learns the mapping from
-     * inbound frames; undefined floods every link (correct, just wasteful for snapshots).
+     * Ship one already-headered frame ({room, kind, from, to?}) to the mesh. `toLink` (a link key,
+     * i.e. a remote tailscaleId) narrows an addressed frame to the link that owns its target —
+     * main.mjs learns the mapping from inbound frames; undefined floods every link (correct, just
+     * wasteful for snapshots).
      */
     post(header, payload, toLink) {
       const frame = encodeFrame(header, payload);
       const targets = toLink !== undefined && links.has(toLink) ? [links.get(toLink)] : [...links.values()];
       if (header.kind === "ephemeral" && frame.length <= UDP_MAX_FRAME) {
-        for (const link of targets) udp.send(frame, UDP_PORT, udpAddr(link), () => {});
+        for (const link of targets) {
+          const addr = udpAddr(link);
+          if (addr !== undefined) udp.send(frame, UDP_PORT, addr, () => {});
+        }
         return;
       }
       if (header.kind === "snapshot") {
