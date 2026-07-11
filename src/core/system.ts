@@ -8,6 +8,7 @@
  */
 
 import type { Entity } from "./entity";
+import { DEV, devWarn } from "./dev";
 import {
   type Component,
   type ComponentId,
@@ -284,6 +285,13 @@ export function defineTickSystem(
   body: TickSystemBody,
   opts?: { runIf?: Condition; name?: string; access?: SystemAccess },
 ): TickSystem {
+  if (DEV && body.length >= 2) {
+    // A tick body receives only (ctx); a 2-parameter function is almost certainly a chunk body
+    // (batch, ctx) handed to the wrong definer. TypeScript rejects this; the warn catches JS and casts.
+    devWarn(
+      `strata: defineTickSystem body "${opts?.name ?? body.name ?? "system"}" declares ${body.length} parameters — a tick body receives only (ctx). Did you mean defineSystem(query, body)?`,
+    );
+  }
   return {
     name: opts?.name ?? (body.name || "system"),
     body,

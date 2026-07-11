@@ -909,7 +909,13 @@ const BINDING_SEAMS = new Set<string>(["registerInboundSource", "unregisterInbou
 /** TypeScript `private` erases at runtime, so these still sit on `World.prototype` — skip them explicitly.
  * `walkAttributed`/`dispatchSystem` (petition 5) are walk/dispatch plumbing: the former's write-stamp is a
  * reactive frame bump, not an ECS mutation, so neither owes a WriteKind fire site. */
-const PRIVATE_ERASED = new Set<string>(["assertNotIterating", "eachGuarded", "walkAttributed", "dispatchSystem"]);
+const PRIVATE_ERASED = new Set<string>([
+  "assertNotIterating",
+  "eachGuarded",
+  "walkAttributed",
+  "dispatchSystem",
+  "stampAndClearWrites",
+]);
 
 describe("drift-proofing", () => {
   it("(a) WorldMutatorName is exhaustively covered by this file (compile error when the union grows)", () => {

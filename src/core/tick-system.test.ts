@@ -282,6 +282,27 @@ describe("ctx.query — the sanctioned in-body walk (petition 5 P1/P3)", () => {
     expect(wakes.mock.calls.length).toBeGreaterThan(before);
   });
 
+  it("an onSystemRun observer that walks world.query inherits NO attribution (review fix)", () => {
+    // Attribution must end with the body: telemetry callbacks run user code, and an inspector that
+    // reads via world.query must not stamp the just-ran system's writes over its own query.
+    const world = createWorld();
+    world.spawn({ components: [[Wheel, { d: 1 }]] });
+    const qWheel = defineQuery([Wheel]);
+    const wakes = vi.fn();
+    world.reactive.observeQuery(qWheel, wakes);
+    world.reactive.notify();
+    const before = wakes.mock.calls.length;
+
+    // The system declares Wheel writes but its query matches a DIFFERENT archetype and its body
+    // writes nothing — so no stamp may reach qWheel from this dispatch.
+    const sys = defineSystem(defineQuery([Aux]), () => {}, { name: "idleW", access: { write: [Wheel] } });
+    world.spawn({ components: [[Aux, { n: 0 }]] });
+    world.observe({ onSystemRun: () => world.query(qWheel).each(() => {}) });
+    world.tick([phase("p", [sys])]);
+    world.reactive.notify();
+    expect(wakes.mock.calls.length).toBe(before);
+  });
+
   it("out-of-tick world.query never stamps (attribution is system-scoped)", () => {
     const world = createWorld();
     world.spawn({ components: [[Wheel, { d: 1 }]] });

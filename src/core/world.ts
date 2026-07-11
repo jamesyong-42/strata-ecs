@@ -193,6 +193,13 @@ export class World {
    * system body stamps identically whichever handle the body used. Out-of-tick the field is `null`
    * and this is `eachGuarded` plus one null test. The stamp is a value-frame bump on cached match
    * lists — no structural effect — so firing mid-outer-walk (inner walks run inside a body) is safe.
+   *
+   * Seeded queries (`Related(rel, target)`) stamp via their component-mask match list, which is
+   * seed-BLIND — for a pure-seed query that is every archetype holding the written components, a
+   * world-wide blanket. A deliberate over-fire, never a miss (002 §2.3: Tier-1 may over-fire;
+   * Tier-3 equality absorbs it): the seed rows' archetypes are a strict subset of the mask list,
+   * so precision-sensitive Tier-1 watchers over hot seeded writes should scope with component
+   * terms or move to Tier-3 rather than this path growing a reverse-index walk per stamp.
    */
   private walkAttributed(q: Query, fn: (batch: Batch) => void): void {
     this.eachGuarded(this.store.query(q), fn);
@@ -218,6 +225,22 @@ export class World {
       }
     } else {
       this.eachGuarded(this.store.query(system.query), (batch) => system.body(batch, ctx));
+    }
+  }
+
+  /**
+   * Close a system run's reactive attribution: blanket-stamp the declared writes over the system's
+   * OWN query (001 §3.1 route 1, 002 §2.3 — tick systems have no query to stamp; their writes ride
+   * the precise per-write stamps plus the per-walk stamps), then disarm. Runs immediately after the
+   * body returns and BEFORE any telemetry emit, so observer callbacks never walk attributed. A
+   * gated-off system never reaches here, so it never stamps (001 §3.4); `activeSystemWrites` is only
+   * ever non-null under an armed reactive layer, so the null test is the whole fast path.
+   */
+  private stampAndClearWrites(system: System | TickSystem): void {
+    const w = this.activeSystemWrites;
+    if (w !== null) {
+      if (system.query !== undefined) this.store.stampWrites(system.query, w);
+      this.activeSystemWrites = null;
     }
   }
 
@@ -447,18 +470,17 @@ export class World {
             if (obs !== null) {
               const t0 = performance.now();
               this.dispatchSystem(system, ctx);
-              emitSystemRun(obs, phase.name, system.name, true, (performance.now() - t0) * 1000);
+              const micros = (performance.now() - t0) * 1000;
+              // Stamp + disarm BEFORE the observer emit (review fix): onSystemRun callbacks run user
+              // code — one that walks world.query must not inherit this system's attribution, or the
+              // observer's own walk stamps the system's writes over an unrelated query (spurious
+              // Tier-1 wakes every frame an inspector is attached). Attribution ends with the body,
+              // exactly as the field's contract states.
+              this.stampAndClearWrites(system);
+              emitSystemRun(obs, phase.name, system.name, true, micros);
             } else {
               this.dispatchSystem(system, ctx);
-            }
-            // Reactive change detection: blanket-stamp the system's declared writes over its OWN query
-            // (001 §3.1 route 1, 002 §2.3). Tick systems have no query to stamp — their writes ride
-            // the precise per-write stamps plus the per-walk stamps above. A gated-off system never
-            // reaches here, so it never stamps (001 §3.4).
-            if (reactive !== null) {
-              const w = this.activeSystemWrites;
-              if (w !== null && system.query !== undefined) this.store.stampWrites(system.query, w);
-              this.activeSystemWrites = null;
+              this.stampAndClearWrites(system);
             }
           }
           if (obs !== null) {
