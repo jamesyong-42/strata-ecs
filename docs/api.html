@@ -374,7 +374,7 @@
 
 <nav class="sidebar" id="sidebar">
   <a class="brand" href="#top"><b>strata<span class="dash">·</span>ecs</b></a>
-  <div class="ver">v0.2 · pre-release</div>
+  <div class="ver">v0.4 · pre-release</div>
   <a class="api-link" href="index.html">← Guide</a>
 
   <div class="nav-group g-core">
@@ -386,6 +386,7 @@
     <a href="#core-createWorld" class="sub">World</a>
     <a href="#core-Reactive" class="sub">Reactive</a>
     <a href="#core-WorldObserver" class="sub">WorldObserver</a>
+    <a href="#core-devOnWrite" class="sub">law window</a>
     <a href="#core-store" class="sub">store seam</a>
   </div>
   <div class="nav-group g-react">
@@ -406,6 +407,7 @@
     <a href="#durable-createDurableStore" class="sub">createDurableStore</a>
     <a href="#durable-DurableStore" class="sub">DurableStore</a>
     <a href="#durable-transaction" class="sub">transaction</a>
+    <a href="#durable-metaTransaction" class="sub">metaTransaction</a>
     <a href="#durable-history" class="sub">undo / redo</a>
     <a href="#durable-attachDurable" class="sub">attachDurable</a>
     <a href="#durable-status" class="sub">SyncStatus</a>
@@ -440,7 +442,7 @@
     </p>
     <div class="chips">
       <span class="chip"><b>v0</b> · pre-release</span>
-      <span class="chip">99 exports</span>
+      <span class="chip">103 exports</span>
       <span class="chip pre"><b>import</b> "@vibecook/strata-ecs"</span>
     </div>
     <nav class="switch" aria-label="Modules">
@@ -463,7 +465,7 @@
       re-explained here.
     </p>
 
-    <h3 class="grp"><code>@vibecook/strata-ecs</code> — 66 exports</h3>
+    <h3 class="grp"><code>@vibecook/strata-ecs</code> — 69 exports</h3>
     <div class="tbl"><table>
       <thead><tr><th>Export</th><th>Kind</th><th>Role</th></tr></thead>
       <tbody>
@@ -488,6 +490,7 @@
         <tr><td class="band b-core"><a href="#core-Reactive"><code>Reactive</code></a></td><td class="k">class</td><td>The poll-at-boundary reactive observer layer.</td></tr>
         <tr><td class="band b-core"><a href="#core-Reactive"><code>Unsubscribe</code></a></td><td class="k">type</td><td>The idempotent teardown handle every <code>observe*</code> returns.</td></tr>
         <tr><td class="band b-core"><a href="#core-WorldObserver"><code>WorldObserver</code></a></td><td class="k">type</td><td>The dev-tool telemetry contract (spawn / destroy / tick).</td></tr>
+        <tr><td class="band b-core"><a href="#core-devOnWrite"><code>WriteKind</code> <code>WorldMutatorName</code> <code>ReadonlyWorld</code></a></td><td class="k">type</td><td>The write-hook kind, the mutator-method names, and the compile-time read-only <code>World</code> view.</td></tr>
         <tr><td class="band b-core"><a href="#core-Local"><code>Local</code></a></td><td class="k">const</td><td>The framework partition-ownership tag — query-only.</td></tr>
         <tr><td class="band b-core"><a href="#core-VERSION"><code>VERSION</code></a></td><td class="k">const</td><td>The package version string.</td></tr>
         <tr><td class="band b-core"><a href="#core-handles"><code>Entity</code> <code>EntityKey</code></a></td><td class="k">type</td><td>The entity handle; its cross-store string identity.</td></tr>
@@ -526,7 +529,7 @@
       </tbody>
     </table></div>
 
-    <h3 class="grp"><code>@vibecook/strata-ecs/durable</code> — 14 exports</h3>
+    <h3 class="grp"><code>@vibecook/strata-ecs/durable</code> — 15 exports</h3>
     <div class="tbl"><table>
       <thead><tr><th>Export</th><th>Kind</th><th>Role</th></tr></thead>
       <tbody>
@@ -534,6 +537,7 @@
         <tr><td class="band b-durable"><a href="#durable-createDurableStore"><code>DurableStoreOptions</code></a></td><td class="k">type</td><td>Store options — the undo-stack depth cap.</td></tr>
         <tr><td class="band b-durable"><a href="#durable-DurableStore"><code>DurableStore</code></a></td><td class="k">class</td><td>The durable object — identity, reads, and the transport wires.</td></tr>
         <tr><td class="band b-durable"><a href="#durable-transaction"><code>Mutator</code> <code>TxEditor</code></a></td><td class="k">type</td><td>The <code>tx</code> mutation vocabulary inside a transaction.</td></tr>
+        <tr><td class="band b-durable"><a href="#durable-metaTransaction"><code>MetaEditor</code></a></td><td class="k">type</td><td>The primitive <code>get</code>/<code>set</code> editor for document-metadata writes.</td></tr>
         <tr><td class="band b-durable"><a href="#durable-history"><code>undo</code> <code>redo</code> <code>undoGroup</code> · <code>HistoryHooks</code> <code>HistoryStack</code></a></td><td class="k">methods · type</td><td>Local-only undo/redo, grouping, and the selection-restore hooks.</td></tr>
         <tr><td class="band b-durable"><a href="#durable-attachDurable"><code>attachDurable</code></a></td><td class="k">fn</td><td>Project the document into a world; register the drain.</td></tr>
         <tr><td class="band b-durable"><a href="#durable-attachDurable"><code>Attachment</code></a></td><td class="k">type</td><td>The detach handle attach returns.</td></tr>
@@ -840,11 +844,14 @@
         structural). <code>write</code> names the columns it may mutate. <code>read</code> is optional; when
         omitted it defaults to the query's components not in <code>write</code>. It is optional in the base
         runtime but does real work once reactivity is active: it tells the framework which columns a system
-        stamped, and — in dev builds — enforces that a system only writes what it declared.
+        stamped, and — in dev builds — enforces that a system only writes what it declared. A third optional
+        member, <code>orderIndependent</code>, is advisory-only metadata: it attests order-tolerant columns to
+        opt out of the same-phase double-writer warning, and touches nothing at runtime.
       </p>
       <ul class="notes">
         <li><span class="nl">Scope</span> Components only in v1 — tags and relations are membership filters; resources are a deferred extension.</li>
-        <li><span class="nl">See</span> <a href="index.html#systems">Access declarations</a></li>
+        <li><span class="nl">Attest</span> <code>orderIndependent</code> lists columns whose writes are order-tolerant against same-phase co-writers (row-disjoint, commutative, or last-write-wins-safe). Every column named must also appear in <code>write</code> (a dev-hygiene warning fires otherwise). It suppresses the double-writer advisory for a column only when <em>every</em> same-phase writer of it attests — an un-attesting newcomer re-fires the warning. It never feeds the read default and never affects runtime access enforcement.</li>
+        <li><span class="nl">See</span> <a href="#core-validatePipelineAccess">validatePipelineAccess</a> · <a href="index.html#systems">Access declarations</a></li>
       </ul>
     </article>
 
@@ -868,13 +875,14 @@
       <p>
         Dev-only advisory diagnostics over a pipeline's declared access. It warns — never reorders — about a
         manual system order that looks data-inconsistent: two systems in one phase writing the same component
-        (a potential order-dependence), or a system whose read set includes <code>C</code> positioned before a
-        same-phase writer of <code>C</code> (a likely "reads stale <code>C</code>" bug). The whole surface
-        compiles out of production.
+        (a potential order-dependence, unless every writer attests it order-tolerant), or a system whose read
+        set includes <code>C</code> positioned before a same-phase writer of <code>C</code> (a likely "reads
+        stale <code>C</code>" bug). The whole surface compiles out of production.
       </p>
       <ul class="notes">
         <li><span class="nl">DEV-only</span> A no-op in production; analyses each pipeline object once (deduped across repeated ticks).</li>
         <li><span class="nl">Advisory</span> v1 never reorders — execution is positional — so these help you hand-order correctly.</li>
+        <li><span class="nl">Opt out</span> The double-writer warning is silenced for a column once <em>every</em> system that writes it lists it in <a href="#core-SystemAccess"><code>access.orderIndependent</code></a> — your certification that its writes don't depend on run order. The stale-read warning has no opt-out.</li>
       </ul>
     </article>
 
@@ -908,6 +916,7 @@
         <li><span class="nl w">Throws</span> <code>tick</code>, <code>sync</code>, <code>reset</code>, and <code>import({replace})</code> throw if called mid-iteration; <code>sync</code>/<code>reset</code> also require being outside a tick and outside an observer / reactive callback.</li>
         <li><span class="nl">Queries</span> <code>count(q)</code> returns the matched-row total; <code>entities(q)</code> materializes the matching handles into a fresh array. Both are iteration-safe reads over the same query machinery — prefer <code>query(q).each</code> on the hot path, since <code>entities</code> allocates the array plus one handle per match. <code>updateResource(res, fn)</code> is the read-modify-write over a resource and throws if it was never set.</li>
         <li><span class="nl">reactive</span> The <code>reactive</code> getter lazily creates and caches the layer; <strong>reading it is side-effect-free</strong> — stamping and dev-enforcement arm on the first <code>observe*</code> registration, not on property access, so a stray read never flips the profile. <code>isReactiveEnabled</code> probes whether that has happened. A world that never observes pays nothing (<a href="#core-Reactive"><code>Reactive</code></a>).</li>
+        <li><span class="nl">Law window</span> <code>devOnWrite</code> registers a dev-only, synchronous <strong>pre-mutation</strong> hook whose throws <strong>propagate</strong> (unlike an <a href="#core-WorldObserver"><code>observe</code></a> callback, which is swallowed) — the runtime half of a "law window" for asserting nothing writes during a read-only pass (<a href="#core-devOnWrite">devOnWrite · ReadonlyWorld</a>).</li>
         <li><span class="nl">Persist</span> <code>export()</code> returns readable UTF-8 JSON bytes; plain <code>import</code> needs an empty world; <code>import(bytes, { replace: true })</code> validates, then resets in place — keeping this <code>World</code> and every observer / reactive registration (<a href="index.html#persistence">Persistence</a>).</li>
         <li><span class="nl">Reset</span> After <code>reset()</code> / replace-import, every pre-reset handle reads dead, never aliased to a later entity; a single <code>onReset</code> fires, never per-entity <code>onDestroy</code>.</li>
         <li><span class="nl">spawn</span> The published <code>spawn</code> is generic: <code>spawn&lt;const T&gt;(init?: SpawnInitOf&lt;T&gt;)</code> infers each component's schema literal for per-field checking — condensed to <code>SpawnInit</code> above (<a href="#core-store">store seam</a>).</li>
@@ -955,6 +964,61 @@
         <li><span class="nl">Timing</span> <code>onSpawn</code> fires once per entity (after placement for <code>world.spawn</code>; at the eager mint for <code>ctx.spawn</code>). <code>onDestroy</code> fires <em>before</em> teardown — the dying entity is still fully readable. A wholesale reset fires one <code>onReset</code> after teardown, not per-entity <code>onDestroy</code>.</li>
         <li><span class="nl">See</span> <a href="index.html#tools">Observability &amp; tools</a> · <a href="#mod-tools"><code>@vibecook/strata-ecs/tools</code></a></li>
       </ul>
+    </article>
+
+    <article class="entry e-core" id="core-devOnWrite">
+      <h3><span class="k">method · types</span>devOnWrite · WriteKind · ReadonlyWorld<a class="anchor" href="#core-devOnWrite">#</a></h3>
+      <figure class="code" data-file="core-devOnWrite" data-kind="method · types"></figure>
+      <p>
+        The dev-time <strong>law window</strong> — a runtime hook and a compile-time type that together let you
+        assert nothing mutates across a stretch that should only read (a render pass, a selector, a
+        derivation). <code>world.devOnWrite(cb)</code> registers a <strong>dev-only, synchronous,
+        pre-mutation</strong> hook and returns a disposer; it fires once for every mutation, classified by a
+        <code>WriteKind</code>, <em>before</em> the write lands. <code>ReadonlyWorld</code> is
+        <code>Omit&lt;World, WorldMutatorName&gt;</code> — the same world with every mutating method removed, so
+        handing a function a <code>ReadonlyWorld</code> makes a stray <code>world.spawn(…)</code> fail to
+        typecheck.
+      </p>
+      <p>
+        The hook fires at strata's internal chokepoints, <em>downstream</em> of any bound method, so it observes
+        <strong>every</strong> route into the runtime, not just <code>world.*</code>: the <code>world.*</code>
+        mutators and <code>edit().set</code> editors, the deferred <code>ctx.*</code> command-buffer flush, a
+        durable <code>transaction</code>'s identity mint and its seal's value writes,
+        <code>sync()</code> / <code>attachDurable</code> projection, <code>undo</code> / <code>redo</code>
+        echoes, the ephemeral mutators and inbound presence projection, snapshot <code>import</code>, and
+        <code>reset()</code> — including strata's own runtime-local status-resource writes, which fire
+        <code>"resource"</code>.
+      </p>
+      <div class="rule">
+        <span class="tag">Rule — a throw vetoes, but only per single write</span>
+        <p>
+          A throwing hook <strong>propagates</strong> to the mutator's caller — deliberately unlike an
+          <a href="#core-WorldObserver"><code>observe</code></a> callback, which is swallowed and reported. For a
+          single-op mutation the fire precedes the first state change, so a throw is a <strong>clean
+          veto</strong>: the op does not happen. But a compound op fires more than once and may span kinds, and
+          a throw partway through leaves the earlier writes applied — so arm a throwing hook <em>only</em> in a
+          window where no legitimate mutation runs, never across <code>tick()</code> / <code>sync()</code>. The
+          intended pattern: register once, keep your own <code>armed</code> flag, and throw from the hook only
+          while armed.
+        </p>
+      </div>
+      <ul class="notes">
+        <li><span class="nl">Kinds</span> <code>WriteKind</code> is <code>"structural" | "component" | "tag" | "relation" | "resource"</code>. <code>addComponent</code> / <code>removeComponent</code> surface as <code>"structural"</code> (they migrate archetypes); a value overwrite is <code>"component"</code>. The guarantee is fire-at-least-once-per-logical-write, may-over-fire, never-miss.</li>
+        <li><span class="nl">Carve-out</span> A raw <code>batch.col()</code> TypedArray write — the system hot path — has no chokepoint by design (the same carve-out as <a href="#core-Reactive"><code>reactive.invalidate</code></a>). The hook sees every object-level mutation route above, but not direct column writes.</li>
+        <li><span class="nl">ReadonlyWorld</span> Types erase, so a cast back to <code>World</code> defeats the compile-time half — pair it with a throwing <code>devOnWrite</code> hook when the window must hold at runtime. <code>WorldMutatorName</code> is the union of stripped method names; <code>registerInboundSource</code> / <code>unregisterInboundSource</code> are deliberately kept (they bind layers, not ECS data).</li>
+      </ul>
+      <div class="note">
+        <span class="tag">Note — production honesty</span>
+        <p>
+          Where <code>DEV</code> is false — a runtime with <code>process</code> under
+          <code>NODE_ENV=production</code> (Node / SSR, or a browser build that shims or defines
+          <code>process</code>) — registration is a no-op returning a no-op disposer and every fire site is
+          dead. But in an <strong>un-shimmed browser production bundle</strong> <code>DEV</code> evaluates true
+          at runtime, so registration stays live and each mutation pays one roster null-check (nothing fires
+          while nothing is registered). Until strata ships separate dev / prod builds, gate your registration
+          behind your own production flag if you target un-shimmed browsers.
+        </p>
+      </div>
     </article>
 
     <h3 class="grp">The store seam</h3>
@@ -1166,6 +1230,36 @@
         <li><span class="nl d">Legal only</span> On an attached store, and not re-entrantly — one open transaction per store (a nested <code>transaction</code> throws).</li>
         <li><span class="nl d">Access</span> A value commit to a pre-existing component <em>inside a system</em> rides 001 enforcement — the system must declare it in <code>access.write</code>, or a dev build throws once an observer has armed enforcement.</li>
         <li><span class="nl">Undoability</span> <code>opts.undoable: false</code> excludes this transaction's commit from the <strong>local</strong> undo stack — for document migrations, format upgrades, and read-repair at open. It is otherwise an ordinary commit: peers receive it as a normal remote batch, history hooks don't fire for it, and a pending redo survives it. Contrast <code>clearHistory()</code>, which empties both stacks wholesale.</li>
+      </ul>
+    </article>
+
+    <article class="entry e-durable" id="durable-metaTransaction">
+      <h3><span class="k">method · interface</span>metaTransaction · MetaEditor<a class="anchor" href="#durable-metaTransaction">#</a></h3>
+      <figure class="code" data-file="durable-metaTransaction" data-kind="method · interface"></figure>
+      <p>
+        The sanctioned door for an embedder's <em>own</em> document metadata — a version stamp, a schema
+        marker, a feature flag that should travel and persist <em>with</em> the document but is not an ECS
+        entity or component. <code>store.metaTransaction(fn)</code> hands <code>fn</code> a small
+        <code>MetaEditor</code> with primitive <code>get</code> / <code>set</code> over the document's reserved
+        metadata map, and seals whatever it writes as one document change. Values are
+        <code>string | number | boolean</code> (metadata slots are write-once markers, not nested documents);
+        keys should carry a dotted namespace of your own — e.g. <code>"engine.schema"</code> — and the reserved
+        document-id key is refused.
+      </p>
+      <div class="rule r-durable">
+        <span class="tag">Rule — transparent to the runtime</span>
+        <p>
+          A meta write produces <strong>no</strong> entity or component change: attached observers and
+          <code>useResource</code> never see it, and it does not wake a <code>world.sync()</code>. It is
+          <strong>excluded from undo / redo</strong> — a user's <code>undo()</code> never rolls back a version
+          stamp, and writing one does not clear the redo stack. It still travels to peers and persists in the
+          snapshot like any other change, converging per key by last-writer-wins.
+        </p>
+      </div>
+      <ul class="notes">
+        <li><span class="nl d">Attachment</span> Unlike <a href="#durable-transaction"><code>transaction</code></a> this needs no attachment — legal on a bare store, since it only touches the document — but not mid-<code>transaction</code> (the open transaction's ops are not sealed yet). An empty callback is a no-op.</li>
+        <li><span class="nl d">Throws</span> <code>set</code> throws on the reserved document-id key and on any non-primitive value. The editor is valid only for the synchronous duration of the callback — a leaked reference throws on later use.</li>
+        <li><span class="nl">Reads</span> <code>get(key)</code> returns the value when it is a <code>string | number | boolean</code>, else <code>undefined</code>; a read carries no protocol obligation, so you may equivalently read straight off your own doc.</li>
       </ul>
     </article>
 
@@ -1483,6 +1577,7 @@ type Pipeline = readonly Phase[];   // positional — array order is run order</
 <script type="text/plain" data-code="core-SystemAccess">interface SystemAccess {
   readonly write?: readonly Component[];  // columns the body may mutate (union over all conditions)
   readonly read?:  readonly Component[];  // defaults to queried components not in `write`
+  readonly orderIndependent?: readonly Component[];  // ⊆ write — attest order-tolerant vs co-writers (advisory-only)
 }</script>
 
 <script type="text/plain" data-code="core-EntityEditor">interface EntityEditor {
@@ -1526,6 +1621,7 @@ type Pipeline = readonly Phase[];   // positional — array order is run order</
   tick(pipeline: Pipeline): void;
   sync(): void;                          // drain inbound layers (no-op when none attached)
   observe(obs: WorldObserver): () => void;
+  devOnWrite(cb: (kind: WriteKind) => void): () => void;   // DEV-only PRE-mutation hook; throws PROPAGATE (see below)
 
   // inbound layers (durable/ephemeral bindings register here)
   registerInboundSource(source: InboundSource): void;
@@ -1561,6 +1657,21 @@ type Unsubscribe = () => void;           // idempotent</script>
   onPhaseFlush?(phase: string, micros: number): void;
   onTickEnd?(tick: number, micros: number): void;
 }</script>
+
+<script type="text/plain" data-code="core-devOnWrite">// on World — the runtime half of the law window
+devOnWrite(cb: (kind: WriteKind) => void): () => void;   // DEV-only, synchronous, PRE-mutation; throws PROPAGATE
+
+type WriteKind = "structural" | "component" | "tag" | "relation" | "resource";
+// add/removeComponent → "structural" (archetype migration); value overwrite → "component"
+
+// the compile-time half — a read-only view of a World
+type ReadonlyWorld = Omit<World, WorldMutatorName>;   // reads / observe / devOnWrite / reactive / export remain
+type WorldMutatorName =
+  | "spawn" | "destroy" | "addComponent" | "removeComponent"
+  | "addTag" | "removeTag" | "setRelation" | "addRelation" | "removeRelation"
+  | "setResource" | "updateResource" | "removeResource"
+  | "edit" | "import" | "reset" | "sync" | "tick";
+// NOT stripped: registerInboundSource / unregisterInboundSource (binding lifecycle, not ECS data)</script>
 
 <script type="text/plain" data-code="core-store">// The storage-agnostic contract — every operation immediate; deferral is SystemCtx's concern.
 interface ECSStore {
@@ -1644,6 +1755,14 @@ interface Mutator {   // the tx vocabulary — same surface as world/ctx, sealed
   setResource<S>(res: Resource<S>, v: S): void;   removeResource(res: Resource): void;
 }
 interface TxEditor { set<S>(c: Component<S>, v: S): TxEditor }</script>
+
+<script type="text/plain" data-code="durable-metaTransaction">// on DurableStore — needs NO attachment; illegal mid-transaction
+metaTransaction(fn: (meta: MetaEditor) => void): void;   // one sealed change; excluded from undo/redo
+
+interface MetaEditor {   // valid only for the synchronous duration of the callback
+  get(key: string): string | number | boolean | undefined;
+  set(key: string, value: string | number | boolean): void;   // throws on the reserved doc-id key / non-primitive
+}</script>
 
 <script type="text/plain" data-code="durable-history">// All methods on DurableStore. LOCAL history only — a peer's ops are never on your stacks.
 undo(): boolean;                          // your most recent step; false on an empty stack

@@ -4,6 +4,59 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [0.4.0] — 2026-07-11
+
+Three additive dev-experience and embedding features, all born from editor-integration reviews
+(no breaking changes).
+
+### Added
+
+- **Writer-pair attestation** (`SystemAccess.orderIndependent`) — systems that deliberately
+  co-write a column in one phase (row-disjoint by construction, commutative, or
+  last-write-wins-safe) can each attest it. The same-phase double-writer advisory for that column
+  goes quiet only when **every** co-writer attests, so an un-attested newcomer re-arms it — the
+  channel stays trustworthy instead of training you to ignore it. Attested columns must be a
+  subset of `write` (dev hygiene warning otherwise); attestation is advisory-only metadata —
+  access enforcement and read defaults are untouched.
+- **Sanctioned document metadata** (`DurableStore.metaTransaction(fn)` + `MetaEditor`, durable
+  subpath) — write app markers (schema versions, feature stamps) into the document's reserved
+  metadata map through a small `get`/`set` editor. The commit is properly tagged — importing peers
+  no longer warn about an untagged foreign writer — excluded from undo/redo, invisible to
+  observers (no entity/component change), persists and travels with the document, and converges
+  per key last-writer-wins. Values are `string | number | boolean`; use a dotted key namespace
+  (e.g. `"engine.schema"`); the reserved document-id key is refused; callable before attach.
+  Importers also stop warning about **metadata-only** foreign commits from before this API (they
+  carry no ECS facts, so their commit boundaries never mattered).
+- **Dev write hook + read-only view** (`world.devOnWrite(cb)`, `WriteKind`, `ReadonlyWorld`,
+  `WorldMutatorName`) — a dev-only, synchronous, **pre-mutation** hook whose throws propagate to
+  the mutator's caller. Fired from internal chokepoints downstream of any bound method reference,
+  it observes every mutation route — world methods, editors, the deferred command flush, document
+  transactions, sync/attach drains, undo echoes, presence, snapshot import, reset — and a
+  single-op fire precedes the first state change, so a throwing hook is a clean veto that names
+  the offender in its stack. Built for law windows ("nothing writes to the ECS during the render
+  pass"): register once, keep an app-side `armed` flag, throw only while armed. `ReadonlyWorld`
+  (`World` minus its seventeen mutators) is the compile-time half of the same law. Raw
+  `batch.col()` column writes are the documented carve-out (no chokepoint exists by design — the
+  same carve-out `reactive.invalidate` covers).
+  - *Honest dev-mode note:* where `DEV` is false (a runtime with `process` under
+    `NODE_ENV=production` — node/SSR, or a browser build that defines/shims `process`),
+    registration no-ops and every fire site is dead. In an **un-shimmed browser production
+    bundle** `DEV` evaluates true at runtime: registration stays live and each mutation pays a
+    tiny roster null-check — gate your registration behind your own production flag there.
+    Dev/prod conditional builds that eliminate this entirely are planned.
+
+### Fixed
+
+- The same-phase double-writer advisory now counts **distinct systems** — a duplicated
+  `access.write` entry (`[R, R]`) or the same system placed twice in a phase no longer warns a
+  system against itself, and repeated names dedupe in the message.
+
+Adopters of the previous integration workarounds can now: (1) add `orderIndependent` to
+deliberately co-located writers; (2) replace raw pre-attach metadata stamping with
+`createDurableStore(doc)` **first**, then `store.metaTransaction(...)`; (3) replace world-method
+monkey-patch write traps with one persistent `devOnWrite` + an armed flag — which also covers the
+routes such traps miss (document transactions, sync drains) and every mutator added later.
+
 ## [0.3.0] — 2026-07-09
 
 Two additive quality features, both born from editor-integration reviews (no breaking changes).

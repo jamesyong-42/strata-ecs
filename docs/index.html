@@ -378,7 +378,7 @@
 
 <nav class="sidebar" id="sidebar">
   <a class="brand" href="#top"><b>strata<span class="dash">·</span>ecs</b></a>
-  <div class="ver">v0.2 · pre-release</div>
+  <div class="ver">v0.4 · pre-release</div>
   <a class="api-link" href="api.html">API reference →</a>
 
   <div class="nav-group g-start">
@@ -849,6 +849,12 @@
       that keeps idle frames stamp-free and is why the <code>runIf</code> gate is load-bearing under
       reactivity.
     </p>
+    <p>
+      When two systems in one phase write the same column, a dev advisory flags the possible
+      order-dependence. If you know those writes are order-tolerant — row-disjoint, commutative, or
+      last-write-wins-safe — list the column in <code>access.orderIndependent</code> on every writer to opt
+      out; the warning falls silent only once all of them attest.
+    </p>
   </section>
 
   <!-- ============================================================= MUTATION -->
@@ -1155,6 +1161,19 @@
       <p>Persist keys, never handles: <code>doc.keyOf(e)</code> on the way out, <code>doc.resolve(key)</code> on the way in. A stored handle from a past session is meaningless.</p>
     </div>
 
+    <h3>Document metadata</h3>
+    <p>
+      Sometimes you need to stamp something on the document <em>itself</em> — a schema version, a format
+      marker, a feature flag — that should travel and persist with it but isn't an entity or component.
+      <code>doc.metaTransaction(fn)</code> is the sanctioned door: it writes primitive
+      <code>string</code> / <code>number</code> / <code>boolean</code> values into the document's reserved
+      metadata map, under a dotted namespace of your own. A meta write is invisible to the runtime — no
+      observer, no <code>useResource</code>, no <code>sync()</code> wake — and is excluded from undo, so a
+      user's <code>undo()</code> never rolls back your version stamp. It converges per key by
+      last-writer-wins and needs no attachment, so you can stamp a document before it is attached.
+    </p>
+    <figure class="code" data-file="metadata.ts"></figure>
+
     <!-- ---------- UNDO ---------- -->
     <h3 id="undo">Undo &amp; history</h3>
     <p>
@@ -1318,6 +1337,25 @@
       your own domain terms.
     </p>
     <figure class="code" data-file="panel.ts"></figure>
+
+    <h3>Asserting a read-only window</h3>
+    <p>
+      Code that should only <em>read</em> the world — a render pass, a selector, a derivation — can be held
+      to that with a matched pair. <code>ReadonlyWorld</code> is the compile-time half: a <code>World</code>
+      with every mutating method removed, so a stray <code>world.spawn(…)</code> handed one fails to
+      typecheck. <code>world.devOnWrite(cb)</code> is the runtime half: a dev-only hook that fires
+      synchronously <em>before</em> every mutation — by any route, not just <code>world.*</code> — and whose
+      throw <strong>propagates</strong> (unlike an observer callback, which is swallowed). Register it once
+      and gate the throw behind your own <code>armed</code> flag, so it vetoes a write only during the
+      window you mean to protect.
+    </p>
+    <figure class="code" data-file="lawwindow.ts"></figure>
+    <div class="note">
+      <span class="tag">Note — dev-only, with a browser caveat</span>
+      <p>Both compile out where <code>DEV</code> is false. But in an un-shimmed browser production bundle
+      <code>DEV</code> reads true at runtime, so registration stays live and each mutation pays one tiny
+      roster null-check — gate registration behind your own production flag there.</p>
+    </div>
   </section>
 
   <!-- ============================================================= EXAMPLE -->
@@ -1548,6 +1586,19 @@ const obs = attachObserver(world, {
 obs.dispose();
 </script>
 
+<script type="text/plain" data-code="lawwindow.ts">import type { ReadonlyWorld } from "@vibecook/strata-ecs";
+
+let armed = false;                          // your own flag — flip it around the read-only window
+world.devOnWrite(() => {                     // register ONCE (dev-only; a throw here PROPAGATES)
+  if (armed) throw new Error("mutation during the render pass");
+});
+
+function render(w: ReadonlyWorld) {          // compile-time half: w.spawn(...) won't typecheck
+  armed = true;
+  try { paint(w); } finally { armed = false; }
+}
+</script>
+
 <script type="text/plain" data-code="persistence.ts">// Save — bytes are readable UTF-8 JSON.
 const bytes = world.export();
 localStorage.setItem("autosave", new TextDecoder().decode(bytes));
@@ -1608,6 +1659,14 @@ doc.setHistoryHooks({
 // Collapse a multi-step gesture into ONE undo step.
 doc.undoGroup(() => {
   for (const e of aligned) doc.transaction((tx) => tx.edit(e).set(Position, snapped(e)));
+});
+</script>
+
+<script type="text/plain" data-code="metadata.ts">// Stamp schema / version markers on the document itself — they travel + persist, but aren't entities.
+doc.metaTransaction((meta) => {
+  meta.set("engine.schema", 3);           // string | number | boolean only; dotted namespace by convention
+  meta.set("app.savedBy", "alice");
+  const prev = meta.get("engine.schema"); // read within, or read straight off your own doc
 });
 </script>
 
