@@ -14,7 +14,7 @@ import type { Batch, Query } from "./query";
 import { DEV, devError } from "./dev";
 import type { WorldObserver } from "./observe";
 import { RuntimeStore, type WriteKind } from "./runtime-store";
-import { type EntityEditor, type Pipeline, SystemCtx, makeEditor } from "./system";
+import { type EntityEditor, type Pipeline, type System, type TickSystem, SystemCtx, makeEditor } from "./system";
 import { Reactive } from "./reactive";
 import { validatePipelineAccess } from "./access-diagnostics";
 import { applySnapshot, exportSnapshot, importSnapshot, parseSnapshot } from "./snapshot";
@@ -59,6 +59,17 @@ export class World {
    * semantics-ownership, the §3 buffer-pool precedent).
    */
   private iterationDepth = 0;
+  /**
+   * The RUNNING system's declared write set while its body executes under an armed reactive layer —
+   * `null` otherwise (out-of-tick, reactive off, or no declared writes). Read by every attributed
+   * query walk ({@link World.walkAttributed}) to blanket-stamp the writes over the walked query's
+   * matches at walk end (001 §3.1 route 1, generalized by petition 5 to inner walks — a raw
+   * `batch.col()` write through an inner query must never be missed by reactivity). Deliberately NOT
+   * the DEV `beginSystemAccess` window: stamping is a production mechanism, enforcement is not.
+   * Cleared after each system and in the phase finally (a thrown body must not leak attribution into
+   * out-of-tick walks).
+   */
+  private activeSystemWrites: readonly Component[] | null = null;
   readonly name: string;
 
   constructor(opts?: { name?: string }) {
@@ -174,6 +185,42 @@ export class World {
     }
   }
 
+  /**
+   * The attributed query walk (petition 5): guarded exactly like {@link World.eachGuarded}, then — if
+   * a system with declared writes is running under an armed reactive layer — blanket-stamps those
+   * writes over `q`'s matches (001 §3.1 route 1, generalized to every system-attributed walk). Backs
+   * both `world.query` and `ctx.query`, so the two surfaces can never diverge: an inner walk from a
+   * system body stamps identically whichever handle the body used. Out-of-tick the field is `null`
+   * and this is `eachGuarded` plus one null test. The stamp is a value-frame bump on cached match
+   * lists — no structural effect — so firing mid-outer-walk (inner walks run inside a body) is safe.
+   */
+  private walkAttributed(q: Query, fn: (batch: Batch) => void): void {
+    this.eachGuarded(this.store.query(q), fn);
+    const w = this.activeSystemWrites;
+    if (w !== null) this.store.stampWrites(q, w);
+  }
+
+  /**
+   * Run one schedule entry (petition 5): a tick system's body exactly once, or a chunk system's body
+   * once per matching chunk. BOTH forms run inside the iteration guard — the uniform law is that no
+   * system body mutates structure immediately or drives the frame (`world.tick`/`sync`/`import`/
+   * `reset` and structural `world.*` all throw at depth > 0); shape changes go through `ctx` and land
+   * at the phase boundary (§5.2). Without the bracket a tick body would run at depth 0 with the full
+   * immediate-mutation surface — a hole the per-chunk form never had.
+   */
+  private dispatchSystem(system: System | TickSystem, ctx: SystemCtx): void {
+    if (system.query === undefined) {
+      this.iterationDepth++;
+      try {
+        system.body(ctx);
+      } finally {
+        this.iterationDepth--;
+      }
+    } else {
+      this.eachGuarded(this.store.query(system.query), (batch) => system.body(batch, ctx));
+    }
+  }
+
   // --- entities / lifecycle (immediate) ---
   spawn<const T extends readonly Record<string, FieldInput>[]>(init?: SpawnInitOf<T>): Entity {
     this.assertNotIterating("spawn");
@@ -266,9 +313,9 @@ export class World {
   query(q: Query): { each(fn: (batch: Batch) => void): void } {
     // Bracket the user's body with the iteration guard (006 §A4) so a structural world.* call from
     // inside it throws — an out-of-tick walk is exactly the memory-corruption case the tick loop's
-    // dispatches also guard. Reads stay free.
-    const source = this.store.query(q);
-    return { each: (fn) => this.eachGuarded(source, fn) };
+    // dispatches also guard. Reads stay free. Attributed (petition 5): called from inside a system
+    // body, the walk stamps the running system's declared writes at walk end, same as `ctx.query`.
+    return { each: (fn) => this.walkAttributed(q, fn) };
   }
 
   /**
@@ -377,7 +424,7 @@ export class World {
       for (const phase of pipeline) {
         const buf = this.store.allocateCommandBuffer();
         try {
-          const ctx = new SystemCtx(this.store, buf);
+          const ctx = new SystemCtx(this.store, buf, (q, fn) => this.walkAttributed(q, fn));
           if (phase.runIf !== undefined && !phase.runIf(ctx)) {
             if (obs !== null) {
               // a gated-off phase never flushes; report its systems as skipped so idle% stays live
@@ -391,18 +438,27 @@ export class World {
               continue;
             }
             if (DEV && reactive !== null) this.store.beginSystemAccess(system); // 001 Rule 3 enforcement window
-            if (obs !== null) {
-              const t0 = performance.now();
-              this.eachGuarded(this.store.query(system.query), (batch) => system.body(batch, ctx));
-              emitSystemRun(obs, phase.name, system.name, true, (performance.now() - t0) * 1000);
-            } else {
-              this.eachGuarded(this.store.query(system.query), (batch) => system.body(batch, ctx));
-            }
-            // Reactive change detection: blanket-stamp the system's declared writes (001 §3.1 route 1,
-            // 002 §2.3). A gated-off system never reaches here, so it never stamps (001 §3.4).
+            // Arm walk attribution for this run (petition 5): inner walks — `ctx.query` or
+            // `world.query` from the body — stamp the declared writes over what they walked.
             if (reactive !== null) {
               const w = system.access?.write;
-              if (w !== undefined && w.length > 0) this.store.stampWrites(system.query, w);
+              this.activeSystemWrites = w !== undefined && w.length > 0 ? w : null;
+            }
+            if (obs !== null) {
+              const t0 = performance.now();
+              this.dispatchSystem(system, ctx);
+              emitSystemRun(obs, phase.name, system.name, true, (performance.now() - t0) * 1000);
+            } else {
+              this.dispatchSystem(system, ctx);
+            }
+            // Reactive change detection: blanket-stamp the system's declared writes over its OWN query
+            // (001 §3.1 route 1, 002 §2.3). Tick systems have no query to stamp — their writes ride
+            // the precise per-write stamps plus the per-walk stamps above. A gated-off system never
+            // reaches here, so it never stamps (001 §3.4).
+            if (reactive !== null) {
+              const w = this.activeSystemWrites;
+              if (w !== null && system.query !== undefined) this.store.stampWrites(system.query, w);
+              this.activeSystemWrites = null;
             }
           }
           if (obs !== null) {
@@ -423,6 +479,9 @@ export class World {
           // Clear the 001-enforcement window after the phase — also the backstop if a system body threw
           // (a stuck currentSystem would spuriously check out-of-tick edits before the next tick resets it).
           if (DEV && reactive !== null) this.store.endSystemAccess();
+          // Same backstop for walk attribution (petition 5): a thrown body must not leak its write
+          // set into out-of-tick `world.query` walks (a spurious stamp is legal over-fire, but sloppy).
+          this.activeSystemWrites = null;
           // Always return the buffer to the pool — even if a system body throws (the pool must not
           // leak, and a thrown phase is simply abandoned without flushing).
           this.store.releaseCommandBuffer(buf);

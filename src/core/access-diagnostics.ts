@@ -15,7 +15,7 @@
 import { DEV, devWarn } from "./dev";
 import { type Component, type ComponentId, componentById } from "./schema";
 import type { MemberCheck } from "./query";
-import type { Pipeline, System } from "./system";
+import type { Pipeline, System, TickSystem } from "./system";
 
 /**
  * The components a system reads (001 §2.3 read-default rule), materialized on demand.
@@ -32,7 +32,7 @@ import type { Pipeline, System } from "./system";
  * members. Those are legal reads too, so they are walked here (adversarial-review fix); otherwise a
  * body reading a component that only appears inside a mixed `Any` would DEV-throw at `col()`.
  */
-export function effectiveRead(system: System): Component[] {
+export function effectiveRead(system: System | TickSystem): Component[] {
   const access = system.access;
   if (access?.read !== undefined) return [...access.read];
 
@@ -52,6 +52,10 @@ export function effectiveRead(system: System): Component[] {
     else if (m.kind === "all" && m.members !== undefined) for (const mm of m.members) addMember(mm);
   };
   const q = system.query;
+  // Queryless tick system (petition 5): no query to default from, so the default read set is ∅ —
+  // declare `access.read` explicitly (001 §2.3 amendment). The armed col() enforcement teaches this
+  // at runtime, exactly as it taught inner-query reads on chunk systems.
+  if (q === undefined) return out;
   for (const id of q.required) add(id);
   for (const group of q.anyComponentGroups) for (const id of group) add(id);
   for (const rf of q.rowFilters) {
@@ -155,7 +159,7 @@ function nameOf(id: ComponentId): string {
  * per-writer term of an all-writers-must-attest conjunction — one non-attesting co-writer re-arms
  * the warning. Matches by component id against the system's declared `access.orderIndependent`.
  */
-function attestsOrderIndependent(system: System, cid: ComponentId): boolean {
+function attestsOrderIndependent(system: System | TickSystem, cid: ComponentId): boolean {
   const oi = system.access?.orderIndependent;
   if (oi === undefined) return false;
   for (const c of oi) if (c.id === cid) return true;

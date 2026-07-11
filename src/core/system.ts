@@ -46,7 +46,28 @@ export class SystemCtx {
   constructor(
     private readonly store: RuntimeStore,
     private readonly buf: CommandBuffer,
+    /**
+     * The facade's attributed query walk (petition 5): brackets `iterationDepth` exactly like
+     * `world.query`, and — when the running system declares `access.write` under an armed reactive
+     * layer — stamps those writes over the walked query's matches at walk end (001 §3.1 route 1,
+     * generalized to every system-attributed walk).
+     */
+    private readonly walk: (q: Query, fn: (batch: Batch) => void) => void,
   ) {}
+
+  // --- iteration (immediate; the sanctioned in-body walk) ---
+
+  /**
+   * Iterate a query from inside a system body (§6.2; petition 5). The one in-body iteration surface:
+   * the body runs once per matching chunk with `count ≥ 1` — zero-match chunks are never delivered.
+   * Nested walks are legal (a chunk-system body may walk other queries; a tick-system body usually
+   * does). Reads through `batch.col()` are charged to the RUNNING system's declared access (001 Rule
+   * 3), and the system's declared writes are stamped over this query's matches when the walk ends —
+   * so raw column writes through an inner walk are never missed by reactivity.
+   */
+  query(q: Query): { each(fn: (batch: Batch) => void): void } {
+    return { each: (fn) => this.walk(q, fn) };
+  }
 
   // --- reads (immediate) ---
   read<S>(e: Entity, c: Component<S>): S {
@@ -160,8 +181,15 @@ export class SystemCtx {
 /** A pure gate on non-query state (a resource flag, a mode, a timer) for a system or phase (§7). */
 export type Condition = (ctx: SystemCtx) => boolean;
 
-/** A system body — the per-chunk callback (§6.2). */
+/** A system body — the per-chunk callback (§6.2). Runs once per matching chunk, `count ≥ 1`. */
 export type SystemBody = (batch: Batch, ctx: SystemCtx) => void;
+
+/**
+ * A tick-system body (petition 5) — runs exactly ONCE per dispatch, independent of archetype count
+ * or world-shape history. Iterate data inside via `ctx.query(q).each(...)`; the scheduler owns
+ * system cardinality, queries own data cardinality.
+ */
+export type TickSystemBody = (ctx: SystemCtx) => void;
 
 /**
  * A system's value read/write access declaration (Patch Note 001 §2.1). The **envelope** — a union
@@ -204,9 +232,27 @@ export interface System {
   readonly access?: SystemAccess;
 }
 
+/**
+ * A queryless schedule entry (petition 5): the body runs exactly once per tick in its phase slot —
+ * stable cardinality, the home for whole-frame effects and coordination (camera math, queue drains,
+ * cross-archetype algorithms) that a per-chunk body multiplies. `query` is declared as an
+ * always-absent discriminant so dispatch and diagnostics narrow on `query === undefined`.
+ * `runIf` composes identically to {@link System}: a skipped dispatch is zero invocations and stamps
+ * nothing. With no query there is no default read set — declare `access` explicitly (001 §2.3).
+ */
+export interface TickSystem {
+  /** Display name for tools/instrumentation (observe.ts) — `opts.name`, else the body fn's name. */
+  readonly name: string;
+  readonly query?: undefined;
+  readonly body: TickSystemBody;
+  readonly runIf?: Condition;
+  /** Declared value read/write access (001 §2.1) — with no query, the read DEFAULT is ∅. */
+  readonly access?: SystemAccess;
+}
+
 export interface Phase {
   readonly name: string;
-  readonly systems: readonly System[];
+  readonly systems: readonly (System | TickSystem)[];
   readonly runIf?: Condition;
 }
 
@@ -228,7 +274,29 @@ export function defineSystem(
   };
 }
 
+/**
+ * Pair a body with the schedule alone (petition 5): a tick system — run exactly once per dispatch in
+ * its phase slot, never multiplied by archetype count. Iterate inside via `ctx.query(q).each(...)`.
+ * `opts` mirrors {@link defineSystem} (name, access, runIf); with no query, declare `access`
+ * explicitly — the default read set is ∅ (001 §2.3).
+ */
+export function defineTickSystem(
+  body: TickSystemBody,
+  opts?: { runIf?: Condition; name?: string; access?: SystemAccess },
+): TickSystem {
+  return {
+    name: opts?.name ?? (body.name || "system"),
+    body,
+    runIf: opts?.runIf,
+    access: opts?.access,
+  };
+}
+
 /** Group systems into a named, ordered phase, optionally gated (§7). */
-export function phase(name: string, systems: readonly System[], opts?: { runIf?: Condition }): Phase {
+export function phase(
+  name: string,
+  systems: readonly (System | TickSystem)[],
+  opts?: { runIf?: Condition },
+): Phase {
   return { name, systems, runIf: opts?.runIf };
 }

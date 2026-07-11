@@ -49,7 +49,7 @@ import type { CommandBuffer, StructuralCommand } from "./command";
 import type { ECSStore } from "./ecs-store";
 import { DEV, devError, devWarn } from "./dev";
 import type { WorldObserver } from "./observe";
-import type { System } from "./system";
+import type { System, TickSystem } from "./system";
 import { effectiveRead } from "./access-diagnostics";
 
 /** A component handle paired with a value of its field type — the typed spawn/init form. */
@@ -261,9 +261,9 @@ export class RuntimeStore implements ECSStore {
    * hot path pays at most one branch.
    */
   private accessArmed = false;
-  private currentSystem: System | null = null;
+  private currentSystem: System | TickSystem | null = null;
   /** Per-system allowed component set (write ∪ effectiveRead) for the `col()` check, memoized (001 Rule 3). */
-  private readonly allowedAccess = new WeakMap<System, Set<ComponentId>>();
+  private readonly allowedAccess = new WeakMap<System | TickSystem, Set<ComponentId>>();
 
   private ensureIdentity(n: number): Int32Array {
     if (this.identityRows.length < n) {
@@ -699,7 +699,7 @@ export class RuntimeStore implements ECSStore {
   }
 
   /** @internal Tick sets the running system so `col()`/`writeComponent` can enforce its access (DEV). */
-  beginSystemAccess(system: System): void {
+  beginSystemAccess(system: System | TickSystem): void {
     this.currentSystem = system;
   }
 
@@ -709,7 +709,7 @@ export class RuntimeStore implements ECSStore {
   }
 
   /** The write ∪ effectiveRead id set the running system may `col()`, memoized per System (001 Rule 3). */
-  private allowedFor(system: System): Set<ComponentId> {
+  private allowedFor(system: System | TickSystem): Set<ComponentId> {
     let set = this.allowedAccess.get(system);
     if (set === undefined) {
       set = new Set<ComponentId>();
@@ -1554,6 +1554,12 @@ export class RuntimeStore implements ECSStore {
         // scratch. Replaces the former per-row generator (see docs/perf-hotpath.md).
         const scratch = this.ensureScratch(arch.count);
         count = this.fillMatchedRows(arch, q.rowFilters, scratch);
+        // Zero-match chunk: not a result (petition 5 / §6.2 amendment). Queries expose current
+        // logical results, never empty storage structure — a body can do nothing row-wise with an
+        // empty chunk, so delivered batches always have count ≥ 1 (placed before the slice so a
+        // skipped chunk also skips its allocation). The dense arm needs no twin: the empty-archetype
+        // skip above already covers it, and dense count IS arch.count.
+        if (count === 0) continue;
         rows = scratch.slice(0, count);
       }
       fn(new ArchetypeChunk(this, arch, rows, count, dense));

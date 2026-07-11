@@ -58,10 +58,21 @@ export { defineQuery, Not, Any, All, Related } from "./query";
 export type { Query, QueryTerm, Atom, RelTerm, Batch } from "./query";
 
 // --- systems + schedule ---
-export { defineSystem, phase } from "./system";
+export { defineSystem, defineTickSystem, phase } from "./system";
 // SystemCtx is type-only: the tick constructs it (World owns one internally) and hands it to bodies
 // as `ctx`; applications never `new` it, so the concrete class is not public API (R2 seam).
-export type { SystemCtx, System, Phase, Pipeline, Condition, SystemBody, EntityEditor, SystemAccess } from "./system";
+export type {
+  SystemCtx,
+  System,
+  TickSystem,
+  Phase,
+  Pipeline,
+  Condition,
+  SystemBody,
+  TickSystemBody,
+  EntityEditor,
+  SystemAccess,
+} from "./system";
 export { validatePipelineAccess } from "./access-diagnostics";
 
 // --- world ---
