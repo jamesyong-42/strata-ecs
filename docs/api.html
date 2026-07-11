@@ -442,7 +442,7 @@
     </p>
     <div class="chips">
       <span class="chip"><b>v0</b> · pre-release</span>
-      <span class="chip">103 exports</span>
+      <span class="chip">106 exports</span>
       <span class="chip pre"><b>import</b> "@vibecook/strata-ecs"</span>
     </div>
     <nav class="switch" aria-label="Modules">
@@ -465,7 +465,7 @@
       re-explained here.
     </p>
 
-    <h3 class="grp"><code>@vibecook/strata-ecs</code> — 69 exports</h3>
+    <h3 class="grp"><code>@vibecook/strata-ecs</code> — 72 exports</h3>
     <div class="tbl"><table>
       <thead><tr><th>Export</th><th>Kind</th><th>Role</th></tr></thead>
       <tbody>
@@ -479,7 +479,8 @@
         <tr><td class="band b-core"><a href="#core-defineQuery"><code>defineQuery</code></a></td><td class="k">fn</td><td>Compile query terms into a cached, opaque query.</td></tr>
         <tr><td class="band b-core"><a href="#core-operators"><code>Not</code> <code>Any</code> <code>All</code> <code>Related</code></a></td><td class="k">fn</td><td>Query operators — negation, disjunction, conjunction, relation term.</td></tr>
         <tr><td class="band b-core"><a href="#core-Batch"><code>Batch</code></a></td><td class="k">type</td><td>The per-archetype chunk handed to a query body.</td></tr>
-        <tr><td class="band b-core"><a href="#core-defineSystem"><code>defineSystem</code></a></td><td class="k">fn</td><td>Pair a query with a body; declare access &amp; gate.</td></tr>
+        <tr><td class="band b-core"><a href="#core-defineSystem"><code>defineSystem</code></a></td><td class="k">fn</td><td>Pair a query with a per-chunk body; declare access &amp; gate.</td></tr>
+        <tr><td class="band b-core"><a href="#core-defineTickSystem"><code>defineTickSystem</code></a></td><td class="k">fn</td><td>A queryless system — its body runs exactly once per tick.</td></tr>
         <tr><td class="band b-core"><a href="#core-phase"><code>phase</code></a></td><td class="k">fn</td><td>Group systems into a named, ordered, gated phase.</td></tr>
         <tr><td class="band b-core"><a href="#core-SystemCtx"><code>SystemCtx</code></a></td><td class="k">class</td><td>World access inside a system — values immediate, shape deferred.</td></tr>
         <tr><td class="band b-core"><a href="#core-SystemAccess"><code>SystemAccess</code></a></td><td class="k">type</td><td>A system's declared read/write column envelope.</td></tr>
@@ -498,7 +499,8 @@
         <tr><td class="band b-core"><a href="#core-fields"><code>FieldType</code> <code>ScalarType</code> <code>EnumType</code> <code>FieldSpec</code> <code>FieldInput</code> <code>FieldMeta</code> <code>FieldId</code></a></td><td class="k">type</td><td>Field types and field metadata.</td></tr>
         <tr><td class="band b-core"><a href="#core-fields"><code>ValueOf</code> <code>WriteOf</code> <code>ColumnsOf</code> <code>Column</code></a></td><td class="k">type</td><td>Schema-derived value / write / column type utilities.</td></tr>
         <tr><td class="band b-core"><a href="#core-operators"><code>Query</code> <code>QueryTerm</code> <code>Atom</code> <code>RelTerm</code></a></td><td class="k">type</td><td>The compiled query and its term union.</td></tr>
-        <tr><td class="band b-core"><a href="#core-defineSystem"><code>System</code> <code>SystemBody</code> <code>Condition</code></a></td><td class="k">type</td><td>A system, its body callback, and a gate predicate.</td></tr>
+        <tr><td class="band b-core"><a href="#core-defineSystem"><code>System</code> <code>SystemBody</code> <code>Condition</code></a></td><td class="k">type</td><td>A chunk system, its body callback, and a gate predicate.</td></tr>
+        <tr><td class="band b-core"><a href="#core-defineTickSystem"><code>TickSystem</code> <code>TickSystemBody</code></a></td><td class="k">type</td><td>A tick system and its once-per-dispatch body.</td></tr>
         <tr><td class="band b-core"><a href="#core-phase"><code>Phase</code> <code>Pipeline</code></a></td><td class="k">type</td><td>A phase and the positional array of phases.</td></tr>
         <tr><td class="band b-core"><a href="#core-store"><code>ComponentId</code> <code>TagId</code> <code>RelationId</code> <code>ResourceId</code></a></td><td class="k">type</td><td>Interned dense numeric ids (per kind).</td></tr>
         <tr><td class="band b-core"><a href="#core-store"><code>ECSStore</code> <code>RuntimeStore</code></a></td><td class="k">advanced</td><td>The storage-agnostic contract and its archetype engine.</td></tr>
@@ -781,6 +783,7 @@
       <ul class="notes">
         <li><span class="nl">Scope</span> <code>rows</code>, the columns, and <code>entity</code> are valid only inside the current <code>each</code> callback — chunk-scoped; never retain them past it (the row buffer may be reused for the next chunk).</li>
         <li><span class="nl">Count</span> <code>count</code> is the matched-row loop bound for every chunk kind — walk <code>rows[0 .. count)</code>.</li>
+        <li><span class="nl">Never empty</span> Every delivered batch has <code>count ≥ 1</code> — zero-match chunks are skipped before dispatch, so a body needs no count guard.</li>
       </ul>
     </article>
 
@@ -790,15 +793,38 @@
       <h3><span class="k">function</span>defineSystem<a class="anchor" href="#core-defineSystem">#</a></h3>
       <figure class="code" data-file="core-defineSystem" data-kind="function"></figure>
       <p>
-        Pair a query with a body (run once per matching chunk) and options: a <code>name</code> for the
-        tools, a <code>runIf</code> gate on non-query state, and an <code>access</code> declaration of the
+        Pair a query with a body — a <em>chunk system</em>. The body runs once per matching chunk, and every
+        chunk it sees has at least one matched row (<code>count ≥ 1</code>). Options: a <code>name</code> for
+        the tools, a <code>runIf</code> gate on non-query state, and an <code>access</code> declaration of the
         columns it reads and writes. <code>runIf</code> is a <code>Condition</code> — a pure predicate over
         <code>ctx</code>. A gated-off system never runs, so it never stamps; under reactivity that keeps idle
-        frames stamp-free, which is why the gate is load-bearing.
+        frames stamp-free, which is why the gate is load-bearing. For work that must happen once per frame
+        regardless of what matches — global effects, coordination — use
+        <a href="#core-defineTickSystem"><code>defineTickSystem</code></a>.
       </p>
       <ul class="notes">
         <li><span class="nl">Types</span> <code>System</code>, <code>SystemBody = (batch, ctx) =&gt; void</code>, <code>Condition = (ctx) =&gt; boolean</code>.</li>
         <li><span class="nl">See</span> <a href="index.html#systems">Systems &amp; pipelines</a> · <a href="#core-SystemAccess"><code>SystemAccess</code></a></li>
+      </ul>
+    </article>
+
+    <article class="entry e-core" id="core-defineTickSystem">
+      <h3><span class="k">function</span>defineTickSystem<a class="anchor" href="#core-defineTickSystem">#</a></h3>
+      <figure class="code" data-file="core-defineTickSystem" data-kind="function"></figure>
+      <p>
+        Pair a body with the schedule alone — a <em>tick system</em>. The body runs <strong>exactly once per
+        dispatch</strong> in its phase slot, independent of archetype count or the world's shape history: the
+        scheduler owns system cardinality, queries own data cardinality. This is the home for whole-frame
+        effects a per-chunk body would silently multiply — camera integration, input-queue drains,
+        cross-archetype algorithms that must see all matching rows in one pass. Iterate data inside with
+        <code>ctx.query(q).each(batch =&gt; …)</code>; <code>runIf</code> composes exactly as on
+        <code>defineSystem</code> (a skipped dispatch is zero invocations and stamps nothing).
+      </p>
+      <ul class="notes">
+        <li><span class="nl">Access</span> With no query there is no default read set — declare <code>access</code> explicitly; inner-walk <code>col()</code> reads and writes are charged to this system's declaration.</li>
+        <li><span class="nl">Guard</span> The body runs under the same iteration guard as a chunk walk: shape changes go through <code>ctx</code> and land at the phase boundary; structural <code>world.*</code>, <code>tick</code>, and <code>sync</code> throw inside it.</li>
+        <li><span class="nl">Types</span> <code>TickSystem</code>, <code>TickSystemBody = (ctx) =&gt; void</code>.</li>
+        <li><span class="nl">See</span> <a href="index.html#systems">Tick systems</a> · <a href="#core-SystemCtx"><code>SystemCtx</code></a></li>
       </ul>
     </article>
 
@@ -821,13 +847,15 @@
       <h3><span class="k">class</span>SystemCtx<a class="anchor" href="#core-SystemCtx">#</a></h3>
       <figure class="code" data-file="core-SystemCtx" data-kind="class"></figure>
       <p>
-        The <code>ctx</code> a system body receives — world access <em>inside</em> a system. Reads and
-        <code>edit(e).set(...)</code> value writes are immediate; every shape change (<code>spawn</code>,
-        <code>destroy</code>, add/remove component, tags, relations) is <strong>deferred</strong> to the
-        phase boundary, where it lands from the command buffer. Identity is the exception:
-        <code>ctx.spawn()</code> mints a real handle <em>now</em> — you can tag it and reference it
-        immediately — even though its components are placed at the flush, so it is queryable from the next
-        phase on.
+        The <code>ctx</code> a system body receives — world access <em>inside</em> a system, for both
+        forms. <code>ctx.query(q).each(batch =&gt; …)</code> is the sanctioned in-body walk: same batches as
+        <code>world.query</code> (never empty), with reads and writes attributed to the running system's
+        <code>access</code> declaration. Reads and <code>edit(e).set(...)</code> value writes are immediate;
+        every shape change (<code>spawn</code>, <code>destroy</code>, add/remove component, tags, relations)
+        is <strong>deferred</strong> to the phase boundary, where it lands from the command buffer. Identity
+        is the exception: <code>ctx.spawn()</code> mints a real handle <em>now</em> — you can tag it and
+        reference it immediately — even though its components are placed at the flush, so it is queryable
+        from the next phase on.
       </p>
       <ul class="notes">
         <li><span class="nl">Timing</span> Values immediate and order-sensitive within a phase; structure at phase boundaries (<a href="index.html#mutation">Mutation timing</a>).</li>
@@ -1544,16 +1572,27 @@ type SystemBody = (batch: Batch, ctx: SystemCtx) => void;
 type Condition  = (ctx: SystemCtx) => boolean;
 interface System { name; query; body; runIf?; access? }</script>
 
+<script type="text/plain" data-code="core-defineTickSystem">function defineTickSystem(
+  body: TickSystemBody,
+  opts?: { runIf?: Condition; name?: string; access?: SystemAccess },
+): TickSystem;
+
+type TickSystemBody = (ctx: SystemCtx) => void;   // once per dispatch — no batch
+interface TickSystem { name; query?: undefined; body; runIf?; access? }</script>
+
 <script type="text/plain" data-code="core-phase">function phase(
   name: string,
-  systems: readonly System[],
+  systems: readonly (System | TickSystem)[],
   opts?: { runIf?: Condition },
 ): Phase;
 
-interface Phase { name: string; systems: readonly System[]; runIf?: Condition }
+interface Phase { name: string; systems: readonly (System | TickSystem)[]; runIf?: Condition }
 type Pipeline = readonly Phase[];   // positional — array order is run order</script>
 
 <script type="text/plain" data-code="core-SystemCtx">class SystemCtx {
+  // iteration — the sanctioned in-body walk (batches never empty; attributed to this system)
+  query(q: Query): { each(fn: (batch: Batch) => void): void };
+
   // reads — immediate
   read<S>(e: Entity, c: Component<S>): S;
   get<S>(e: Entity, c: Component<S>): S | undefined;

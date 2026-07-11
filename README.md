@@ -104,6 +104,23 @@ world.tick([phase("sim", [Movement])]);
 world.read(e, Position); // { x: 1, y: 2 }
 ```
 
+Two system forms, named for their cardinality: a **chunk system** (above) pairs a query with a
+body that runs once per matching chunk — the fast SoA path for per-row transforms; every batch it
+sees has at least one matched row. A **tick system** runs exactly once per frame dispatch — the
+home for whole-frame effects like camera math or input drains, iterating real data inside when it
+needs to:
+
+```ts
+import { defineTickSystem } from "@vibecook/strata-ecs";
+
+const CameraControl = defineTickSystem((ctx) => {
+  // runs once per tick — never multiplied by how many archetypes exist
+  ctx.query(wheelEvents).each((b) => {
+    /* integrate pan/zoom exactly once per frame */
+  });
+});
+```
+
 A real app runs one frame loop — and writes it the same way from day one, so the
 collaboration layers attach later with zero rewrite:
 

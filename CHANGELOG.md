@@ -4,6 +4,50 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [0.5.0] — 2026-07-11
+
+System execution semantics: the scheduler owns system cardinality, queries own data cardinality.
+Born from a field finding in the heaviest consumer — a system body anchored on a tag ran once per
+matched archetype (not once per frame), silently multiplying camera math as the world's shape
+diversity grew.
+
+### Added
+
+- **Tick systems** (`defineTickSystem(body, { name, access, runIf })`, types `TickSystem` /
+  `TickSystemBody`) — a queryless schedule entry whose body runs **exactly once per dispatch**,
+  independent of archetype count. The home for whole-frame effects and coordination (camera
+  integration, input-queue drains, cross-archetype algorithms) that a per-chunk body multiplies.
+  `runIf` composes identically (a skipped dispatch stamps nothing); telemetry and access
+  enforcement are form-agnostic; `phase()` accepts both forms mixed. With no query there is no
+  default read set — declare `access` explicitly.
+- **`ctx.query(q).each(batch => …)`** — the sanctioned in-body walk, for both system forms.
+  Identical to `world.query` (same guard, same non-empty batches), and *attributed*: `col()` reads
+  are charged to the running system's declared access, and the system's declared writes are
+  stamped over each walked query's matches at walk end — raw `col()` writes through an inner query
+  can no longer be missed by reactivity.
+
+### Changed
+
+- **Zero-match chunks are never delivered.** A row-filtered chunk whose tag/relation filters match
+  no rows is skipped before the body runs; every `Batch` a system body or `world.query` callback
+  observes now has `count ≥ 1`. Empty invocations were never a sanctioned signal — nothing in this
+  repo or the known consumers relied on them — but strictly this narrows the old "once per
+  matching archetype" delivery, hence the minor bump.
+- **Typed breaking change:** `Phase.systems` (and `phase()`'s parameter) widened from
+  `readonly System[]` to `readonly (System | TickSystem)[]`. The `System` type itself is unchanged;
+  code that *reads* `phase.systems` into `System`-typed variables must narrow on
+  `query !== undefined` or widen its own types (see migration checklist).
+
+### Migration checklist
+
+1. Does any system body rely on being invoked for a chunk with zero matching rows? (No known code
+   does; the instrumentation never modeled it either.) If yes, that logic belongs in a tick system.
+2. Does any system use a query purely as a once-per-frame anchor (a singleton tag, a `count === 0`
+   early-return guard)? Convert it to `defineTickSystem`, delete the guard, and iterate real data
+   inside via `ctx.query`.
+3. Helpers typed against `readonly System[]` that should accept both forms widen to
+   `readonly (System | TickSystem)[]` (the `System` type itself is unchanged).
+
 ## [0.4.0] — 2026-07-11
 
 Three additive dev-experience and embedding features, all born from editor-integration reviews

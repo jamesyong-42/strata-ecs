@@ -811,9 +811,11 @@
 
     <h3>Iterating a batch</h3>
     <p>
-      A system body runs once per matching archetype chunk. Read columns through <code>col()</code> for
-      typed access, then loop the matched rows. <code>for (const r of batch)</code> fuses the row filters;
-      the explicit <code>rows</code>/<code>count</code> loop is the fastest idiom and valid for every chunk.
+      A chunk-system body runs once per matching archetype chunk, and every batch it receives has at
+      least one matched row — zero-match chunks are never delivered, so a body needs no count guard.
+      Read columns through <code>col()</code> for typed access, then loop the matched rows.
+      <code>for (const r of batch)</code> fuses the row filters; the explicit
+      <code>rows</code>/<code>count</code> loop is the fastest idiom and valid for every chunk.
     </p>
     <figure class="code" data-file="iterate.ts"></figure>
     <div class="note">
@@ -833,12 +835,31 @@
     <p class="sec-eyebrow l-core">Concepts</p>
     <h2><svg class="glyph" data-band="4" data-hue="core"></svg>Systems<a class="anchor" href="#systems">#</a></h2>
     <p>
-      A system pairs a query with a body and some options: a <code>name</code> for the tools, a
-      <code>runIf</code> gate on non-query state, and an <code>access</code> declaration of the columns it
-      reads and writes. Systems are grouped into named <code>phase</code>s; a pipeline is just an array of
-      phases, run in order. Because it is a plain array, you rebuild it as a value to reconfigure the frame.
+      There are two system forms, named for how often their body runs. A <strong>chunk system</strong>
+      (<code>defineSystem</code>) pairs a query with a body that runs once per matching chunk — the fast
+      SoA path for per-row transforms. A <strong>tick system</strong> (<code>defineTickSystem</code>) has
+      no query: its body runs exactly once per tick in its phase slot — the home for whole-frame effects
+      and coordination. Both take the same options: a <code>name</code> for the tools, a
+      <code>runIf</code> gate on non-query state, and an <code>access</code> declaration of the columns
+      the body reads and writes. Systems are grouped into named <code>phase</code>s; a pipeline is just an
+      array of phases, run in order. Because it is a plain array, you rebuild it as a value to reconfigure
+      the frame.
     </p>
     <figure class="code" data-file="systems.ts"></figure>
+
+    <h3>Tick systems: effects run once per frame</h3>
+    <p>
+      The scheduler owns system cardinality; queries own data cardinality. A chunk body that performs a
+      global effect — camera math, draining an input queue — silently repeats that effect once per
+      matching chunk, and how many chunks exist depends on the world's shape history, not your schedule.
+      When the work is "once per frame", say so: define a tick system and iterate whatever data it needs
+      inside with <code>ctx.query(q).each(batch =&gt; …)</code>. The inner walk behaves exactly like the
+      chunk form's dispatch (same batches, never empty), it sees <em>all</em> matching rows across every
+      archetype in one pass, and its reads and writes are attributed to the running system's
+      <code>access</code> declaration. With no query there is no default read set — declare
+      <code>access</code> explicitly.
+    </p>
+    <figure class="code" data-file="tick-systems.ts"></figure>
 
     <h3>Access declarations</h3>
     <p>
@@ -1527,6 +1548,27 @@ const DragMove = defineSystem(
 // A pipeline is a plain array of phases — rebuild it as a value to reconfigure the frame.
 const pipeline = () => [phase("input", [DragMove]), phase("sim", [Integrate], { runIf: simOn })];
 world.tick(pipeline());
+</script>
+
+<script type="text/plain" data-code="tick-systems.ts">import { defineTickSystem } from "@vibecook/strata-ecs";
+
+// Runs exactly once per tick — never multiplied by how many archetypes exist.
+const CameraControl = defineTickSystem(
+  (ctx) => {
+    ctx.query(wheelEvents).each((batch) => {      // one pass over ALL matching rows,
+      const d = batch.col(WheelDelta).d;          // across every archetype
+      for (const r of batch) integratePan(d[r]);  // a global effect, applied once per frame
+    });
+  },
+  {
+    name: "CameraControl",
+    access: { read: [WheelDelta] },  // no query — the read default is empty, so declare it
+    runIf: (ctx) => ctx.getResource(InputMode)?.wheel === true,
+  },
+);
+
+// Chunk systems and tick systems mix freely in a phase.
+const pipeline = () => [phase("input", [CameraControl, DragMove])];
 </script>
 
 <script type="text/plain" data-code="frameLoop.ts">function frame() {
