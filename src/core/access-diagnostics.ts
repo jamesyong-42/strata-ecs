@@ -109,12 +109,16 @@ export function validatePipelineAccess(pipeline: Pipeline): void {
 
     // (a) same-phase double-writers → potential order-dependence.
     for (const [cid, widx] of writers) {
-      if (widx.length < 2) continue;
+      // DISTINCT systems only (review fix, 2026-07-11): a duplicated `write` entry ([R, R]) or the
+      // same System object slotted twice in a phase inflates the INDEX list for one writer — §3.3's
+      // hazard is "two systems", so a self-pair must not warn (it used to name a system against itself).
+      const distinct = [...new Set(widx.map((i) => systems[i]))];
+      if (distinct.length < 2) continue;
       // Attestation opt-out (petition 3a; 001 §3.3 as-built amendment): suppress only when EVERY
       // co-writer of this column attests order-independence — the claim composes conjunctively, so
       // a single silent co-writer (e.g. an un-attested newcomer dropped into the phase) re-arms it.
-      if (widx.every((i) => attestsOrderIndependent(systems[i], cid))) continue;
-      const names = widx.map((i) => `"${systems[i].name}"`).join(", ");
+      if (distinct.every((s) => attestsOrderIndependent(s, cid))) continue;
+      const names = distinct.map((s) => `"${s.name}"`).join(", ");
       devWarn(
         `access: in phase "${ph.name}", systems ${names} declare write of "${nameOf(cid)}" in the same phase — potential order-dependence (array order is execution order; order them deliberately, split the phase, or — if the writes are row-disjoint or commutative — attest with access.orderIndependent on every co-writer).`,
       );

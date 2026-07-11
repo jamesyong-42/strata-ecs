@@ -18,6 +18,7 @@ const K = defineComponent("ACCK", { k: "u32" });
 const L = defineComponent("ACCL", { l: "u32" });
 const M = defineComponent("ACCM", { m: "u32" });
 const N = defineComponent("ACCN", { n: "u32" });
+const O = defineComponent("ACCO", { o: "u32" });
 // Acceptance-shape columns for the petition example (semantic names for readability).
 const Position = defineComponent("ACCPosition", { x: "f32", y: "f32" });
 const StackZ = defineComponent("ACCStackZ", { z: "u32" });
@@ -188,6 +189,21 @@ describe("validatePipelineAccess — advisory diagnostics (001 §3.3)", () => {
     });
     // Position suppressed (both attest); StackZ/Size are single-writer; both subsets satisfied.
     expect(warningsFor([phase("interact", [moveBehavior, resizeBehavior])])).toHaveLength(0);
+  });
+
+  it("advisory (a) counts DISTINCT systems: self-dup write entries and same-system-twice never self-warn", () => {
+    // Review fix (2026-07-11): a duplicated write entry ([N, N]) or the same System object slotted
+    // twice in a phase used to inflate the writer-index list for ONE writer and name the system
+    // against itself — §3.3's hazard is "two systems", so a self-pair must not warn.
+    const dup = defineSystem(defineQuery([N]), () => {}, { name: "SelfDup", access: { write: [N, N] } });
+    expect(warningsFor([phase("p", [dup])]).filter((m) => /order-dependence/.test(m))).toHaveLength(0);
+    const twice = defineSystem(defineQuery([O]), () => {}, { name: "Twice", access: { write: [O] } });
+    expect(warningsFor([phase("p", [twice, twice])]).filter((m) => /order-dependence/.test(m))).toHaveLength(0);
+    // Two DISTINCT systems still warn even when one carries a duplicate entry — and names dedup.
+    const other = defineSystem(defineQuery([N]), () => {}, { name: "Other", access: { write: [N] } });
+    const oi = warningsFor([phase("p", [dup, other])]).filter((m) => /order-dependence/.test(m));
+    expect(oi).toHaveLength(1);
+    expect(oi[0]).toContain('"SelfDup", "Other"');
   });
 
   it("warns subset hygiene when an attested column is not in write, and leaves suppression unaffected", () => {

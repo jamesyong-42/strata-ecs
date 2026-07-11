@@ -132,8 +132,16 @@ export class World {
    * use — never across `tick()` / `sync()`. Intended pattern: register ONCE, keep a caller-side `armed`
    * flag, and throw from the hook only while `armed` (flip it on around the read-only window, off otherwise).
    *
-   * PRODUCTION: under `NODE_ENV=production` this is a no-op that returns a no-op disposer, and every fire
-   * site is `DEV`-gated and tree-shaken — the hook can never fire, so zero runtime cost ships.
+   * CARVE-OUT: raw column access is not a route — a `batch.col()` TypedArray write (the system hot path)
+   * has no chokepoint by design, exactly the carve-out 002 §2.2 makes with `reactive.invalidate`; the hook
+   * sees every OBJECT-level mutation route listed above.
+   *
+   * PRODUCTION: where `DEV` is false — a runtime with `process` under `NODE_ENV=production` (node/SSR, or
+   * a browser build that shims/defines `process`) — this is a no-op returning a no-op disposer and every
+   * fire site is dead. HONEST CAVEAT (review 2026-07-11; see dev.ts): in an UN-SHIMMED browser production
+   * bundle `DEV` evaluates true at runtime, so registration is LIVE and each mutation pays one roster
+   * null-check (~ns; nothing fires while nothing is registered). Until strata ships dev/prod conditional
+   * builds, gate your registration behind your OWN production flag if you target un-shimmed browsers.
    */
   devOnWrite(cb: (kind: WriteKind) => void): () => void {
     return this.store.devOnWrite(cb);
@@ -505,7 +513,7 @@ export class World {
     }
     // petition 4 — the World-level chokepoint. Fire BEFORE the replace-branch's internal reset(): a
     // throwing (vetoing) hook must leave the world UNTOUCHED, and were it downstream of `this.reset()`
-    // a veto would strand the world EMPTY. `if (DEV)` DCEs the whole thing in production.
+    // a veto would strand the world EMPTY. `if (DEV)` is dead where DEV folds false (see dev.ts).
     if (DEV) this.store.fireWriteFromWorld("structural");
     if (opts?.replace) {
       // Validate BEFORE resetting: an incompatible snapshot (schema drift) throws here with the

@@ -121,9 +121,11 @@ export class RuntimeStore implements ECSStore {
   /**
    * DEV-only pre-mutation write hooks (petition 4; `world.devOnWrite`). `null` whenever none are
    * registered — the SAME branch-on-null discipline as {@link observerList}, so every mutation
-   * chokepoint pays exactly one `writeHooks !== null` test in dev and NOTHING in production (the fire
-   * sites are `DEV`-gated, so a bundler defining `NODE_ENV=production` tree-shakes them out; `devOnWrite`
-   * itself never registers there). COPY-ON-WRITE like the observer roster: register/dispose publish a new
+   * chokepoint pays exactly one `writeHooks !== null` test where DEV holds. Where `DEV` is FALSE (a
+   * runtime with `process` under `NODE_ENV=production`) the sites are dead and `devOnWrite` never
+   * registers; an UN-SHIMMED browser production bundle retains the checks (DEV is runtime-true there —
+   * see dev.ts's folding honesty note), costing one null test per op and firing nothing while
+   * unregistered. COPY-ON-WRITE like the observer roster: register/dispose publish a new
    * array, never mutate one a fire loop may be iterating. Unlike {@link observerList}, a throwing hook is
    * NOT swallowed — see {@link fireWrite}.
    */
@@ -475,15 +477,16 @@ export class RuntimeStore implements ECSStore {
 
   /**
    * @internal Register a DEV-only, synchronous, PRE-mutation write hook (petition 4; use
-   * `world.devOnWrite`). Returns a disposer. In PRODUCTION (`NODE_ENV=production`) this never registers
-   * and returns a no-op disposer — the fire sites are `DEV`-gated and tree-shaken, so a production hook
-   * could never fire anyway. The roster is COPY-ON-WRITE (the {@link addObserver} pattern): register
+   * `world.devOnWrite`). Returns a disposer. Where `DEV` is FALSE (node/SSR production, or any build
+   * that folds it false — see dev.ts's folding honesty note for the un-shimmed-browser caveat) this
+   * never registers, returns a no-op disposer, and the fire sites are dead.
+   * The roster is COPY-ON-WRITE (the {@link addObserver} pattern): register
    * appends a fresh array, dispose removes and falls back to `null` at empty, and a dispose issued from
    * INSIDE a fire never skips a sibling because {@link fireWrite} iterates a captured list. The public
    * contract (throws propagate, every route it observes, the non-atomic windows) lives on `World.devOnWrite`.
    */
   devOnWrite(cb: (kind: WriteKind) => void): () => void {
-    if (!DEV) return () => {}; // production: never registers — the fire sites are DCE'd out regardless
+    if (!DEV) return () => {}; // DEV=false (node prod / folded builds): never registers — dev.ts has the browser caveat
     this.writeHooks = this.writeHooks === null ? [cb] : [...this.writeHooks, cb];
     return () => {
       const list = this.writeHooks;
@@ -509,9 +512,10 @@ export class RuntimeStore implements ECSStore {
    * tag-relation primitives / doWriteCells / set-removeResource. The inner physical primitives (`place`,
    * `unplace`, `migrate`) are DELIBERATELY un-gated: they are tiny and inline-hot inside the migrate loop,
    * and gating them measured +6–8% on the structural bench (spawn+despawn / add+remove) — an inlining
-   * cliff, not branch arithmetic — while entry-level placement measures inside the ±2% gate. Every route
-   * still fires ≥1 pre-mutation because every path INTO place/unplace/migrate crosses a gated entry first
-   * (the devwrite matrix pins route completeness).
+   * cliff, not branch arithmetic. Relocating to entry level recovered most of it (residual +4.7%/+2.3%
+   * vs base, at the edge of the harness's ±2–3% cross-build noise; commit c1a7719 records the honest
+   * numbers). Every route still fires ≥1 pre-mutation because every path INTO place/unplace/migrate
+   * crosses a gated entry first (the devwrite matrix pins route completeness).
    */
   private fireWrite(kind: WriteKind): void {
     const hooks = this.writeHooks!; // captured — a mid-fire dispose republishes the field, not this array
@@ -521,7 +525,7 @@ export class RuntimeStore implements ECSStore {
   /**
    * @internal Fire the write-hook roster for a mutation that ORIGINATES in {@link World} rather than in a
    * store method — currently only `world.import`'s pre-reset veto point (petition 4). The `DEV` half of the
-   * gate lives at the call site (`if (DEV) …`) so it tree-shakes; the branch-on-null lives here so the
+   * gate lives at the call site (`if (DEV) …`) so it is dead where DEV folds false; the branch-on-null lives here so the
    * roster field stays private to this class. Throws PROPAGATE, exactly like the in-store {@link fireWrite}.
    */
   fireWriteFromWorld(kind: WriteKind): void {

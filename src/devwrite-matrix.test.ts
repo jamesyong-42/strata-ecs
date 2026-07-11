@@ -480,22 +480,41 @@ describe("route table — durable record / seal / projection", () => {
     });
     const e2 = h.a.transaction((tx) => tx.spawn({ components: [[Pos, { x: 3, y: 4 }]] }));
     h.a.transaction((tx) => tx.setRelation(e1, Parent, e2));
-    h.a.transaction((tx) => tx.setResource(Cam, { zoom: 2 }));
     h.wA.sync(); // A projects its own echoes; outbound increments queue for B
-    h.deliverToB();
 
+    // Register BEFORE deliverToB: DurableSyncStatus publishes at ENQUEUE (pendingInbound 0→1) as
+    // well as at drain, so both measured windows below must span enqueue+drain SYMMETRICALLY.
     const rec = recorder();
     h.wB.devOnWrite(rec.cb);
     rec.reset();
-    h.wB.sync(); // B drains A's REMOTE facts through the projector
+    h.deliverToB();
+    h.wB.sync(); // B drains A's REMOTE facts through the projector (NO resource fact in this drain)
 
     const kinds = new Set(rec.kinds);
     expect(kinds.has("structural")).toBe(true); // spawn/component placement + relation-source placement
     expect(kinds.has("tag")).toBe(true); // tag-add
     expect(kinds.has("relation")).toBe(true); // relation-set
-    // resource-set fires "resource" — as does B's own DurableSyncStatus/UndoStatus write on this drain
-    // (strata's own status-resource writes are in-contract). Either way the fact caused ≥1 resource fire.
-    expect(kinds.has("resource")).toBe(true);
+    // B's own DurableSyncStatus/UndoStatus writes fire "resource" on ANY non-empty enqueue+drain, so a
+    // bare kinds.has("resource") would be VACUOUS for the remote resource-projection route (review fix,
+    // 2026-07-11). Pin it DIFFERENTIALLY instead — and note the status resources are SET-ON-CHANGE with
+    // first-publish warm-up, so the window above only WARMS them; the baseline is a SECOND, steady-state
+    // fact-less window, and the resource-fact window must fire exactly ONE more "resource" than that.
+    rec.reset();
+    h.a.transaction((tx) => tx.edit(e2).set(Pos, { x: 9, y: 9 })); // fact-less w.r.t. resources
+    h.wA.sync();
+    h.deliverToB();
+    h.wB.sync();
+    expect(rec.kinds).toContain("component"); // the value fact drained (window sanity)
+    const statusBaseline = rec.kinds.filter((k) => k === "resource").length;
+
+    rec.reset();
+    h.a.transaction((tx) => tx.setResource(Cam, { zoom: 2 }));
+    h.wA.sync();
+    h.deliverToB();
+    h.wB.sync(); // drains exactly ONE remote fact: the resource-set
+    const factDrain = rec.kinds.filter((k) => k === "resource").length;
+    expect(factDrain).toBe(statusBaseline + 1); // the fact's fire, on top of the status baseline
+    expect(h.wB.getResource(Cam)).toEqual({ zoom: 2 }); // and the projection actually landed
   });
 
   it("remote despawn fact fires structural on sync", () => {
