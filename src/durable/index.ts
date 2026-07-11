@@ -29,6 +29,11 @@ export type { DurableStore, DurableStoreOptions } from "./durable-store";
 // `DurableStore`; these are their companion types. Local-ops-only, one transaction = one undo step.
 export type { HistoryHooks, HistoryStack } from "./loro-snapshot";
 
+// The editor a `DurableStore.metaTransaction(fn)` body receives — primitive get/set over the document's
+// reserved metadata map (engine version / schema markers), excluded from undo and invisible to observers
+// (petition 3b; 005 §10.11).
+export type { MetaEditor } from "./loro-snapshot";
+
 // Attach / detach (a package-level function, not `world.attachDurable` — the core names no durable type).
 export { attachDurable } from "./binding";
 export type { Attachment } from "./binding";

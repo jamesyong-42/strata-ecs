@@ -262,6 +262,16 @@ const META_ORIGIN = "strata-meta";
  */
 const NON_UNDOABLE_ORIGIN = "strata-nonundoable";
 
+/**
+ * The reserved "meta" root-map slot holding the document GUID (§14.1) — written once-if-absent at store
+ * construction via {@link LoroSnapshot.ensureMeta}. It is STRATA-RESERVED: {@link LoroSnapshot.metaTransaction}
+ * refuses a write to this key, so an embedder's doc-metadata pass can never clobber the shared document id
+ * (petition 3b; 005 §10.11 as-built amendment). Defined HERE — the meta map's owner — as the single source of
+ * truth, and imported by `DurableStore` for the construction-time docId write (the adapter is the leaf, so
+ * there is no import cycle).
+ */
+export const DOC_ID_KEY = "docId";
+
 /** The durable layer's reserved commit-message namespace (finding 3): `strata:<monotonic per-doc n>`. */
 const MSG_PREFIX = "strata:";
 const strataMsg = (n: number): string => MSG_PREFIX + n;
@@ -322,6 +332,34 @@ export interface LoroSnapshotOptions {
 }
 
 /**
+ * The restricted editor handed to a `metaTransaction` callback ({@link LoroSnapshot.metaTransaction} and its
+ * `DurableStore` delegate) — the sanctioned door for an embedder's OWN document-metadata (version stamps,
+ * schema markers, feature flags per 005 §6 guidance) on the doc's reserved "meta" root map, without reaching
+ * for a raw loro handle. Deliberately a PLAIN interface: no loro type crosses it, so Loro stays quarantined
+ * behind the adapter (§14.2). It is valid ONLY for the synchronous duration of the callback — a leaked
+ * reference throws on later get/set, so a meta write can never escape the transaction un-sealed.
+ *
+ * VALUES ARE PRIMITIVES (`string | number | boolean`): meta slots are write-once markers, not nested
+ * documents, so `null`/`undefined`/objects are rejected. KEYS should carry a dotted embedder namespace (e.g.
+ * `"engine.schema"`) to stay clear of strata-reserved slots; the document-id key ({@link DOC_ID_KEY}) is
+ * refused outright. (petition 3b; 005 §10.11 as-built amendment.)
+ */
+export interface MetaEditor {
+  /**
+   * The current value at `key` if it is a `string | number | boolean`, else `undefined` — foreign junk (a
+   * container value, an object, an absent slot) reads as absent, matching the adapter's total-reads
+   * discipline. Reads carry no protocol obligation; an embedder may equivalently read straight off its doc.
+   */
+  get(key: string): string | number | boolean | undefined;
+  /**
+   * Stage `key = value` on the meta map (sealed when the callback returns). Throws on the strata-reserved
+   * {@link DOC_ID_KEY} and on any non-primitive `value`. The write surfaces NO {@link ChangeBatch} (meta is
+   * transparent to translation) and is excluded from undo.
+   */
+  set(key: string, value: string | number | boolean): void;
+}
+
+/**
  * `LoroSnapshot` — a `CRDTSnapshot` over one `LoroDoc`.
  *
  * The write methods (spawn/despawn/setComponent/…) STAGE ops directly on the doc (immediately readable,
@@ -345,6 +383,12 @@ export class LoroSnapshot implements CRDTSnapshot {
   private readonly metaMap: LoroMap;
   private readonly entitiesRootId: string;
   private readonly resourcesRootId: string;
+  /**
+   * `String(this.metaMap.id)` — cached beside the other two root ids so `applyRemote`'s untagged-writer
+   * check can EXEMPT a meta-only foreign commit (every op targets this container). Root container ids are
+   * name-derived and peer-independent, so this matches an imported peer's meta ops too (petition 3b).
+   */
+  private readonly metaRootId: string;
   private readonly undoManager: UndoManager;
   /** App metadata hooks riding the undo stack (plan-undo U1): capture on push, restore on pop. */
   private historyHooks: HistoryHooks | null = null;
@@ -399,6 +443,7 @@ export class LoroSnapshot implements CRDTSnapshot {
     this.metaMap = doc.getMap("meta");
     this.entitiesRootId = String(this.entitiesMap.id);
     this.resourcesRootId = String(this.resourcesMap.id);
+    this.metaRootId = String(this.metaMap.id);
     // Seed the commit counter from THIS peer's persisted strata-tagged history BEFORE the first seal.
     this.commitSeq = this.seedCommitSeq();
     // The last-emitted frontier starts at the committed head (imported history is already sealed; a fresh
@@ -833,8 +878,16 @@ export class LoroSnapshot implements CRDTSnapshot {
     let prev: OpId[] = beforeFrontiers;
     for (const change of schema.changes) {
       // A commit with no `strata:<n>` tag is a foreign writer whose commits may have COALESCED in their
-      // oplog — our per-commit boundaries are best-effort for them. Warn ONCE (per instance).
-      if (strataMsgSeq(change.msg) === undefined) {
+      // oplog — our per-commit boundaries are best-effort for them. Warn ONCE (per instance). EXEMPTION
+      // (petition 3b; 005 §10.11): a META-ONLY commit — every op targets the reserved "meta" root — carries
+      // no ECS facts, so its batch-boundary quality is irrelevant. This silences legacy raw-doc meta stamps
+      // (a pre-`metaTransaction` embedder that committed the "meta" map untagged); `metaTransaction`'s own
+      // writes are `strata:`-tagged and never reach this branch, so the exemption is purely for those legacy
+      // writers. A coalesced FOREIGN commit touching meta AND entities/resources still warns — there its
+      // boundary genuinely is best-effort.
+      const metaOnly =
+        change.ops.length > 0 && change.ops.every((op) => String(op.container) === this.metaRootId);
+      if (strataMsgSeq(change.msg) === undefined && !metaOnly) {
         this.warnOnce(
           "untagged-writer",
           "durable adapter saw a commit with no strata tag — untagged commits may coalesce; " +
@@ -1066,6 +1119,85 @@ export class LoroSnapshot implements CRDTSnapshot {
     this.doc.commit({ message: this.nextMsg(), origin: META_ORIGIN });
     this.flushLocal(); // advance sealedTo past the meta commit; emits nothing (no entities/resources facts)
     return value;
+  }
+
+  /**
+   * Run `fn` as ONE sanctioned meta-map transaction (petition 3b; 005 §10.11 as-built amendment) — the
+   * embedder's door for writing its OWN document-metadata (version/schema markers, feature flags per 005 §6
+   * guidance) onto the reserved "meta" root map, without reaching for a raw loro handle. `fn` receives a
+   * {@link MetaEditor} restricted to primitive get/set; whatever it stages seals as ONE commit that is:
+   *   - tagged `strata:<n>` (finding 3) so an importing peer never sees it as a foreign/untagged writer;
+   *   - `origin: META_ORIGIN` so it is EXCLUDED from the undo stack (a user's undo must never roll back an
+   *     engine version stamp — the same exclusion the docId write rides);
+   *   - TRANSPARENT to batch translation — a "meta" diff resolves to path `["meta"]`, which `translatePairs`
+   *     skips, so it produces NO {@link ChangeBatch}; no subscriber or peer hears it as an ECS change.
+   * Callable PRE-ATTACH (like {@link commit}/{@link export}, it only touches the doc). An EMPTY callback
+   * (nothing staged) neither commits, burns a `strata:<n>`, nor flushes — it is a no-op; the meta path is
+   * skipped in translation, so even a real write's flush emits nothing to subscribers (the flush's job is
+   * purely to advance `sealedTo` past the meta commit — mirroring {@link ensureMeta}).
+   *
+   * SCOPE + REENTRANCY mirror {@link commit}: `this.committing` is held across the callback (so a nested
+   * `commit`/`applyRemote`/`metaTransaction`/`undo`/`redo` throws), and a THROWING `fn` still SEALS whatever
+   * it staged, in `finally`, before the error propagates — the local echo and every receiver's stream stay
+   * consistent (a dangling staged meta op would otherwise be absorbed into the next commit). The
+   * {@link MetaEditor} is CLOSED the instant `fn` returns: a leaked reference throws on later get/set, so no
+   * un-sealed out-of-band meta write can escape. Guards match {@link commit} (throws inside a history hook or
+   * an open commit scope); there is NO quarantine check — quarantine gates `applyRemote` only, and a local
+   * meta write stays legal on a quarantined doc for recovery. The reserved {@link DOC_ID_KEY} and any
+   * non-primitive value are refused by the editor itself.
+   */
+  metaTransaction(fn: (meta: MetaEditor) => void): void {
+    if (this.inHistoryHook) {
+      throw new Error("strata: metaTransaction() inside a history hook (capture/restore) is not allowed.");
+    }
+    if (this.committing) throw new Error("strata: metaTransaction() during commit() is not allowed.");
+    this.committing = true;
+    // The editor is valid ONLY for this call: `closed` flips in `finally`, so a reference captured past `fn`
+    // throws instead of silently staging a meta op that never seals (petition 3b).
+    let closed = false;
+    const assertOpen = (): void => {
+      if (closed) {
+        throw new Error(
+          "strata: this MetaEditor is closed — it is valid only inside the metaTransaction() callback.",
+        );
+      }
+    };
+    const meta: MetaEditor = {
+      get: (key) => {
+        assertOpen();
+        // Total read: only a primitive is a meta value; a container / object / absent slot reads undefined.
+        const v = this.metaMap.get(key);
+        return typeof v === "string" || typeof v === "number" || typeof v === "boolean" ? v : undefined;
+      },
+      set: (key, value) => {
+        assertOpen();
+        if (key === DOC_ID_KEY) {
+          throw new Error(
+            `strata: "${DOC_ID_KEY}" is a strata-reserved meta key (the document id) and cannot be written through metaTransaction().`,
+          );
+        }
+        if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+          throw new Error(
+            `strata: metaTransaction() values must be string | number | boolean (write-once markers) — got ${typeof value} for key "${key}".`,
+          );
+        }
+        this.metaMap.set(key, value);
+      },
+    };
+    try {
+      fn(meta);
+    } finally {
+      // Close the editor FIRST, then seal like commit()'s finally — but ONLY when `fn` actually staged a
+      // write: an empty (or read-only) callback commits nothing, burns no `strata:<n>`, and flushes nothing.
+      // Reset `committing` before flushLocal so no downstream listener observes an open scope (mirrors
+      // commit()). flushLocal after the meta commit is REQUIRED — it advances `sealedTo` past the meta
+      // commit; the meta path translates to an empty batch, so subscribers still hear nothing.
+      closed = true;
+      const staged = this.doc.getPendingTxnLength() > 0;
+      if (staged) this.doc.commit({ message: this.nextMsg(), origin: META_ORIGIN });
+      this.committing = false;
+      if (staged) this.flushLocal();
+    }
   }
 
   // --- internals -----------------------------------------------------------------------------------

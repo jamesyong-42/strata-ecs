@@ -55,7 +55,7 @@
 import type { LoroDoc } from "loro-crdt"; // the ONE loro import — parameter type ONLY (Loro stays in the adapter)
 import { type Component, type Entity, type EntityKey, entityKey } from "../core";
 import type { ChangeBatch, Unsubscribe } from "../substrate";
-import { type HistoryHooks, LoroSnapshot, type OutboundCursor } from "./loro-snapshot";
+import { DOC_ID_KEY, type HistoryHooks, LoroSnapshot, type MetaEditor, type OutboundCursor } from "./loro-snapshot";
 import { type Mutator, runTransaction, type TxRuntime } from "./transaction";
 
 /** Options for {@link createDurableStore} (plan-undo U1). */
@@ -63,9 +63,6 @@ export interface DurableStoreOptions {
   /** Undo-stack depth cap; oldest steps evict beyond it. Default 100. */
   maxUndoSteps?: number;
 }
-
-/** The reserved "meta" slot holding the document GUID (§14.1). */
-const DOC_ID_KEY = "docId";
 
 /**
  * The projector's key↔handle bijection (§10), installed by M2's `attachDurable`. Pre-attach the store
@@ -240,6 +237,29 @@ export class DurableStore {
     } finally {
       this.txOpen = false;
     }
+  }
+
+  /**
+   * Write the embedder's OWN document-metadata in one sanctioned transaction (005 §10.11). `fn` receives a
+   * small editor with primitive `get`/`set` over the document's reserved metadata map — the place to stamp
+   * things like an engine version or a schema marker that should travel and persist WITH the document but are
+   * not ECS entities/components. Whatever `fn` writes seals as ONE change that:
+   *   - is EXCLUDED from undo/redo (a user's `undo()` never rolls back a version stamp, and it does not clear
+   *     the redo stack);
+   *   - produces NO entity/component change — attached observers and `useResource` never see it, and it does
+   *     not wake a `world.sync()`;
+   *   - travels to peers and persists in the snapshot like any other document change, converging per key by
+   *     last-writer-wins.
+   *
+   * Values must be `string | number | boolean` (metadata slots are write-once markers); keys should carry a
+   * dotted namespace of your own (e.g. `"engine.schema"`), and the reserved document-id slot is refused.
+   * Unlike {@link transaction} this needs NO attachment — it is legal on a bare store, since it only touches
+   * the document — but NOT mid-{@link transaction} (the open transaction's ops are not sealed yet). An empty
+   * callback is a no-op. See {@link MetaEditor}.
+   */
+  metaTransaction(fn: (meta: MetaEditor) => void): void {
+    this.assertNoOpenTx("metaTransaction()");
+    this.snapshot.metaTransaction(fn);
   }
 
   // --- history: undo/redo (plan-undo) ---------------------------------------------------------------
