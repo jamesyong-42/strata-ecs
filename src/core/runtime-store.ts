@@ -61,6 +61,25 @@ export interface SpawnInit {
   tags?: readonly Tag[];
 }
 
+/**
+ * The category a `world.devOnWrite` hook is told about (petition 4). Every internal mutation chokepoint
+ * classifies itself into exactly one of these before it changes state:
+ *
+ *   - `"structural"` — identity mint, placement, migration, despawn, wholesale reset, snapshot import.
+ *     add/removeComponent surface HERE (they migrate archetypes), never as `"component"`.
+ *   - `"component"`  — a value overwrite of an already-present component's cells (`edit().set`, projection
+ *     overwrite, a durable seal's pre-existing value write).
+ *   - `"tag"`        — a tag membership add/remove.
+ *   - `"relation"`   — a relation edge set/add/remove.
+ *   - `"resource"`   — a resource set/remove (including strata's own sync/attach status-resource writes).
+ *
+ * A single logical write may fire MORE THAN ONCE and across MORE THAN ONE kind (a `ctx.spawn` fires a
+ * structural at its eager identity mint and again when the flush places it; a tag-add on an identity-only
+ * source fires `"tag"` and a `"structural"` for the placement it forces). The contract is
+ * fire-at-least-once-pre-mutation-per-logical-write, may-over-fire, never-miss (petition 4).
+ */
+export type WriteKind = "structural" | "component" | "tag" | "relation" | "resource";
+
 /** Stored per-field value: a number for typed columns, `string | null` for string columns. */
 type Stored = number | string | null;
 
@@ -99,6 +118,16 @@ export class RuntimeStore implements ECSStore {
    * spawn/destroy hot paths pay exactly one branch-on-null (docs/plan-tools-observer.md).
    */
   private observerList: WorldObserver[] | null = null;
+  /**
+   * DEV-only pre-mutation write hooks (petition 4; `world.devOnWrite`). `null` whenever none are
+   * registered — the SAME branch-on-null discipline as {@link observerList}, so every mutation
+   * chokepoint pays exactly one `writeHooks !== null` test in dev and NOTHING in production (the fire
+   * sites are `DEV`-gated, so a bundler defining `NODE_ENV=production` tree-shakes them out; `devOnWrite`
+   * itself never registers there). COPY-ON-WRITE like the observer roster: register/dispose publish a new
+   * array, never mutate one a fire loop may be iterating. Unlike {@link observerList}, a throwing hook is
+   * NOT swallowed — see {@link fireWrite}.
+   */
+  private writeHooks: ReadonlyArray<(kind: WriteKind) => void> | null = null;
   /**
    * The reactive change-detection frame counter (Patch Note 002 §2.1). Every stamp — value writes,
    * structural bumps, tag/relation bumps — records this value; the reactive layer advances it at the
@@ -440,6 +469,65 @@ export class RuntimeStore implements ECSStore {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // DEV pre-mutation write hooks (petition 4; reached via `world.devOnWrite`)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * @internal Register a DEV-only, synchronous, PRE-mutation write hook (petition 4; use
+   * `world.devOnWrite`). Returns a disposer. In PRODUCTION (`NODE_ENV=production`) this never registers
+   * and returns a no-op disposer — the fire sites are `DEV`-gated and tree-shaken, so a production hook
+   * could never fire anyway. The roster is COPY-ON-WRITE (the {@link addObserver} pattern): register
+   * appends a fresh array, dispose removes and falls back to `null` at empty, and a dispose issued from
+   * INSIDE a fire never skips a sibling because {@link fireWrite} iterates a captured list. The public
+   * contract (throws propagate, every route it observes, the non-atomic windows) lives on `World.devOnWrite`.
+   */
+  devOnWrite(cb: (kind: WriteKind) => void): () => void {
+    if (!DEV) return () => {}; // production: never registers — the fire sites are DCE'd out regardless
+    this.writeHooks = this.writeHooks === null ? [cb] : [...this.writeHooks, cb];
+    return () => {
+      const list = this.writeHooks;
+      if (list === null) return;
+      const i = list.indexOf(cb);
+      if (i === -1) return; // already disposed (idempotent)
+      const next = list.slice(0, i).concat(list.slice(i + 1));
+      this.writeHooks = next.length > 0 ? next : null; // back to null-when-empty for the branch-on-null fast path
+    };
+  }
+
+  /**
+   * Fan a pre-mutation write out to the registered hooks (petition 4). Captures the roster ONCE so a hook
+   * that disposes a sibling (or itself) mid-fire cannot skip anyone this pass — the COW dispose swaps the
+   * field, never the captured array. DELIBERATELY has NO try/catch: a throwing `devOnWrite` hook
+   * PROPAGATES to the mutator's caller (the veto contract), unlike the {@link emitSpawn}/{@link emitDestroy}
+   * observer emits, which swallow and `devError`. Reached only from the `DEV && writeHooks !== null` fire
+   * sites, so the non-null assertion is sound.
+   *
+   * FIRE-SITE PLACEMENT RULE (bench-pinned): gates live ONLY in entry-level functions — spawn / destroy /
+   * reset / world.import / allocateIdentity / addComponent / removeComponent / projectComponent's
+   * structural branches / ensurePlaced's placing branch / applyCommand's structural arms / the do*
+   * tag-relation primitives / doWriteCells / set-removeResource. The inner physical primitives (`place`,
+   * `unplace`, `migrate`) are DELIBERATELY un-gated: they are tiny and inline-hot inside the migrate loop,
+   * and gating them measured +6–8% on the structural bench (spawn+despawn / add+remove) — an inlining
+   * cliff, not branch arithmetic — while entry-level placement measures inside the ±2% gate. Every route
+   * still fires ≥1 pre-mutation because every path INTO place/unplace/migrate crosses a gated entry first
+   * (the devwrite matrix pins route completeness).
+   */
+  private fireWrite(kind: WriteKind): void {
+    const hooks = this.writeHooks!; // captured — a mid-fire dispose republishes the field, not this array
+    for (let i = 0; i < hooks.length; i++) hooks[i](kind);
+  }
+
+  /**
+   * @internal Fire the write-hook roster for a mutation that ORIGINATES in {@link World} rather than in a
+   * store method — currently only `world.import`'s pre-reset veto point (petition 4). The `DEV` half of the
+   * gate lives at the call site (`if (DEV) …`) so it tree-shakes; the branch-on-null lives here so the
+   * roster field stays private to this class. Throws PROPAGATE, exactly like the in-store {@link fireWrite}.
+   */
+  fireWriteFromWorld(kind: WriteKind): void {
+    if (this.writeHooks !== null) this.fireWrite(kind);
+  }
+
   /** @internal All archetypes that currently exist (for queries to seed their caches; also the
    *  tools' reflection walk). Returns the internal {@link Archetype} type — not public API. */
   archetypes(): readonly Archetype[] {
@@ -667,6 +755,7 @@ export class RuntimeStore implements ECSStore {
 
   /** Append entity `e`'s row to archetype `A`, writing every field and the back-pointer. */
   private place(e: Entity, A: Archetype, fieldValues: ReadonlyMap<FieldId, Stored>): void {
+    // petition 4: DELIBERATELY un-gated — inline-hot; every caller fires first (see fireWrite's placement rule).
     const row = A.count;
     A.ensureCapacity(row + 1);
     for (const f of A.fields) {
@@ -684,6 +773,7 @@ export class RuntimeStore implements ECSStore {
    * which the migrate caller may already have re-pointed.
    */
   private unplace(A: Archetype, row: number, _vacating: Entity): void {
+    // petition 4: DELIBERATELY un-gated — inline-hot; every caller fires first (see fireWrite's placement rule).
     const last = A.count - 1;
     if (row !== last) {
       const moved = A.entities[last] as Entity;
@@ -769,6 +859,7 @@ export class RuntimeStore implements ECSStore {
 
   /** Mint an identity with no placement (§5.2). */
   allocateIdentity(): Entity {
+    if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — covers ctx/tx/eph spawn + projector resolves
     const e = this.table.allocate();
     // The entity exists from here (ctx.spawn's eager identity, §5.2) — this is its one onSpawn;
     // the flush-time placement of the same entity deliberately does not fire again.
@@ -779,6 +870,9 @@ export class RuntimeStore implements ECSStore {
   /** Idempotently place an identity-only entity into the empty archetype (§5.5). */
   ensurePlaced(e: Entity): void {
     if (this.table.isIdentityOnly(e)) {
+      // petition 4 — the identity-only → placed transition (tag/relation on identity-only, projector
+      // spawn resolves). Fires only when actually placing; the idempotent no-op is not a write.
+      if (DEV && this.writeHooks !== null) this.fireWrite("structural");
       this.place(e, this.emptyArchetype, EMPTY_FIELD_VALUES);
     }
   }
@@ -803,6 +897,7 @@ export class RuntimeStore implements ECSStore {
 
   /** Create and immediately place a runtime entity (§5.2 — outside iteration, so immediate). */
   spawn(init?: SpawnInit): Entity {
+    if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — spawn entry, before table.allocate (its own inline mint, not allocateIdentity)
     if (DEV && this.inObserverEmit) {
       devError("observer callbacks must not mutate the world — spawn() from inside an observer (observe.ts).");
     }
@@ -838,6 +933,10 @@ export class RuntimeStore implements ECSStore {
       return;
     }
     if (!this.table.isAlive(e)) return;
+    // petition 4 — fire AFTER the dead-handle early-return (a no-op destroy is not a write) and BEFORE any
+    // teardown (the observer emit / reactive death hook / relation+tag cascade / unplace), so a throwing
+    // hook is a clean veto: the entity is untouched and still alive when the throw propagates.
+    if (DEV && this.writeHooks !== null) this.fireWrite("structural");
     // BEFORE teardown, so the dying entity is still fully readable inside the hook (observe.ts).
     // Covers both surfaces: immediate world.destroy and the flush's despawn command (§5.4).
     if (this.observerList !== null) this.emitDestroy(e);
@@ -907,6 +1006,7 @@ export class RuntimeStore implements ECSStore {
         "strata: world.reset() cannot run from inside an observer or reactive callback — reset only outside iteration (observe.ts).",
       );
     }
+    if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — before arch.clear, so a veto leaves the world intact
     const frame = this.frameCounter; // reset stamps at the CURRENT frame — a normal mutation burst
     // Empty every archetype that holds rows (keep identity for the query caches). Bump the emptied
     // archetype's rows-version so surviving Tier-1 watches wake at the next notify (002 §4.2).
@@ -970,6 +1070,7 @@ export class RuntimeStore implements ECSStore {
     if (this.has(e, c)) {
       throw new Error(`strata: component "${c.name}" is already present — use edit().set / writeComponent to overwrite its value.`);
     }
+    if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — entry gate, before the place/migrate branch
     const encoded = encodeComponentValue(c, value as Record<string, unknown>);
     if (this.table.isIdentityOnly(e)) {
       // identity-only → placing its first component (state 2 → 3, §5.2)
@@ -987,6 +1088,7 @@ export class RuntimeStore implements ECSStore {
     if (!this.has(e, c)) {
       throw new Error(`strata: component "${c.name}" is not present — cannot remove it.`);
     }
+    if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — entry gate (also covers projectRemoveComponent's present-delegate)
     const newIds = this.archetypeOfEntity(e).componentIds.filter((id) => id !== c.id);
     this.migrate(e, newIds, EMPTY_FIELD_VALUES);
   }
@@ -1000,6 +1102,7 @@ export class RuntimeStore implements ECSStore {
    * reactive layer is untouched.
    */
   private doWriteCells(e: Entity, c: Component, encoded: ReadonlyMap<FieldId, Stored>): void {
+    if (DEV && this.writeHooks !== null) this.fireWrite("component"); // petition 4 — before the cell overwrite, so a veto keeps the old value
     const A = this.archetypeOfEntity(e);
     const row = this.table.rowOf(slotOf(e));
     for (const f of c.fields) {
@@ -1030,11 +1133,13 @@ export class RuntimeStore implements ECSStore {
     this.assertAlive(e, "projectComponent");
     const encoded = encodeComponentValue(c, value as Record<string, unknown>);
     if (this.table.isIdentityOnly(e)) {
+      if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — place branch
       this.place(e, this.archetypeFor([c.id]), encoded);
       this.stampComponent(this.archetypeOfEntity(e), c.id); // initial value of the projected column
     } else if (this.archetypeOfEntity(e).hasComponent(c.id)) {
-      this.doWriteCells(e, c, encoded); // overwrite branch — the same cell-loop + stamp as writeComponent (R6)
+      this.doWriteCells(e, c, encoded); // overwrite branch — fires "component" inside doWriteCells (R6)
     } else {
+      if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — migrate branch
       const newIds = RuntimeStore.sortedInsert(this.archetypeOfEntity(e).componentIds, c.id);
       this.migrate(e, newIds, encoded); // migrate stamps the added column
     }
@@ -1114,29 +1219,34 @@ export class RuntimeStore implements ECSStore {
   // reactivity is untouched.
 
   private doAddTag(e: Entity, tagId: number): void {
+    if (DEV && this.writeHooks !== null) this.fireWrite("tag"); // petition 4 — before ensurePlaced (which may over-fire "structural")
     this.ensurePlaced(e); // an identity-only source becomes queryable once tagged (§5.2)
     this.tags.set(tagId, slotOf(e));
     this.bumpTag(tagId); // this tag's filtered membership changed (002 §4.2)
   }
 
   private doRemoveTag(e: Entity, tagId: number): void {
+    if (DEV && this.writeHooks !== null) this.fireWrite("tag"); // petition 4
     this.tags.clear(tagId, slotOf(e)); // does not unplace the entity
     this.bumpTag(tagId);
   }
 
   private doSetRelation(e: Entity, rel: Relation, target: Entity): void {
+    if (DEV && this.writeHooks !== null) this.fireWrite("relation"); // petition 4 — before ensurePlaced (which may over-fire "structural")
     this.ensurePlaced(e); // places the source; the target is not placed (§5.2)
     this.relations.setOne(rel, e, target);
     this.bumpRel(rel.id); // this relation's filtered membership changed (002 §4.2)
   }
 
   private doAddRelation(e: Entity, rel: Relation, target: Entity): void {
+    if (DEV && this.writeHooks !== null) this.fireWrite("relation"); // petition 4
     this.ensurePlaced(e);
     this.relations.addMany(rel, e, target);
     this.bumpRel(rel.id);
   }
 
   private doRemoveRelation(e: Entity, rel: Relation, target?: Entity): void {
+    if (DEV && this.writeHooks !== null) this.fireWrite("relation"); // petition 4
     this.relations.remove(rel, e, target); // remove one edge (target given) or all; does not unplace
     this.bumpRel(rel.id);
   }
@@ -1221,6 +1331,7 @@ export class RuntimeStore implements ECSStore {
   // ---------------------------------------------------------------------------
 
   setResource<S>(res: Resource<S>, value: S): void {
+    if (DEV && this.writeHooks !== null) this.fireWrite("resource"); // petition 4 — before the store, so a veto keeps the prior value (covers strata's own sync/attach status writes)
     // A setResource from inside a reactive callback is legal and DETERMINISTIC: it stamps the NEXT
     // frame (see stampFrame), so the next notify() delivers it. (Previously it stamped the current,
     // already-seen frame and was silently unobservable — that behavior and its DEV warn are retired.)
@@ -1248,6 +1359,7 @@ export class RuntimeStore implements ECSStore {
    * `resource-remove` for a resource already gone changes nothing and notifies no one (conformance P7).
    */
   removeResource<S>(res: Resource<S>): void {
+    if (DEV && this.writeHooks !== null) this.fireWrite("resource"); // petition 4 — fires at entry (may over-fire on an absent-resource no-op; never misses a real remove)
     if (this.resources.delete(res.id)) this.bumpResource(res.id); // stamp ONLY if it was present
   }
 
@@ -1310,6 +1422,8 @@ export class RuntimeStore implements ECSStore {
     if (!this.table.isAlive(cmd.entity)) return; // validate-on-read
     switch (cmd.kind) {
       case "spawn": {
+        // petition 4 — flush structural arms fire here (place/unplace/migrate are deliberately un-gated).
+        if (DEV && this.writeHooks !== null) this.fireWrite("structural");
         const seen = new Set<ComponentId>();
         const fieldValues = new Map<FieldId, Stored>();
         for (const init of cmd.components ?? []) {
@@ -1335,6 +1449,7 @@ export class RuntimeStore implements ECSStore {
           );
           return;
         }
+        if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — flush addComponent arm
         const encoded = encodeComponentValue(c, cmd.value as Record<string, unknown>);
         if (this.table.isIdentityOnly(cmd.entity)) {
           this.place(cmd.entity, this.archetypeFor([c.id]), encoded);
@@ -1354,6 +1469,7 @@ export class RuntimeStore implements ECSStore {
           devWarn(`removeComponent at flush: "${c.name}" is not present — skipped.`);
           return;
         }
+        if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — flush removeComponent arm
         this.migrate(
           cmd.entity,
           this.archetypeOfEntity(cmd.entity).componentIds.filter((id) => id !== c.id),

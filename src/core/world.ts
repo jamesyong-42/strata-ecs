@@ -13,7 +13,7 @@ import type { FieldInput } from "./field";
 import type { Batch, Query } from "./query";
 import { DEV, devError } from "./dev";
 import type { WorldObserver } from "./observe";
-import { RuntimeStore } from "./runtime-store";
+import { RuntimeStore, type WriteKind } from "./runtime-store";
 import { type EntityEditor, type Pipeline, SystemCtx, makeEditor } from "./system";
 import { Reactive } from "./reactive";
 import { validatePipelineAccess } from "./access-diagnostics";
@@ -95,6 +95,48 @@ export class World {
    */
   observe(obs: WorldObserver): () => void {
     return this.store.addObserver(obs);
+  }
+
+  /**
+   * Register a DEV-only, synchronous, PRE-mutation **write hook** (petition 4). Returns a disposer. The
+   * runtime half of the "law window" — {@link ReadonlyWorld} is the compile-time half (types erase, so a
+   * cast back to `World` defeats it; this hook is what actually observes a write at runtime).
+   *
+   * WHERE IT FIRES — synchronously, BEFORE each mutation, at strata's internal chokepoints, DOWNSTREAM of
+   * any bound method reference. So it observes EVERY route into the runtime, not just `world.*`:
+   *   - `world.*` mutators, `world.edit(e).set(…)` editors, and the deferred `ctx.*` command-buffer flush;
+   *   - a durable `doc.transaction`'s record-time identity mint + its seal's synchronous value/resource
+   *     writes; `world.sync()` / `attachDurable` drain-and-project applies; `undo()`/`redo()` echoes;
+   *   - the ephemeral mutators and inbound presence projection; snapshot `import`; `reset()`;
+   *   - INCLUDING strata's OWN runtime-local status-resource writes during sync/attach (DurableSyncStatus,
+   *     EphemeralSyncStatus, DurableUndoStatus) — those are `setResource`s and fire `"resource"`.
+   * A compound op fires MORE THAN ONCE and may span kinds (a `ctx.spawn` fires `"structural"` at its eager
+   * identity mint and again when the flush places it; a tag-add on an identity-only entity fires `"tag"`
+   * then `"structural"`; an `import` fires once here then per imported entity). The guarantee is
+   * fire-at-least-once-pre-mutation-per-logical-write, may-over-fire, NEVER-miss. Kinds:
+   * add/removeComponent surface as `"structural"` (they migrate archetypes); value writes as `"component"`.
+   *
+   * THROWS PROPAGATE to the mutator's caller — DELIBERATELY unlike {@link WorldObserver} callbacks, which
+   * are swallowed and reported. For a SINGLE-op mutation the fire precedes the first state change, so a
+   * throwing hook is a CLEAN VETO: the op does not happen (`spawn` allocates nothing, `edit().set` keeps
+   * the old value, `reset`/`import({replace:true})` leave the world untouched).
+   *
+   * NON-ATOMIC WINDOWS for THROWING hooks — a veto is clean only per single write. A throw partway through
+   * a multi-write op leaves the earlier writes APPLIED:
+   *   - `world.edit(e).set(A).set(B)` — a throw on B keeps A;
+   *   - a throw during a `tick()` phase's command-buffer flush aborts the REST of the buffer (already-applied
+   *     commands stand, and the phase does not re-flush);
+   *   - a throw during a `doc.transaction` seal's value-write stage can leave the runtime ahead of the
+   *     document (stage 1 runs before the Loro commit).
+   * So ARM a throwing hook only in a window where no legitimate mutation runs — the render-pass law-window
+   * use — never across `tick()` / `sync()`. Intended pattern: register ONCE, keep a caller-side `armed`
+   * flag, and throw from the hook only while `armed` (flip it on around the read-only window, off otherwise).
+   *
+   * PRODUCTION: under `NODE_ENV=production` this is a no-op that returns a no-op disposer, and every fire
+   * site is `DEV`-gated and tree-shaken — the hook can never fire, so zero runtime cost ships.
+   */
+  devOnWrite(cb: (kind: WriteKind) => void): () => void {
+    return this.store.devOnWrite(cb);
   }
 
   /**
@@ -461,6 +503,10 @@ export class World {
         "strata: world.import() cannot run from inside an observer or reactive callback — a wholesale load there lands entities but silently swallows relation edges; schedule it for the next frame boundary.",
       );
     }
+    // petition 4 — the World-level chokepoint. Fire BEFORE the replace-branch's internal reset(): a
+    // throwing (vetoing) hook must leave the world UNTOUCHED, and were it downstream of `this.reset()`
+    // a veto would strand the world EMPTY. `if (DEV)` DCEs the whole thing in production.
+    if (DEV) this.store.fireWriteFromWorld("structural");
     if (opts?.replace) {
       // Validate BEFORE resetting: an incompatible snapshot (schema drift) throws here with the
       // world untouched, so a failed document-open never wipes the live board (§8.2 boot-safety).
@@ -508,6 +554,48 @@ export class World {
     return this.iterationDepth > 0 || this.ticking;
   }
 }
+
+/**
+ * The names of every MUTATING method on {@link World} — the keys {@link ReadonlyWorld} strips (petition 4).
+ * These are the ECS-data + frame-advancing writes: entity/component/tag/relation/resource mutation, the
+ * `edit()` value-write factory, wholesale `import`/`reset`, and `tick`/`sync` (which run systems / drain
+ * remote ops and therefore mutate). `edit`, `sync`, and `tick` are included precisely because each is a
+ * door to a write even though its own name reads neutral.
+ *
+ * DELIBERATELY EXCLUDED, though public and state-changing: `registerInboundSource` /
+ * `unregisterInboundSource`. They mutate the world's BINDING lifecycle (the inbound-source list), not ECS
+ * data, and a render-pass law window has no reason to bar attaching/detaching a layer — so a `ReadonlyWorld`
+ * keeps them. (The devwrite matrix's reflective drift-check classifies them explicitly as binding seams, so
+ * a future ECS mutator added without a `WriteKind` fire site still fails that test.)
+ */
+export type WorldMutatorName =
+  | "spawn"
+  | "destroy"
+  | "addComponent"
+  | "removeComponent"
+  | "addTag"
+  | "removeTag"
+  | "setRelation"
+  | "addRelation"
+  | "removeRelation"
+  | "setResource"
+  | "updateResource"
+  | "removeResource"
+  | "edit"
+  | "import"
+  | "reset"
+  | "sync"
+  | "tick";
+
+/**
+ * A compile-time READ-ONLY view of a {@link World} (petition 4) — every {@link WorldMutatorName} method
+ * removed, leaving the queries/reads (`read`/`get`/`query`/`count`/`firstOf`/…), `observe`, `devOnWrite`,
+ * the `reactive` getter, `tickCount`, `export`, and the liveness probes. The COMPILE-TIME half of a "law
+ * window": hand a system / render pass a `ReadonlyWorld` and a stray `world.spawn(…)` fails to typecheck.
+ * Types ERASE, so a cast defeats it — pair it with a throwing `world.devOnWrite` hook (the runtime half)
+ * when the window must be enforced at runtime, not merely documented.
+ */
+export type ReadonlyWorld = Omit<World, WorldMutatorName>;
 
 /** Report a throwing observer callback — swallowed, never propagated into tick control flow. */
 function reportObserverThrow(err: unknown): void {

@@ -66,7 +66,9 @@ export { validatePipelineAccess } from "./access-diagnostics";
 
 // --- world ---
 export { World, createWorld } from "./world";
-export type { InboundSource } from "./world";
+// InboundSource is the layer-coupling seam; WorldMutatorName / ReadonlyWorld are the law-window types
+// (petition 4) — the compile-time read-only view whose runtime half is `world.devOnWrite`.
+export type { InboundSource, WorldMutatorName, ReadonlyWorld } from "./world";
 
 // --- reactivity (Patch Note 002) — the poll-at-boundary observer layer, reached via world.reactive ---
 export { Reactive } from "./reactive";
@@ -82,4 +84,6 @@ export type { ECSStore } from "./ecs-store";
 // Those primitives are marked internal and stripped from the shipped .d.ts by `stripInternal`; the
 // public seam is ECSStore plus the projection methods (design §ref ~1250).
 export type { RuntimeStore, SpawnInit, ComponentEntry } from "./runtime-store";
+// WriteKind (petition 4): the category a `world.devOnWrite` hook is told about per pre-mutation fire.
+export type { WriteKind } from "./runtime-store";
 export type { StructuralCommand, ComponentInit, CommandBuffer } from "./command";
