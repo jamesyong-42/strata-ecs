@@ -180,6 +180,18 @@ export interface SystemAccess {
    * the stored declaration stays the author's literal input.
    */
   readonly read?: readonly Component[];
+  /**
+   * Co-located-writer attestation for the same-phase writer-pair advisory (001 §3.3 advisory (a);
+   * petition 3a; 001 §3.3 as-built amendment). Naming a column here certifies that THIS system's
+   * writes to it are order-tolerant with respect to same-phase co-writers — row-disjoint by
+   * construction, commutative, or last-write-wins-safe. Every column listed MUST also appear in
+   * `write` (DEV-checked by the pipeline walker; an attestation of an unwritten column is inert).
+   * The advisory for a column is suppressed only when EVERY same-phase writer of it attests — so an
+   * un-attested newcomer re-fires the warning, and the claim never composes beyond what its
+   * co-writers grant. Advisory-only metadata: never feeds `effectiveRead`, never affects runtime
+   * access enforcement.
+   */
+  readonly orderIndependent?: readonly Component[];
 }
 
 export interface System {

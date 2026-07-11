@@ -3,8 +3,11 @@
  *
  * v1 does NOT reorder systems — execution stays positional (§7.1) — so these checks never *fix* an
  * ordering, they *warn* about a manual order that looks data-inconsistent. Both are advisory
- * (`devWarn`, not `devError`): the author may have ordered deliberately. The whole surface compiles
- * out of production with `DEV`. This module is NOT called from `tick` here — the reactivity layer
+ * (`devWarn`, not `devError`): the author may have ordered deliberately. Advisory (a) additionally
+ * carries an author opt-out — attesting `access.orderIndependent` on every co-writer of a column
+ * certifies its writes order-tolerant and suppresses the warning (petition 3a; 001 §3.3 as-built
+ * amendment). The whole surface compiles out of production with `DEV`. This module is NOT called
+ * from `tick` here — the reactivity layer
  * (002) wires it in, gated on reactivity being active; it only exports the walker and the
  * read-default helper reactivity needs.
  */
@@ -83,17 +86,37 @@ export function validatePipelineAccess(pipeline: Pipeline): void {
     const writers = new Map<ComponentId, number[]>();
     const readers = new Map<ComponentId, number[]>();
     for (let i = 0; i < systems.length; i++) {
-      const w = systems[i].access?.write;
+      const sys = systems[i];
+      const w = sys.access?.write;
       if (w !== undefined) for (const c of w) pushIndex(writers, c.id, i);
-      for (const c of effectiveRead(systems[i])) pushIndex(readers, c.id, i);
+      for (const c of effectiveRead(sys)) pushIndex(readers, c.id, i);
+
+      // Subset hygiene (petition 3a; 001 §3.3 as-built amendment): an attested column that is not
+      // also in `access.write` can never enter suppression — advisory (a) only ever consults the
+      // WRITERS of a column, so an unwritten attestation is a silent no-op. Warn once per
+      // (system, column) so a typo'd / stale attestation gets fixed rather than trusted. (The
+      // pipeline-level WeakSet bounds this: the whole walk runs at most once per pipeline object.)
+      const oi = sys.access?.orderIndependent;
+      if (oi !== undefined) {
+        for (const c of oi) {
+          if (w !== undefined && w.some((wc) => wc.id === c.id)) continue;
+          devWarn(
+            `access: system "${sys.name}" attests order-independence of "${c.name}" but does not declare it in access.write — the attestation is inert (orderIndependent must be a subset of write).`,
+          );
+        }
+      }
     }
 
     // (a) same-phase double-writers → potential order-dependence.
     for (const [cid, widx] of writers) {
       if (widx.length < 2) continue;
+      // Attestation opt-out (petition 3a; 001 §3.3 as-built amendment): suppress only when EVERY
+      // co-writer of this column attests order-independence — the claim composes conjunctively, so
+      // a single silent co-writer (e.g. an un-attested newcomer dropped into the phase) re-arms it.
+      if (widx.every((i) => attestsOrderIndependent(systems[i], cid))) continue;
       const names = widx.map((i) => `"${systems[i].name}"`).join(", ");
       devWarn(
-        `access: in phase "${ph.name}", systems ${names} declare write of "${nameOf(cid)}" in the same phase — potential order-dependence (array order is execution order; order them deliberately or split the phase).`,
+        `access: in phase "${ph.name}", systems ${names} declare write of "${nameOf(cid)}" in the same phase — potential order-dependence (array order is execution order; order them deliberately, split the phase, or — if the writes are row-disjoint or commutative — attest with access.orderIndependent on every co-writer).`,
       );
     }
 
@@ -120,4 +143,17 @@ function pushIndex(m: Map<ComponentId, number[]>, id: ComponentId, i: number): v
 
 function nameOf(id: ComponentId): string {
   return componentById(id)?.name ?? `component#${id}`;
+}
+
+/**
+ * Does `system` attest order-independence of `cid`? (petition 3a; 001 §3.3 as-built amendment.)
+ * Advisory (a) suppresses a column only when EVERY same-phase writer attests it, so this is the
+ * per-writer term of an all-writers-must-attest conjunction — one non-attesting co-writer re-arms
+ * the warning. Matches by component id against the system's declared `access.orderIndependent`.
+ */
+function attestsOrderIndependent(system: System, cid: ComponentId): boolean {
+  const oi = system.access?.orderIndependent;
+  if (oi === undefined) return false;
+  for (const c of oi) if (c.id === cid) return true;
+  return false;
 }
