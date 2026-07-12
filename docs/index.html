@@ -876,6 +876,16 @@
       last-write-wins-safe — list the column in <code>access.orderIndependent</code> on every writer to opt
       out; the warning falls silent only once all of them attest.
     </p>
+    <p>
+      <strong>What access metadata is not:</strong> a capability or security boundary. It is diagnostic
+      and scheduling metadata — it drives dev-mode misuse warnings and reactive wake-ups, and it depends
+      on declarations being honest. The dev-mode subset check covers the typed write path
+      (<code>batch.set(...)</code> and friends); writing through a raw <code>col()</code> array bypasses
+      it, which is legal and why the framework attributes such writes conservatively (whole-query
+      stamping at walk end) rather than pretending to have seen them. Production builds run no
+      enforcement at all. Trust it for correctness of <em>wake-ups</em>, never for containing untrusted
+      code.
+    </p>
   </section>
 
   <!-- ============================================================= MUTATION -->

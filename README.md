@@ -23,7 +23,7 @@ haven't turned on.
   [bitecs](https://github.com/NateTheGreatt/bitECS) on the canonical iteration
   benchmarks, leads on entity-lifecycle churn ([BENCHMARKS.md](BENCHMARKS.md)).
 - **Schema-first types** — field types flow from one schema literal into both the
-  storage and the TypeScript types. `batch.col(Position).x` *is* a `Float32Array` at
+  storage and the TypeScript types. `batch.col(Position).x` _is_ a `Float32Array` at
   compile time; a typo in a field name is a type error.
 - **Reactivity built in, free until used** — subscribe to queries, values, or
   resources instead of scattering dirty flags. Dormant until the first observer;
@@ -51,6 +51,7 @@ haven't turned on.
 - [Install](#install)
 - [Quick start](#quick-start)
 - [The five words](#the-five-words)
+- [When not to use it](#when-not-to-use-it)
 - [Architecture](#architecture)
 - [Reactivity](#reactivity)
 - [Save & load](#save--load)
@@ -81,24 +82,36 @@ Components hold typed data. Entities carry components. Systems run over queries.
 world ticks:
 
 ```ts
-import { createWorld, defineComponent, defineQuery, defineSystem, phase } from "@vibecook/strata-ecs";
+import {
+  createWorld,
+  defineComponent,
+  defineQuery,
+  defineSystem,
+  phase,
+} from "@vibecook/strata-ecs";
 
 const Position = defineComponent("Position", { x: "f32", y: "f32" });
 const Velocity = defineComponent("Velocity", { x: "f32", y: "f32" });
 
 const Movement = defineSystem(defineQuery([Position, Velocity]), (batch) => {
-  const px = batch.col(Position).x;   // Float32Array — typed from the schema, no cast
+  const px = batch.col(Position).x; // Float32Array — typed from the schema, no cast
   const py = batch.col(Position).y;
   const vx = batch.col(Velocity).x;
   const vy = batch.col(Velocity).y;
-  for (const r of batch) {            // matched rows; filters fused
+  for (const r of batch) {
+    // matched rows; filters fused
     px[r] += vx[r];
     py[r] += vy[r];
   }
 });
 
 const world = createWorld();
-const e = world.spawn({ components: [[Position, { x: 0, y: 0 }], [Velocity, { x: 1, y: 2 }]] });
+const e = world.spawn({
+  components: [
+    [Position, { x: 0, y: 0 }],
+    [Velocity, { x: 1, y: 2 }],
+  ],
+});
 
 world.tick([phase("sim", [Movement])]);
 world.read(e, Position); // { x: 1, y: 2 }
@@ -127,26 +140,46 @@ collaboration layers attach later with zero rewrite:
 ```ts
 function frame() {
   requestAnimationFrame(frame);
-  world.sync();               // drain inbound layers (no-op until a collab layer attaches)
-  world.tick(pipeline());     // run systems; shape changes flush at phase boundaries
-  world.reactive.notify();    // THE settled point — fire dirty observers, once per frame
-  paint();                    // render reads the finished state
+  world.sync(); // drain inbound layers (no-op until a collab layer attaches)
+  world.tick(pipeline()); // run systems; shape changes flush at phase boundaries
+  world.reactive.notify(); // THE settled point — fire dirty observers, once per frame
+  paint(); // render reads the finished state
 }
 requestAnimationFrame(frame);
 ```
 
 ## The five words
 
-| Term | One line | Guide |
-|---|---|---|
-| **Entity** | a stable handle naming one thing in the world — a shape, a node, an edge | [Entities](https://jamesyong-42.github.io/strata-ecs/#entities) |
-| **Component** | typed fields attached to an entity; entities with the same set share storage | [Components](https://jamesyong-42.github.io/strata-ecs/#components) |
-| **System** | a function that runs over every entity matching a query, once per tick | [Systems](https://jamesyong-42.github.io/strata-ecs/#systems) |
-| **Query** | a compiled description of "entities with these components" — define once, reuse | [Queries](https://jamesyong-42.github.io/strata-ecs/#queries) |
-| **World** | the container that holds it all; `world.tick()` runs your systems over it | [The frame loop](https://jamesyong-42.github.io/strata-ecs/#frame) |
+| Term          | One line                                                                        | Guide                                                               |
+| ------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **Entity**    | a stable handle naming one thing in the world — a shape, a node, an edge        | [Entities](https://jamesyong-42.github.io/strata-ecs/#entities)     |
+| **Component** | typed fields attached to an entity; entities with the same set share storage    | [Components](https://jamesyong-42.github.io/strata-ecs/#components) |
+| **System**    | a function that runs over every entity matching a query, once per tick          | [Systems](https://jamesyong-42.github.io/strata-ecs/#systems)       |
+| **Query**     | a compiled description of "entities with these components" — define once, reuse | [Queries](https://jamesyong-42.github.io/strata-ecs/#queries)       |
+| **World**     | the container that holds it all; `world.tick()` runs your systems over it       | [The frame loop](https://jamesyong-42.github.io/strata-ecs/#frame)  |
 
 Tags (zero-data markers), relations (indexed edges with cascade-on-despawn), and
 resources (world singletons) round out the data model.
+
+## When not to use it
+
+strata-ecs is built for one workload. If yours is a different one, a different tool
+will serve you better:
+
+- **A traditional game.** strata's documented weak spots are per-frame component
+  add/remove churn and random access by handle (the archetype-migration and
+  row-indirection trade-offs — see [the losses in BENCHMARKS.md](BENCHMARKS.md)).
+  A flat-bitmask ECS like [bitecs](https://github.com/NateTheGreatt/bitECS) fits a
+  game loop's shape better, and game engines ship their own.
+- **A few dozen stateful objects.** Below a few hundred entities the schema and
+  system ceremony buys nothing — React state, Zustand, or plain objects are simpler
+  and fast enough.
+- **Server-side business models.** This is a client-side document runtime organized
+  around a frame loop; CRUD models belong in a database, not a tick.
+- **"Everything persists automatically."** Durability here is an explicit layer you
+  attach and route state into — the runtime/document split is the point. If every
+  last piece of state should persist with no distinction, a document store alone
+  ([Loro](https://loro.dev), Yjs, Automerge) is the simpler system.
 
 ## Architecture
 
@@ -192,13 +225,19 @@ The world is the change detector. Three tiers, from coarse-and-cheap to precise:
 ```ts
 // did anything matching this query move? (may over-fire, never misses)
 // the watched columns default to the query's own components; pass { cols } to narrow or widen
-world.reactive.observeQuery(renderable, () => { repaint = true; });
+world.reactive.observeQuery(renderable, () => {
+  repaint = true;
+});
 
 // this exact value changed (equal-value writes are suppressed)
-world.reactive.observeValue(e, Position, (pos) => { /* { x, y } | undefined */ });
+world.reactive.observeValue(e, Position, (pos) => {
+  /* { x, y } | undefined */
+});
 
 // a world singleton changed
-world.reactive.observeResource(Camera, () => { repaint = true; });
+world.reactive.observeResource(Camera, () => {
+  repaint = true;
+});
 ```
 
 React components subscribe with two hooks — re-rendering exactly once per real change:
@@ -218,9 +257,9 @@ function ShapeInspector({ world, entity }: { world: World; entity: Entity }) {
 The runtime serializes itself — no collaboration required:
 
 ```ts
-const bytes = world.export();               // readable UTF-8 JSON
-world.import(bytes, { replace: true });     // validates, then resets the SAME world in
-                                            // place — observers and subscriptions survive
+const bytes = world.export(); // readable UTF-8 JSON
+world.import(bytes, { replace: true }); // validates, then resets the SAME world in
+// place — observers and subscriptions survive
 ```
 
 ## Going multiplayer
@@ -228,25 +267,30 @@ world.import(bytes, { replace: true });     // validates, then resets the SAME w
 Everything above runs entirely local. When you want other people in the same document,
 two layers attach:
 
-|  | **Document** (`@vibecook/strata-ecs/durable`) | **Presence** (`@vibecook/strata-ecs/ephemeral`) |
-|---|---|---|
-| Holds | the board itself — shapes, edges, styles | the people on it — cursors, selections |
-| Lifetime | permanently stored, merges without conflicts | self-expiring; resets when a peer disconnects |
-| Backed by | Loro's CRDT document | Loro's ephemeral store |
+|           | **Document** (`@vibecook/strata-ecs/durable`) | **Presence** (`@vibecook/strata-ecs/ephemeral`) |
+| --------- | --------------------------------------------- | ----------------------------------------------- |
+| Holds     | the board itself — shapes, edges, styles      | the people on it — cursors, selections          |
+| Lifetime  | permanently stored, merges without conflicts  | self-expiring; resets when a peer disconnects   |
+| Backed by | Loro's CRDT document                          | Loro's ephemeral store                          |
 
 ```ts
 import { LoroDoc } from "loro-crdt";
 import { createDurableStore, attachDurable } from "@vibecook/strata-ecs/durable";
 
-const doc = createDurableStore(new LoroDoc());   // the ONE place the CRDT enters
-attachDurable(world, doc);                       // project it into the runtime
+const doc = createDurableStore(new LoroDoc()); // the ONE place the CRDT enters
+attachDurable(world, doc); // project it into the runtime
 
-doc.subscribeOutbound((bytes) => transport.send(bytes));  // outbound wire
-transport.onMessage((bytes) => doc.applyRemote(bytes));   // inbound wire
+doc.subscribeOutbound((bytes) => transport.send(bytes)); // outbound wire
+transport.onMessage((bytes) => doc.applyRemote(bytes)); // inbound wire
 
 // Change the document only inside a transaction — one commit, one undo unit.
 doc.transaction((tx) => {
-  const shape = tx.spawn({ components: [[Position, { x: 0, y: 0 }], [Size, { w: 100, h: 60 }]] });
+  const shape = tx.spawn({
+    components: [
+      [Position, { x: 0, y: 0 }],
+      [Size, { w: 100, h: 60 }],
+    ],
+  });
 });
 ```
 
@@ -313,16 +357,24 @@ Full cross-library tables, methodology, and the losses included:
 
 ## Package exports
 
-| Import | What | Requires |
-|---|---|---|
-| `@vibecook/strata-ecs` | the core ECS + reactivity | nothing |
-| `@vibecook/strata-ecs/durable` | the Document (durable) layer | `loro-crdt` |
-| `@vibecook/strata-ecs/ephemeral` | the Presence (ephemeral) layer | `loro-crdt` |
-| `@vibecook/strata-ecs/react` | `useComponent` / `useResource` hooks | `react >= 18` |
-| `@vibecook/strata-ecs/tools` | the inspector panel | nothing |
+| Import                           | What                                 | Requires      |
+| -------------------------------- | ------------------------------------ | ------------- |
+| `@vibecook/strata-ecs`           | the core ECS + reactivity            | nothing       |
+| `@vibecook/strata-ecs/durable`   | the Document (durable) layer         | `loro-crdt`   |
+| `@vibecook/strata-ecs/ephemeral` | the Presence (ephemeral) layer       | `loro-crdt`   |
+| `@vibecook/strata-ecs/react`     | `useComponent` / `useResource` hooks | `react >= 18` |
+| `@vibecook/strata-ecs/tools`     | the inspector panel                  | nothing       |
 
 ESM-only. `loro-crdt` and `react` are optional peer dependencies — never bundled, only
 needed for the entry points that use them.
+
+Every entry ships **two builds** behind export conditions: a `development` build with
+dev-mode diagnostics (misuse warnings on the console) and a production build with those
+branches — message strings included — compiled out entirely. Bundlers pick the right one
+automatically (Vite and webpack apply the `development` condition in dev mode and the
+default in production builds); no `process.env` shim or define is needed. Plain Node
+resolves the production build — opt into diagnostics with
+`node --conditions=development`.
 
 ## Development
 

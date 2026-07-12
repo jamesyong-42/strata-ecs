@@ -2,12 +2,10 @@
  * The runtime store — the archetype / typed-array engine (design §3, §5.5).
  *
  * This is the one place that knows the in-memory data shape. It owns the entity table, the
- * archetype index, and the five physical primitives (place · unplace · migrate · cell write ·
- * — bit/map mutation arrives with tags/relations in M3). Every operation here is **immediate**;
- * deferral is the system context's concern, not the store's (§ Part I ref, ECSStore).
- *
- * M2 scope: components, placement, and immediate structural/value ops. Tags, relations, and the
- * despawn cascade land in M3; queries in M4; the deferring `ctx` and tick in M5.
+ * archetype index, tag/relation membership, and the five physical primitives (place · unplace ·
+ * migrate · cell write · bit/map mutation), plus the query walk and the despawn cascade built on
+ * them. Every operation here is **immediate**; deferral is the system context's concern, not the
+ * store's (§ Part I ref, ECSStore) — the deferring `ctx` and the tick live in the World facade.
  */
 
 import { type Entity, genOf, slotOf } from "./entity";
@@ -407,7 +405,9 @@ export class RuntimeStore implements ECSStore {
    */
   private rejectMutationInEmit(op: string): boolean {
     if (DEV && this.inObserverEmit) {
-      devError(`observer callbacks must not mutate the world — ${op}() from inside a callback is ignored (observe.ts).`);
+      devError(
+        `observer callbacks must not mutate the world — ${op}() from inside a callback is ignored (observe.ts).`,
+      );
       return true;
     }
     return false;
@@ -423,7 +423,9 @@ export class RuntimeStore implements ECSStore {
         try {
           obs[i].onSpawn?.(e);
         } catch (err) {
-          devError(`observer onSpawn threw — swallowed; callbacks must not throw (observe.ts): ${String(err)}`);
+          devError(
+            `observer onSpawn threw — swallowed; callbacks must not throw (observe.ts): ${String(err)}`,
+          );
         }
       }
     } finally {
@@ -441,7 +443,9 @@ export class RuntimeStore implements ECSStore {
         try {
           obs[i].onDestroy?.(e);
         } catch (err) {
-          devError(`observer onDestroy threw — swallowed; callbacks must not throw (observe.ts): ${String(err)}`);
+          devError(
+            `observer onDestroy threw — swallowed; callbacks must not throw (observe.ts): ${String(err)}`,
+          );
         }
       }
     } finally {
@@ -463,7 +467,9 @@ export class RuntimeStore implements ECSStore {
         try {
           obs[i].onReset?.();
         } catch (err) {
-          devError(`observer onReset threw — swallowed; callbacks must not throw (observe.ts): ${String(err)}`);
+          devError(
+            `observer onReset threw — swallowed; callbacks must not throw (observe.ts): ${String(err)}`,
+          );
         }
       }
     } finally {
@@ -541,7 +547,9 @@ export class RuntimeStore implements ECSStore {
   /** @internal The archetype an entity occupies — undefined for identity-only/dead handles
    *  (first-party tools use this for reflection; apps should stick to queries). */
   archetypeOf(e: Entity): Archetype | undefined {
-    return this.table.isPlaced(e) ? this.archetypesById[this.table.archetypeOf(slotOf(e))] : undefined;
+    return this.table.isPlaced(e)
+      ? this.archetypesById[this.table.archetypeOf(slotOf(e))]
+      : undefined;
   }
 
   private archetypeOfEntity(e: Entity): Archetype {
@@ -607,7 +615,8 @@ export class RuntimeStore implements ECSStore {
     }
     // stampFrame, not frameCounter: a callback write stamps frame+1, and the R5 skip gate must not
     // eat it (max < the column stamp would skip the whole component map next notify).
-    if (this.stampFrame > this.componentMaxFrame[cid]) this.componentMaxFrame[cid] = this.stampFrame;
+    if (this.stampFrame > this.componentMaxFrame[cid])
+      this.componentMaxFrame[cid] = this.stampFrame;
   }
 
   /**
@@ -763,7 +772,12 @@ export class RuntimeStore implements ECSStore {
     const row = A.count;
     A.ensureCapacity(row + 1);
     for (const f of A.fields) {
-      writeCell(A.columns.get(f.fieldId) as Column, f.kind, row, fieldValues.get(f.fieldId) as Stored);
+      writeCell(
+        A.columns.get(f.fieldId) as Column,
+        f.kind,
+        row,
+        fieldValues.get(f.fieldId) as Stored,
+      );
     }
     A.entities[row] = e;
     this.table.setPlacement(slotOf(e), A.id, row);
@@ -903,7 +917,9 @@ export class RuntimeStore implements ECSStore {
   spawn(init?: SpawnInit): Entity {
     if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — spawn entry, before table.allocate (its own inline mint, not allocateIdentity)
     if (DEV && this.inObserverEmit) {
-      devError("observer callbacks must not mutate the world — spawn() from inside an observer (observe.ts).");
+      devError(
+        "observer callbacks must not mutate the world — spawn() from inside an observer (observe.ts).",
+      );
     }
     // Validate + encode BEFORE minting the identity: a bad value must throw with no identity
     // allocated, or the failed spawn would leak a live unreachable entity (and one for which
@@ -933,7 +949,9 @@ export class RuntimeStore implements ECSStore {
   /** Destroy an entity: clear its tags/relations inline, unplace, then free identity (§5.5). */
   destroy(e: Entity): void {
     if (DEV && this.inObserverEmit) {
-      devError("observer callbacks must not mutate the world — destroy() from inside an observer is ignored (observe.ts).");
+      devError(
+        "observer callbacks must not mutate the world — destroy() from inside an observer is ignored (observe.ts).",
+      );
       return;
     }
     if (!this.table.isAlive(e)) return;
@@ -1023,7 +1041,8 @@ export class RuntimeStore implements ECSStore {
     // the next notify — keyed off the live map (not resourceFrames' length) so a resource set BEFORE
     // reactivity armed, whose stamp is still 0, is covered too; grows resourceFrames as needed. Runs
     // BEFORE the clear so the ids are still known. A never-set resource stays at 0 and does not fire.
-    if (this.reactiveOn) for (const id of this.resources.keys()) this.bumpResource(id as ResourceId);
+    if (this.reactiveOn)
+      for (const id of this.resources.keys()) this.bumpResource(id as ResourceId);
     // Stamp EVERY known tag/relation id at the current frame so any row-filtered / relation-seeded
     // Tier-1 watch wakes at the next notify (§4.2 per-id). Runs BEFORE the substores are cleared, like
     // the resource loop above, so the ids are still enumerable; stamping an id whose membership was
@@ -1072,7 +1091,9 @@ export class RuntimeStore implements ECSStore {
     if (this.rejectMutationInEmit("addComponent")) return; // 002 §6 — no structural mutation from a callback
     this.assertAlive(e, "addComponent");
     if (this.has(e, c)) {
-      throw new Error(`strata: component "${c.name}" is already present — use edit().set / writeComponent to overwrite its value.`);
+      throw new Error(
+        `strata: component "${c.name}" is already present — use edit().set / writeComponent to overwrite its value.`,
+      );
     }
     if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — entry gate, before the place/migrate branch
     const encoded = encodeComponentValue(c, value as Record<string, unknown>);
@@ -1119,7 +1140,9 @@ export class RuntimeStore implements ECSStore {
   writeComponent<S>(e: Entity, c: Component<S>, value: S): void {
     this.assertAlive(e, "writeComponent");
     if (!this.has(e, c)) {
-      throw new Error(`strata: component "${c.name}" is not present — use addComponent to attach it first.`);
+      throw new Error(
+        `strata: component "${c.name}" is not present — use addComponent to attach it first.`,
+      );
     }
     // A value write from inside a reactive callback is legal and DETERMINISTIC: it stamps the NEXT
     // frame (see stampFrame), so the next notify() delivers it. (The old behavior — current-frame
@@ -1176,7 +1199,10 @@ export class RuntimeStore implements ECSStore {
     const row = this.table.rowOf(slotOf(e));
     const out: Record<string, unknown> = {};
     for (const f of c.fields) {
-      out[f.name] = decodeField(f.spec.type, readCell(A.columns.get(f.fieldId) as Column, f.kind, row));
+      out[f.name] = decodeField(
+        f.spec.type,
+        readCell(A.columns.get(f.fieldId) as Column, f.kind, row),
+      );
     }
     return out as S;
   }
@@ -1192,7 +1218,10 @@ export class RuntimeStore implements ECSStore {
     if (meta === undefined) return undefined;
     const A = this.archetypeOfEntity(e);
     const row = this.table.rowOf(slotOf(e));
-    return decodeField(meta.spec.type, readCell(A.columns.get(meta.fieldId) as Column, meta.kind, row)) as S[K];
+    return decodeField(
+      meta.spec.type,
+      readCell(A.columns.get(meta.fieldId) as Column, meta.kind, row),
+    ) as S[K];
   }
 
   /**
@@ -1204,7 +1233,7 @@ export class RuntimeStore implements ECSStore {
     if (!this.has(e, c)) return undefined;
     const A = this.archetypeOfEntity(e);
     const row = this.table.rowOf(slotOf(e));
-    const ref = (readCell(A.columns.get(field) as Column, "u32", row) as number) as Entity;
+    const ref = readCell(A.columns.get(field) as Column, "u32", row) as number as Entity;
     return this.table.isAlive(ref) ? ref : undefined;
   }
 
@@ -1293,7 +1322,9 @@ export class RuntimeStore implements ECSStore {
     if (this.rejectMutationInEmit("setRelation")) return; // 002 §6
     this.assertAlive(e, "setRelation");
     if (rel.arity !== "one") {
-      throw new Error(`strata: setRelation is for arity "one" relations — use addRelation for "${rel.name}".`);
+      throw new Error(
+        `strata: setRelation is for arity "one" relations — use addRelation for "${rel.name}".`,
+      );
     }
     this.doSetRelation(e, rel, target);
   }
@@ -1303,7 +1334,9 @@ export class RuntimeStore implements ECSStore {
     if (this.rejectMutationInEmit("addRelation")) return; // 002 §6
     this.assertAlive(e, "addRelation");
     if (rel.arity !== "many") {
-      throw new Error(`strata: addRelation is for arity "many" relations — use setRelation for "${rel.name}".`);
+      throw new Error(
+        `strata: addRelation is for arity "many" relations — use setRelation for "${rel.name}".`,
+      );
     }
     this.doAddRelation(e, rel, target);
   }
@@ -1438,7 +1471,12 @@ export class RuntimeStore implements ECSStore {
             fieldValues.set(fid, v);
           }
         }
-        this.placeComposed(cmd.entity, [...seen].sort((a, b) => a - b), fieldValues, cmd.tags);
+        this.placeComposed(
+          cmd.entity,
+          [...seen].sort((a, b) => a - b),
+          fieldValues,
+          cmd.tags,
+        );
         return;
       }
       case "despawn":
@@ -1612,7 +1650,11 @@ export class RuntimeStore implements ECSStore {
    * lookup (the dominant cost of a naive per-row `tags.has`). Other shapes fall back to the general
    * per-row predicate.
    */
-  private fillMatchedRows(arch: Archetype, rowFilters: readonly RowFilter[], scratch: Int32Array): number {
+  private fillMatchedRows(
+    arch: Archetype,
+    rowFilters: readonly RowFilter[],
+    scratch: Int32Array,
+  ): number {
     let n = 0;
     if (rowFilters.length === 1 && rowFilters[0].kind === "tag") {
       const rf = rowFilters[0];
@@ -1747,7 +1789,8 @@ export class RuntimeStore implements ECSStore {
     for (let id = 0; id < relationCount(); id++) {
       const rel = relationById(id);
       if (rel === undefined) continue;
-      const targets = rel.arity === "one" ? boxed(this.getRelation(e, rel)) : this.getRelations(e, rel);
+      const targets =
+        rel.arity === "one" ? boxed(this.getRelation(e, rel)) : this.getRelations(e, rel);
       if (targets.length > 0) out.push({ relation: rel, targets });
     }
     return out;

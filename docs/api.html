@@ -879,6 +879,7 @@
       <ul class="notes">
         <li><span class="nl">Scope</span> Components only in v1 — tags and relations are membership filters; resources are a deferred extension.</li>
         <li><span class="nl">Attest</span> <code>orderIndependent</code> lists columns whose writes are order-tolerant against same-phase co-writers (row-disjoint, commutative, or last-write-wins-safe). Every column named must also appear in <code>write</code> (a dev-hygiene warning fires otherwise). It suppresses the double-writer advisory for a column only when <em>every</em> same-phase writer of it attests — an un-attesting newcomer re-fires the warning. It never feeds the read default and never affects runtime access enforcement.</li>
+        <li><span class="nl">Not a boundary</span> Access metadata is diagnostic and scheduling metadata, <em>not</em> a capability or security boundary. The dev-mode subset check covers the typed write path; raw <code>col()</code> writes legally bypass it (and are attributed conservatively by whole-query stamping instead), and production builds run no enforcement at all. It cannot contain untrusted code.</li>
         <li><span class="nl">See</span> <a href="#core-validatePipelineAccess">validatePipelineAccess</a> · <a href="index.html#systems">Access declarations</a></li>
       </ul>
     </article>

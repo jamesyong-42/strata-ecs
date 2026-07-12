@@ -1,6 +1,11 @@
 /**
  * `createEphemeralStore(source, opts)` + `EphemeralStore` — Part IV **M1** (docs/plan-part4.md).
  *
+ * (M-numbers throughout this layer are plan-part4 milestone LABELS, kept as cross-references
+ * because the code below names its collaborators by them: M0 = the adapter spike + its numbered
+ * findings (loro-ephemeral-snapshot.ts), M1 = this store, M2 = the attach binding + timers
+ * (attach.ts), M3 = the public barrel. All are long shipped.)
+ *
  * The `EphemeralStore` is the ephemeral layer's public object: the **writer-partitioned Mutator** app code
  * holds to spawn and mutate its OWN presence/transient entities (cursors, selections, live previews). It is
  * the sibling of `DurableStore` — the same flat-entity vocabulary (spawn/despawn, add/remove component,
@@ -8,7 +13,7 @@
  * resources (design §15.6), and no reconcile baseline (writer partitioning means no ephemeral cell is ever
  * contended, so there is nothing to reconcile — §15.1).
  *
- * M1 SCOPE (what this milestone ships; the rest is stubbed at its seam):
+ * THIS FILE'S SCOPE (the rest of the layer wires into the seams installed here):
  *   - **Key minting** (§15.3): peer-prefixed `${peerId}-<counter>`, counter from 0 — ephemeral starts
  *     empty, so unlike durable there is NO resume (§14.2's reason — persisted keys — does not apply). A
  *     session-minted key set is kept for M2's keepalive + own-event filtering (006 B5).
@@ -21,9 +26,9 @@
  *   - **The own-blob codec**: entity → `{ components: { Name: canonicalValue }, tags: [names] }`, canonical
  *     values (`canon()`), name-keyed, `Local` excluded, `key`-field references pass through as strings.
  *
- * NOT M1 (the seam this file installs for M2 to wire): `attachEphemeral` / inbound blob-diff projection /
- * the two outbound timers (change-throttle + keepalive) / `EphemeralSyncStatus` (M2, all in attach.ts); the
- * public `@vibecook/strata-ecs/ephemeral` barrel (M3 — `src/ephemeral/index.ts` keeps throwing until then). TWO M2
+ * NOT THIS FILE (it installs the seams; attach.ts wires them): `attachEphemeral` / inbound blob-diff
+ * projection / the two outbound timers (change-throttle + keepalive) / `EphemeralSyncStatus` (all in
+ * attach.ts); the public `@vibecook/strata-ecs/ephemeral` barrel (index.ts). TWO attach-side
  * pieces are folded HERE, where they need this store's private partition state: the public `leave()`
  * (best-effort departure — deletes minted keys + flushes tombstones; needs `minted`/`ownEntities`/`send`)
  * and the `@internal restageMinted` (own-timeout recovery — re-stages a live blob; needs `ownEntities`).
@@ -156,14 +161,24 @@ export interface EphemeralDebugDump {
 }
 
 /** Validate + clamp one duration option with a DEV warning, so a pathological value can't break the wire. */
-function clampMs(v: number | undefined, def: number, floor: number, name: string, why: string): number {
+function clampMs(
+  v: number | undefined,
+  def: number,
+  floor: number,
+  name: string,
+  why: string,
+): number {
   if (v === undefined) return def;
   if (typeof v !== "number" || !Number.isFinite(v)) {
-    devWarn(`createEphemeralStore: ${name} must be a finite number — got ${String(v)}; using the default ${def}ms.`);
+    devWarn(
+      `createEphemeralStore: ${name} must be a finite number — got ${String(v)}; using the default ${def}ms.`,
+    );
     return def;
   }
   if (v < floor) {
-    devWarn(`createEphemeralStore: ${name}=${v}ms is below the ${floor}ms floor — clamped to ${floor}ms. ${why}`);
+    devWarn(
+      `createEphemeralStore: ${name}=${v}ms is below the ${floor}ms floor — clamped to ${floor}ms. ${why}`,
+    );
     return floor;
   }
   return v;
@@ -212,7 +227,9 @@ export class EphemeralStore {
       );
     }
     if (typeof opts.send !== "function") {
-      throw new Error("strata: createEphemeralStore requires a send(bytes) callback — the outbound transport sink.");
+      throw new Error(
+        "strata: createEphemeralStore requires a send(bytes) callback — the outbound transport sink.",
+      );
     }
     this.source = source;
     this.peerId = opts.peerId;
@@ -261,8 +278,11 @@ export class EphemeralStore {
     // no identity allocated and no onSpawn fired.
     const seen = new Set<ComponentId>();
     const canonComponents: Array<readonly [Component, ComponentValue]> = [];
-    for (const [comp, value] of (init?.components ?? []) as ReadonlyArray<readonly [Component, unknown]>) {
-      if (seen.has(comp.id)) throw new Error(`strata: component "${comp.name}" supplied twice to eph.spawn.`);
+    for (const [comp, value] of (init?.components ?? []) as ReadonlyArray<
+      readonly [Component, unknown]
+    >) {
+      if (seen.has(comp.id))
+        throw new Error(`strata: component "${comp.name}" supplied twice to eph.spawn.`);
       seen.add(comp.id);
       this.assertNoEidFields(comp);
       canonComponents.push([comp, canon(comp, value as ComponentValue)]); // throws on malformed, pre-mint
@@ -433,7 +453,12 @@ export class EphemeralStore {
     const entries = Object.keys(raw)
       .sort()
       .map((key) => ({ key, blob: raw[key] }));
-    return { peerId: this.peerId, ttlMs: this.ttlMsValue, throttleMs: this.throttleMsValue, entries };
+    return {
+      peerId: this.peerId,
+      ttlMs: this.ttlMsValue,
+      throttleMs: this.throttleMsValue,
+      entries,
+    };
   }
 
   // --- the own-blob codec (decision E) --------------------------------------------------------------
@@ -490,7 +515,11 @@ export class EphemeralStore {
    * entity — read-only, §15.4), or an own-prefix key this session did NOT spawn (a reused-peerId ghost,
    * reachable only once inbound exists — 006 B5) all throw. What remains is exactly your live minted set.
    */
-  private requireOwn(e: Entity, op: string, seam: EphemeralRuntime): { key: EntityKey; oe: OwnEntity } {
+  private requireOwn(
+    e: Entity,
+    op: string,
+    seam: EphemeralRuntime,
+  ): { key: EntityKey; oe: OwnEntity } {
     const key = seam.projector.keyFor(e);
     if (key === undefined || !key.startsWith(this.prefix)) {
       throw new Error(
@@ -634,6 +663,9 @@ function encodeBlob(oe: OwnEntity): EphemeralBlob {
  * supplies the SESSION-UNIQUE `peerId` (006 B5) and the outbound `send` sink; the store adds partitioning,
  * the Mutator, and the `Local` auto-tag. Attach (M2) registers the inbound source and starts the timers.
  */
-export function createEphemeralStore(source: EphemeralSource, opts: EphemeralStoreOptions): EphemeralStore {
+export function createEphemeralStore(
+  source: EphemeralSource,
+  opts: EphemeralStoreOptions,
+): EphemeralStore {
   return new EphemeralStore(source, opts);
 }

@@ -95,9 +95,9 @@
  *     reference-equal to what was set) — never rely on identity.
  * ============================================================================================
  *
- * WHAT THIS FILE IS NOT: not the `EphemeralStore` (the Entity-level Mutator, M1), not `attachEphemeral`
- * / inbound projection / the timers / status (M2), not the public `@vibecook/strata-ecs/ephemeral` barrel (M3 —
- * `src/ephemeral/index.ts` keeps throwing until then). It is the medium adapter: it moves blobs and
+ * WHAT THIS FILE IS NOT: not the `EphemeralStore` (the Entity-level Mutator, ephemeral-store.ts),
+ * not `attachEphemeral` / inbound projection / the timers / status (attach.ts), not the public
+ * `@vibecook/strata-ecs/ephemeral` barrel (index.ts). It is the medium adapter: it moves blobs and
  * reports the three events, and makes no apply/skip/partition decision.
  */
 
@@ -274,14 +274,21 @@ export class LoroEphemeralSnapshot implements EphemeralSource {
    * Keying strictly off the event arrays is what makes the E5 stale-drop native (finding 2): a stale
    * apply carries empty arrays and surfaces nothing.
    */
-  private onSourceEvent(ev: { by: "local" | "import" | "timeout"; added: string[]; updated: string[]; removed: string[] }): void {
+  private onSourceEvent(ev: {
+    by: "local" | "import" | "timeout";
+    added: string[];
+    updated: string[];
+    removed: string[];
+  }): void {
     if (ev.by === "timeout") {
       for (const key of ev.removed) this.emit({ kind: "timeout", key: entityKey(key) });
       return;
     }
     const setKind = ev.by === "local" ? "local" : "remote";
-    for (const key of ev.added) this.emit({ kind: setKind, key: entityKey(key), value: this.getBlob(key) });
-    for (const key of ev.updated) this.emit({ kind: setKind, key: entityKey(key), value: this.getBlob(key) });
+    for (const key of ev.added)
+      this.emit({ kind: setKind, key: entityKey(key), value: this.getBlob(key) });
+    for (const key of ev.updated)
+      this.emit({ kind: setKind, key: entityKey(key), value: this.getBlob(key) });
     // A removed key under `local` is our own delete echo (no value); under `import` it is a remote delete
     // → despawn, folded to `timeout` (design §15.3 treats it identically to a TTL lapse at the projector).
     const removedKind = ev.by === "local" ? "local" : "timeout";
@@ -291,7 +298,8 @@ export class LoroEphemeralSnapshot implements EphemeralSource {
   /** The blob at `key`, or undefined if absent / not a plain object (a malformed peer value is not leaked). */
   private getBlob(key: string): EphemeralBlob | undefined {
     const v = this.source.get(key);
-    if (v === null || typeof v !== "object" || Array.isArray(v) || v instanceof Uint8Array) return undefined;
+    if (v === null || typeof v !== "object" || Array.isArray(v) || v instanceof Uint8Array)
+      return undefined;
     return v as EphemeralBlob;
   }
 

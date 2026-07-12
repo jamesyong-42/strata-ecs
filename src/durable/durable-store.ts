@@ -1,6 +1,11 @@
 /**
  * `createDurableStore(doc)` + `DurableStore` — Part III **M1** (docs/plan-part3.md).
  *
+ * (M-numbers throughout this layer are plan-part3 milestone LABELS, kept as cross-references
+ * because the code below names its collaborators by them: M1 = this store, M2 = the attach
+ * binding (binding.ts), M3 = transactions (transaction.ts), M4 = reconcile, M5 = sync-status +
+ * the public barrel. All five are long shipped.)
+ *
  * `createDurableStore` is THE ONE PLACE a `LoroDoc` enters the durable layer (design.md §14.2): it wraps
  * the caller-owned doc in a {@link LoroSnapshot} (Loro's only quarantine breach) and returns a
  * `DurableStore` — the object app code holds, opens transactions on (M3), and wires to its transport.
@@ -8,7 +13,7 @@
  * inside `LoroSnapshot`, reached here through its adapter-level surface (`peerIdStr`/`entityKeysRaw`/
  * `version`/`exportUpdatesSince`/`readMeta`/`ensureMeta`) plus the frozen `CRDTSnapshot`.
  *
- * M1 SCOPE (what this milestone ships; the rest is stubbed at its seam):
+ * THIS FILE'S SCOPE (the rest of the layer wires into the seams installed here):
  *   - **Key minting** (§14.1/§14.2): peer-prefixed `${peerId}-<counter>`, the counter RESUMED past this
  *     peer's max existing key at construction so a reloaded doc never re-mints a used key. `mintKey()`
  *     is @internal for M2's projector / M3's executor.
@@ -23,10 +28,10 @@
  *   - **`subscribeOutbound`** (§14.2): the OUTBOUND wire — on each sealed LOCAL commit, ship the update
  *     increment since the last send to every subscriber.
  *
- * NOT M1: `attachDurable`/the binding/projection/reconcile (M2/M4), the public `@vibecook/strata-ecs/durable`
- * barrel (M5 — `src/durable/index.ts` keeps throwing until then). **M3 adds `transaction`** (the
- * upward boundary, §12) — recorder + executor in `transaction.ts`, reached through the `TxRuntime`
- * seam M2's attach installs here; legal only on an attached store.
+ * NOT THIS FILE: `attachDurable`/the binding/projection/reconcile (binding.ts), the public
+ * `@vibecook/strata-ecs/durable` barrel (index.ts), and `transaction` itself (the upward
+ * boundary, §12) — recorder + executor in `transaction.ts`, reached through the `TxRuntime`
+ * seam the attach installs here; legal only on an attached store.
  *
  * ============================================================================================
  * DECISIONS (load-bearing; see the task brief + design.md §14)
@@ -55,7 +60,13 @@
 import type { LoroDoc } from "loro-crdt"; // the ONE loro import — parameter type ONLY (Loro stays in the adapter)
 import { type Component, type Entity, type EntityKey, entityKey } from "../core";
 import type { ChangeBatch, Unsubscribe } from "../substrate";
-import { DOC_ID_KEY, type HistoryHooks, LoroSnapshot, type MetaEditor, type OutboundCursor } from "./loro-snapshot";
+import {
+  DOC_ID_KEY,
+  type HistoryHooks,
+  LoroSnapshot,
+  type MetaEditor,
+  type OutboundCursor,
+} from "./loro-snapshot";
 import { type Mutator, runTransaction, type TxRuntime } from "./transaction";
 
 /** Options for {@link createDurableStore} (plan-undo U1). */
@@ -93,9 +104,10 @@ function maxMintedSuffix(keys: readonly string[], prefix: string): number {
 }
 
 /**
- * `DurableStore` — the durable layer's public object (design.md §14, API reference). M1 implements the
- * identity + wire surface; `transaction` (M3) and the attach/projection machinery (M2+) land later. App
- * code obtains one from {@link createDurableStore}, never `new`s it directly in practice.
+ * `DurableStore` — the durable layer's public object (design.md §14, API reference). This file is the
+ * identity + wire surface; `transaction` (transaction.ts) and the attach/projection machinery
+ * (binding.ts) plug in through the seams below. App code obtains one from
+ * {@link createDurableStore}, never `new`s it directly in practice.
  */
 export class DurableStore {
   /** Stable document GUID, shared by all collaborators (§14.1). Read once at construction (decision A). */
@@ -103,7 +115,7 @@ export class DurableStore {
 
   /**
    * @internal The Loro adapter. M2's binding projects/subscribes/imports through it; M3's executor writes
-   * the transaction batch through it; tests drive local commits through it (M1 has no `transaction` yet).
+   * the transaction batch through it; tests drive local commits through it directly.
    * Not public surface — the store's own methods are the boundary (§14.2).
    */
   readonly snapshot: LoroSnapshot;
@@ -226,10 +238,14 @@ export class DurableStore {
    */
   transaction<R>(fn: (tx: Mutator) => R, opts?: { undoable?: boolean }): R {
     if (this.txRuntime === null) {
-      throw new Error("strata: doc.transaction requires an attached store — call attachDurable(world, store) first.");
+      throw new Error(
+        "strata: doc.transaction requires an attached store — call attachDurable(world, store) first.",
+      );
     }
     if (this.txOpen) {
-      throw new Error("strata: nested doc.transaction is not allowed — one open transaction per store.");
+      throw new Error(
+        "strata: nested doc.transaction is not allowed — one open transaction per store.",
+      );
     }
     this.txOpen = true;
     try {
@@ -340,7 +356,9 @@ export class DurableStore {
   /** History ops are illegal mid-transaction: the recorder's buffered ops aren't sealed yet (§12.2). */
   private assertNoOpenTx(op: string): void {
     if (this.txOpen) {
-      throw new Error(`strata: ${op} inside doc.transaction is not allowed — commit the transaction first.`);
+      throw new Error(
+        `strata: ${op} inside doc.transaction is not allowed — commit the transaction first.`,
+      );
     }
   }
 

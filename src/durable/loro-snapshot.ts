@@ -171,10 +171,10 @@
  * collision — the same defense normalize.ts uses for its cell keys (005 §10.4). "comp:"/"tag:"/"exists"
  * are disjoint prefixes and each name is the whole suffix, so no cross-kind collision is possible.
  *
- * WHAT THIS FILE IS NOT: it is not the DurableStore, the binding, reconcile, or the transaction (M1–M5).
- * It is the medium adapter — it reports what the document says (origin-tagged doc-facts) and applies
- * cell writes; it makes NO apply/skip decision (005 §1.4). The `@vibecook/strata-ecs/durable` subpath keeps its
- * loud placeholder until M5.
+ * WHAT THIS FILE IS NOT: it is not the DurableStore, the binding, reconcile, or the transaction
+ * (durable-store.ts, binding.ts, transaction.ts — the rest of the `@vibecook/strata-ecs/durable`
+ * subpath). It is the medium adapter — it reports what the document says (origin-tagged doc-facts)
+ * and applies cell writes; it makes NO apply/skip decision (005 §1.4).
  */
 
 import { LoroDoc, LoroMap, UndoManager, type Value, isContainer } from "loro-crdt";
@@ -482,9 +482,13 @@ export class LoroSnapshot implements CRDTSnapshot {
           // (BigInt, circular, a function) must fail HERE, isolated like a throwing hook — not inside
           // the wasm call that is mid-push. The round-trip also normalizes exotic objects to exactly
           // what a restore hook would get back after the wire.
-          value = raw === undefined || raw === null ? null : (JSON.parse(JSON.stringify(raw)) as Value);
+          value =
+            raw === undefined || raw === null ? null : (JSON.parse(JSON.stringify(raw)) as Value);
         } catch (err) {
-          console.error("strata: history capture hook threw or returned a non-JSON value — storing null for this step.", err);
+          console.error(
+            "strata: history capture hook threw or returned a non-JSON value — storing null for this step.",
+            err,
+          );
           value = null;
         } finally {
           this.inHistoryHook = false;
@@ -788,7 +792,8 @@ export class LoroSnapshot implements CRDTSnapshot {
    * surfaces whatever reached the doc.
    */
   commit(body: () => void, opts?: { undoable?: boolean }): void {
-    if (this.inHistoryHook) throw new Error("strata: commit() inside a history hook (capture/restore) is not allowed.");
+    if (this.inHistoryHook)
+      throw new Error("strata: commit() inside a history hook (capture/restore) is not allowed.");
     if (this.committing) throw new Error("strata: nested commit() is not allowed.");
     this.committing = true;
     try {
@@ -835,12 +840,16 @@ export class LoroSnapshot implements CRDTSnapshot {
    * commitId must NOT be used for completeness accounting.
    */
   applyRemote(bytes: Uint8Array): ChangeBatch[] {
-    if (this.inHistoryHook) throw new Error("strata: applyRemote() inside a history hook (capture/restore) is not allowed.");
+    if (this.inHistoryHook)
+      throw new Error(
+        "strata: applyRemote() inside a history hook (capture/restore) is not allowed.",
+      );
     if (this.committing) throw new Error("strata: applyRemote() during commit() is not allowed.");
     if (this.quarantined) throw new PendingImportError();
     // Bootstrap detection MUST read the maps BEFORE the import fills them. Staged-but-unsealed local
     // ops are immediately readable (loro finding 6), so any local writing disqualifies — conservative.
-    const emptyBefore = this.entitiesMap.keys().length === 0 && this.resourcesMap.keys().length === 0;
+    const emptyBefore =
+      this.entitiesMap.keys().length === 0 && this.resourcesMap.keys().length === 0;
     const beforeVV = this.doc.version();
     const beforeFrontiers = this.doc.frontiers();
     const status = this.doc.import(bytes);
@@ -1148,9 +1157,12 @@ export class LoroSnapshot implements CRDTSnapshot {
    */
   metaTransaction(fn: (meta: MetaEditor) => void): void {
     if (this.inHistoryHook) {
-      throw new Error("strata: metaTransaction() inside a history hook (capture/restore) is not allowed.");
+      throw new Error(
+        "strata: metaTransaction() inside a history hook (capture/restore) is not allowed.",
+      );
     }
-    if (this.committing) throw new Error("strata: metaTransaction() during commit() is not allowed.");
+    if (this.committing)
+      throw new Error("strata: metaTransaction() during commit() is not allowed.");
     this.committing = true;
     // The editor is valid ONLY for this call: `closed` flips in `finally`, so a reference captured past `fn`
     // throws instead of silently staging a meta op that never seals (petition 3b).
@@ -1167,7 +1179,9 @@ export class LoroSnapshot implements CRDTSnapshot {
         assertOpen();
         // Total read: only a primitive is a meta value; a container / object / absent slot reads undefined.
         const v = this.metaMap.get(key);
-        return typeof v === "string" || typeof v === "number" || typeof v === "boolean" ? v : undefined;
+        return typeof v === "string" || typeof v === "number" || typeof v === "boolean"
+          ? v
+          : undefined;
       },
       set: (key, value) => {
         assertOpen();

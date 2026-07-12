@@ -4,7 +4,7 @@
  * Schema is **process-global**: `define*` populate module-level registries and return opaque
  * handles meant to be held as module constants and shared across worlds. Ids are dense **per
  * kind** (component / tag / relation / resource each count from 0), which keeps archetype
- * bitmasks (M4) and tag-bitset / relation-map indexing (M3) compact. Every component field
+ * bitmasks and tag-bitset / relation-map indexing compact. Every component field
  * also gets a dense **global** `FieldId`, the key its archetype column is stored under.
  *
  * One shared name {@link Registry} enforces global name uniqueness across all kinds and owns
@@ -202,10 +202,7 @@ export function defineFrameworkTag(name: string): Tag {
 }
 
 /** Declare a typed directed link between entities (§4). */
-export function defineRelation(
-  name: string,
-  opts?: { arity?: Arity },
-): Relation {
+export function defineRelation(name: string, opts?: { arity?: Arity }): Relation {
   names.define(name);
   const handle: Relation = {
     id: nextRelationId++,
