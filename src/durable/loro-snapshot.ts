@@ -179,7 +179,7 @@
 
 import { LoroDoc, LoroMap, UndoManager, type Value, isContainer } from "loro-crdt";
 import type { ContainerID, Diff, JsonChange, OpId, VersionVector } from "loro-crdt";
-import { devWarn } from "../core/dev";
+import { DEV, devWarn } from "../core/dev";
 import { type EntityKey, entityKey } from "../core/field";
 import type { Component, Relation, Resource, Tag } from "../core/schema";
 import {
@@ -896,7 +896,9 @@ export class LoroSnapshot implements CRDTSnapshot {
       // boundary genuinely is best-effort.
       const metaOnly =
         change.ops.length > 0 && change.ops.every((op) => String(op.container) === this.metaRootId);
-      if (strataMsgSeq(change.msg) === undefined && !metaOnly) {
+      if (DEV && strataMsgSeq(change.msg) === undefined && !metaOnly) {
+        // call-site DEV gate: the message is concatenated HERE, so the helper's internal gate
+        // alone would still build and ship it in production.
         this.warnOnce(
           "untagged-writer",
           "durable adapter saw a commit with no strata tag — untagged commits may coalesce; " +
@@ -1453,15 +1455,20 @@ export class LoroSnapshot implements CRDTSnapshot {
    * values, and malformed `relN:` keys — all "the doc says something we can't decode as a cell, so skip it".
    */
   private warnUnknown(kind: string, name: string): void {
+    if (!DEV) return; // first line so the template below is DCE'd out of production builds
     this.warnOnce(
       `${kind}:${name}`,
       `durable ${kind} "${name}" is unresolved or malformed — skipping its changes (005 §1.4).`,
     );
   }
 
-  /** Emit `message` via `devWarn` at most once per `tag` for this instance's lifetime. */
+  /**
+   * Emit `message` via `devWarn` at most once per `tag` for this instance's lifetime. The `!DEV`
+   * gate is the FIRST condition so production neither grows `warnedNames` nor retains the body —
+   * a caller whose message is built AT THE CALL SITE must additionally gate itself with `if (DEV)`.
+   */
   private warnOnce(tag: string, message: string): void {
-    if (this.warnedNames.has(tag)) return;
+    if (!DEV || this.warnedNames.has(tag)) return;
     this.warnedNames.add(tag);
     devWarn(message);
   }

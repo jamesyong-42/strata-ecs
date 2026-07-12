@@ -126,7 +126,9 @@ interface LastSeen {
  */
 export function attachEphemeral(world: World, eph: EphemeralStore): Attachment {
   if (ATTACHED.has(eph)) {
-    throw new Error("strata: this EphemeralStore is already attached — one store has at most one attachment.");
+    throw new Error(
+      "strata: this EphemeralStore is already attached — one store has at most one attachment.",
+    );
   }
   if (world.inImmediateProjectionUnsafeContext) {
     throw new Error(
@@ -273,18 +275,25 @@ class EphemeralBinding implements InboundSource {
       if (kind === "timeout") {
         // Keepalive lapsed and Loro expired our OWN live key (M0 finding 4). Do NOT despawn — re-stage the
         // blob so peers keep seeing our still-live entity (the next throttle re-broadcasts it).
-        this.warnOnce("own-timeout", () =>
-          "an own ephemeral key expired via TTL (its keepalive lapsed) — the entity is kept alive locally and re-broadcast; check that the keepalive timer is running (§15.3).",
-        );
+        // (call-site `if (DEV)` on each warnOnce: the THUNK is allocated here, so only a call-site
+        // gate keeps the closure + its message string out of production builds.)
+        if (DEV)
+          this.warnOnce(
+            "own-timeout",
+            () =>
+              "an own ephemeral key expired via TTL (its keepalive lapsed) — the entity is kept alive locally and re-broadcast; check that the keepalive timer is running (§15.3).",
+          );
         this.eph.restageMinted(key);
       }
       // own-prefix + minted + `remote`: our own set echoed via the import path — runtime already correct.
       return false;
     }
     // Own-prefix key this session did NOT mint = a crashed prior session's ghost under a reused peerId.
-    if (kind === "remote") {
-      this.warnOnce("peerid-reuse", () =>
-        "peerId reuse detected — an own-prefix ephemeral key arrived from a peer that this session did not mint. The peerId MUST be session-unique (crypto.randomUUID()); a stable id makes crashed-session ghosts permanent. This key is NOT projected and NOT kept alive — it will TTL out (006 B5).",
+    if (DEV && kind === "remote") {
+      this.warnOnce(
+        "peerid-reuse",
+        () =>
+          "peerId reuse detected — an own-prefix ephemeral key arrived from a peer that this session did not mint. The peerId MUST be session-unique (crypto.randomUUID()); a stable id makes crashed-session ghosts permanent. This key is NOT projected and NOT kept alive — it will TTL out (006 B5).",
       );
     }
     // Never project it, never keepalive it — it simply times out on its own.
@@ -304,7 +313,9 @@ class EphemeralBinding implements InboundSource {
     const comps = readBlobComponents(blob);
     const tags = readBlobTags(blob);
     const seen = this.lastSeenBlobByKey.get(key);
-    return seen === undefined ? this.projectUnseen(key, comps, tags) : this.projectSeen(key, seen, comps, tags);
+    return seen === undefined
+      ? this.projectUnseen(key, comps, tags)
+      : this.projectSeen(key, seen, comps, tags);
   }
 
   /**
@@ -314,7 +325,11 @@ class EphemeralBinding implements InboundSource {
    * per-runtime, the key is the shared identity). Placing the entity is itself a projected fact, so an empty
    * blob still counts (the entity becomes queryable).
    */
-  private projectUnseen(key: EntityKey, comps: Record<string, ComponentValue>, tags: string[]): boolean {
+  private projectUnseen(
+    key: EntityKey,
+    comps: Record<string, ComponentValue>,
+    tags: string[],
+  ): boolean {
     this.projector.applySpawn(key); // ensurePlaced — the entity is queryable even if componentless/tagless
     const seen: LastSeen = { components: new Map(), tags: new Set() };
     for (const [name, raw] of Object.entries(comps)) {
@@ -345,7 +360,12 @@ class EphemeralBinding implements InboundSource {
    * cache is updated in place. A malformed value leaves the prior projection standing (inbound reject, §2.3);
    * an unknown name is skipped.
    */
-  private projectSeen(key: EntityKey, seen: LastSeen, comps: Record<string, ComponentValue>, tags: string[]): boolean {
+  private projectSeen(
+    key: EntityKey,
+    seen: LastSeen,
+    comps: Record<string, ComponentValue>,
+    tags: string[],
+  ): boolean {
     let projected = false;
 
     // The whole path is TOTAL — no step throws (fixes 3/4): canonInbound skips a hostile fact, tryCanon is
@@ -458,7 +478,11 @@ class EphemeralBinding implements InboundSource {
       lastInboundFrame: this.lastInboundFrame,
     };
     const prev = this.lastSyncStatus;
-    if (prev !== null && prev.peerCount === next.peerCount && prev.lastInboundFrame === next.lastInboundFrame) {
+    if (
+      prev !== null &&
+      prev.peerCount === next.peerCount &&
+      prev.lastInboundFrame === next.lastInboundFrame
+    ) {
       return; // set-on-change: nothing moved → no setResource → no stamp → no re-render (006 C7)
     }
     this.lastSyncStatus = next;
@@ -532,7 +556,10 @@ class EphemeralBinding implements InboundSource {
    * a component declaring an `eid` field (a wire eid is a meaningless packed handle — SOFT-rejected inbound,
    * fix 4, unlike the store's own-mutation DEV-throw); or a per-field tryCanon reject. NEVER throws.
    */
-  private canonInbound(name: string, raw: unknown): { comp: Component; value: ComponentValue } | null {
+  private canonInbound(
+    name: string,
+    raw: unknown,
+  ): { comp: Component; value: ComponentValue } | null {
     const comp = componentByName(name);
     if (comp === undefined) {
       this.warnUnknownName("component", name);
@@ -565,9 +592,12 @@ class EphemeralBinding implements InboundSource {
       return null;
     }
     if (isReservedName(name)) {
-      this.warnOnce(`reserved-tag:${name}`, () =>
-        `inbound ephemeral blob carries the framework-reserved tag "${name}" — skipped; reserved tags are computed locally per peer, never transmitted (§15.4, 006 §B5).`,
-      );
+      if (DEV)
+        this.warnOnce(
+          `reserved-tag:${name}`,
+          () =>
+            `inbound ephemeral blob carries the framework-reserved tag "${name}" — skipped; reserved tags are computed locally per peer, never transmitted (§15.4, 006 §B5).`,
+        );
       return null;
     }
     return tag;
@@ -586,10 +616,14 @@ class EphemeralBinding implements InboundSource {
     if (this.rejectedComponents.has(comp.id)) return false;
     for (const f of comp.fields) {
       if (f.spec.type === "eid") {
+        // the SKIP is all-builds (soft reject); only the warn side is DEV-gated.
         this.rejectedComponents.add(comp.id);
-        this.warnOnce(`eid:${comp.id}`, () =>
-          `inbound ephemeral component "${comp.name}" declares an eid field "${f.name}" — a packed runtime handle is meaningless across the wire; the component is skipped. Reference entities with a key field instead (005 §7).`,
-        );
+        if (DEV)
+          this.warnOnce(
+            `eid:${comp.id}`,
+            () =>
+              `inbound ephemeral component "${comp.name}" declares an eid field "${f.name}" — a packed runtime handle is meaningless across the wire; the component is skipped. Reference entities with a key field instead (005 §7).`,
+          );
         return false;
       }
     }
@@ -621,13 +655,17 @@ class EphemeralBinding implements InboundSource {
     const dedupe = `unknown:${kind}`;
     if (!DEV || this.warned.has(dedupe)) return;
     this.warned.add(dedupe);
-    devWarn(`inbound ephemeral blob names an unknown ${kind} "${name}" — skipped (no schema object resolves it).`);
+    devWarn(
+      `inbound ephemeral blob names an unknown ${kind} "${name}" — skipped (no schema object resolves it).`,
+    );
   }
 
   /**
    * A one-shot DEV warning keyed by `tag` (peerId-reuse, own-timeout, reserved-tag, eid) — the message is
    * lazy (DEV-only) and the `.add` is DEV-gated so production never grows the set (fix 6). Every `tag` key is
-   * BOUNDED (a constant, or a schema/reserved id), never per-remote-key.
+   * BOUNDED (a constant, or a schema/reserved id), never per-remote-key. CALLERS must gate with `if (DEV)`
+   * too: the thunk is allocated at the call site, so only a call-site gate keeps the closure and its
+   * message string out of production builds (0.5.1 review).
    */
   private warnOnce(tag: string, message: () => string): void {
     if (!DEV || this.warned.has(tag)) return;
@@ -660,7 +698,9 @@ function parseMintedKey(key: string): { peer: string; minted: boolean } {
 /** Read a blob's `components` record defensively (a hostile peer value is not a plain object). */
 function readBlobComponents(blob: EphemeralBlob): Record<string, ComponentValue> {
   const c = (blob as { components?: unknown }).components;
-  return c !== null && typeof c === "object" && !Array.isArray(c) ? (c as Record<string, ComponentValue>) : {};
+  return c !== null && typeof c === "object" && !Array.isArray(c)
+    ? (c as Record<string, ComponentValue>)
+    : {};
 }
 
 /** Read a blob's `tags` list defensively (drop any non-string element). */

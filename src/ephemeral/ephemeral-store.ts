@@ -27,8 +27,9 @@
  *     values (`canon()`), name-keyed, `Local` excluded, `key`-field references pass through as strings.
  *
  * NOT THIS FILE (it installs the seams; attach.ts wires them): `attachEphemeral` / inbound blob-diff
- * projection / the two outbound timers (change-throttle + keepalive) / `EphemeralSyncStatus` (all in
- * attach.ts); the public `@vibecook/strata-ecs/ephemeral` barrel (index.ts). TWO attach-side
+ * projection / the two outbound timers (change-throttle + keepalive), all in attach.ts;
+ * `EphemeralSyncStatus` (defined in sync-status.ts, wired by attach.ts); the public
+ * `@vibecook/strata-ecs/ephemeral` barrel (index.ts). TWO attach-side
  * pieces are folded HERE, where they need this store's private partition state: the public `leave()`
  * (best-effort departure — deletes minted keys + flushes tombstones; needs `minted`/`ownEntities`/`send`)
  * and the `@internal restageMinted` (own-timeout recovery — re-stages a live blob; needs `ownEntities`).
@@ -170,15 +171,19 @@ function clampMs(
 ): number {
   if (v === undefined) return def;
   if (typeof v !== "number" || !Number.isFinite(v)) {
-    devWarn(
-      `createEphemeralStore: ${name} must be a finite number — got ${String(v)}; using the default ${def}ms.`,
-    );
+    // call-site DEV gates: the templates are built at the devWarn call, so only gating here keeps
+    // the strings out of production builds; the clamped return stays all-builds.
+    if (DEV)
+      devWarn(
+        `createEphemeralStore: ${name} must be a finite number — got ${String(v)}; using the default ${def}ms.`,
+      );
     return def;
   }
   if (v < floor) {
-    devWarn(
-      `createEphemeralStore: ${name}=${v}ms is below the ${floor}ms floor — clamped to ${floor}ms. ${why}`,
-    );
+    if (DEV)
+      devWarn(
+        `createEphemeralStore: ${name}=${v}ms is below the ${floor}ms floor — clamped to ${floor}ms. ${why}`,
+      );
     return floor;
   }
   return v;

@@ -98,7 +98,14 @@ import {
   tryCanon,
   tryCanonResource,
 } from "../substrate";
-import type { ChangeBatch, ChangeEvent, ComponentValue, EntityRecord, Snapshot, Unsubscribe } from "../substrate";
+import type {
+  ChangeBatch,
+  ChangeEvent,
+  ComponentValue,
+  EntityRecord,
+  Snapshot,
+  Unsubscribe,
+} from "../substrate";
 import type { DurableBijection, DurableStore } from "./durable-store";
 import type { TxRuntime } from "./transaction";
 import { DurableSyncStatus, type DurableSyncStatusValue } from "./sync-status";
@@ -152,7 +159,10 @@ interface HeldResource {
 }
 
 /** Deduplicated union of two name-keyed records' keys (the first may be undefined) — a cell-enumeration seam. */
-function unionNames(a: Record<string, unknown> | undefined, b: Record<string, unknown>): Iterable<string> {
+function unionNames(
+  a: Record<string, unknown> | undefined,
+  b: Record<string, unknown>,
+): Iterable<string> {
   const s = new Set<string>(a === undefined ? [] : Object.keys(a));
   for (const k of Object.keys(b)) s.add(k);
   return s;
@@ -179,7 +189,9 @@ function unionList(a: string[] | undefined, b: string[]): Iterable<string> {
  */
 export function attachDurable(world: World, store: DurableStore): Attachment {
   if (ATTACHED.has(store)) {
-    throw new Error("strata: this DurableStore is already attached — one store has at most one attachment.");
+    throw new Error(
+      "strata: this DurableStore is already attached — one store has at most one attachment.",
+    );
   }
   if (world.inImmediateProjectionUnsafeContext) {
     throw new Error(
@@ -319,9 +331,13 @@ class DurableBinding implements InboundSource {
   ) {
     // A CountingProjector so `lastAppliedFrame` can advance only on real applies (006 C7): every cell
     // primitive it runs bumps `this.applied`, which drain() reads as a per-drain delta.
-    this.projector = new CountingProjector(world.runtime, () => store.mintKey(), () => {
-      this.applied++;
-    });
+    this.projector = new CountingProjector(
+      world.runtime,
+      () => store.mintKey(),
+      () => {
+        this.applied++;
+      },
+    );
   }
 
   /** @internal Read-only baseline view for the {@link Attachment} inspection seam (founding agreement). */
@@ -724,7 +740,10 @@ class DurableBinding implements InboundSource {
    */
   private reconcileComponentValue(ev: Extract<ChangeEvent, { kind: "component-set" }>): void {
     const { key, comp, origin } = ev;
-    const agreed = cellEquals(this.runtimeComponent(key, comp), this.baseline.getComponent(key, comp));
+    const agreed = cellEquals(
+      this.runtimeComponent(key, comp),
+      this.baseline.getComponent(key, comp),
+    );
     const converged = this.convergedComponent(key, comp);
 
     if (agreed) {
@@ -892,7 +911,13 @@ class DurableBinding implements InboundSource {
         this.heldRes.delete(name);
         continue;
       }
-      if (!cellEquals(this.world.runtime.getResource(e.res) as ComponentValue | undefined, baselineVal)) continue;
+      if (
+        !cellEquals(
+          this.world.runtime.getResource(e.res) as ComponentValue | undefined,
+          baselineVal,
+        )
+      )
+        continue;
       const converged = this.convergedResource(e.res); // re-read truth, not the banked value
       this.heldRes.delete(name);
       this.resetStranded(`res:${name}`);
@@ -908,7 +933,9 @@ class DurableBinding implements InboundSource {
   /** The runtime's current value for a component cell, or undefined (unbound key / absent) — the compare LHS. */
   private runtimeComponent(key: EntityKey, comp: Component): ComponentValue | undefined {
     const h = this.projector.handleFor(key);
-    return h === undefined ? undefined : (this.world.runtime.get(h, comp) as ComponentValue | undefined);
+    return h === undefined
+      ? undefined
+      : (this.world.runtime.get(h, comp) as ComponentValue | undefined);
   }
 
   /**
@@ -966,6 +993,7 @@ class DurableBinding implements InboundSource {
    * DEV-only — the whole counter compiles out of production.
    */
   private countDrop(ck: string, display: string, held: boolean): void {
+    if (!DEV) return; // call sites gate too; this first line is what DCEs the message string below
     const n = (this.dropCount.get(ck) ?? 0) + 1;
     this.dropCount.set(ck, n);
     if (n >= STRANDED_WARN_THRESHOLD && !this.strandedWarned.has(ck)) {
@@ -1040,7 +1068,7 @@ class DurableBinding implements InboundSource {
 
   /** One-shot DEV warn per rejected cell (005 §2.3): a malformed inbound value touched neither side. */
   private warnCanonReject(dedupe: string, name: string, field: string, reason: string): void {
-    if (this.warned.has(dedupe)) return;
+    if (!DEV || this.warned.has(dedupe)) return; // !DEV first: prod neither grows the set nor keeps the string
     this.warned.add(dedupe);
     devWarn(
       `inbound value for "${name}" field "${field}" rejected (${reason}) — dropped, touching neither runtime nor baseline.`,
@@ -1049,9 +1077,12 @@ class DurableBinding implements InboundSource {
 
   /** One-shot DEV diagnostic per unresolved durable name (006 B3 R1) — skipped, never misbound. */
   private warnUnknownName(kind: string, name: string): void {
+    if (!DEV) return; // first line so the dedupe key + message below are DCE'd out of production
     const dedupe = `name:${kind}:${name}`;
     if (this.warned.has(dedupe)) return;
     this.warned.add(dedupe);
-    devWarn(`attach saw an unknown ${kind} name "${name}" — skipped (no schema object resolves it).`);
+    devWarn(
+      `attach saw an unknown ${kind} name "${name}" — skipped (no schema object resolves it).`,
+    );
   }
 }

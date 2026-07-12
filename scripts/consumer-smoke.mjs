@@ -19,7 +19,7 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,15 +74,16 @@ console.log(`  ok — ${mapTargets.length} exports-map targets present`);
 
 // --- 1b. Artifact honesty: DEV diagnostics exist in the dev build, are ELIMINATED in prod ----
 // The default (production) artifact must not carry dev-mode diagnostics — not as live code and
-// not as dead strings. The core entry's whole import closure must be console-free (the durable
-// layer keeps three deliberate non-DEV console.error sites for isolated user-callback failures,
-// which is why the walk is per-entry rather than a blanket dist/prod grep).
-log("artifact honesty — DEV code folded out of prod, present in dev");
+// not as dead strings — across EVERY entry, not just core (an 0.5.1 review found the collab
+// layers shipping diagnostic strings that a core-only walk was blind to). The one sanctioned
+// exception: the durable layer keeps exactly three deliberate non-DEV console.error sites that
+// isolate user-callback failures — pinned by count below.
+log("artifact honesty — DEV code folded out of prod (all entries), present in dev");
 
 /**
  * entry + every transitively imported relative module — covers `import ... from`,
- * `export ... from`, and bare side-effect imports, in either quote style (tsup's treeshake
- * pass reprints with single quotes).
+ * `export ... from`, bare side-effect imports, and dynamic `import("./x")`, in either quote
+ * style (tsup's treeshake pass reprints with single quotes).
  */
 function importClosure(entryAbs) {
   const seen = new Set();
@@ -92,39 +93,90 @@ function importClosure(entryAbs) {
     if (seen.has(file)) continue;
     seen.add(file);
     const src = readFileSync(file, "utf8");
-    for (const m of src.matchAll(/(?:from\s*|import\s*)["'](\.[^"']+)["']/g)) {
+    for (const m of src.matchAll(/(?:from\s*|import\s*\(?\s*)["'](\.[^"']+)["']/g)) {
       queue.push(resolve(dirname(file), m[1]));
     }
   }
   return [...seen];
 }
 
-const DEV_MARKER = "a tick body receives only"; // a devWarn message unique to dev-gated code
-const prodCore = importClosure(join(ROOT, "dist", "prod", "index.js"));
-for (const file of prodCore) {
-  const src = readFileSync(file, "utf8");
-  // Comments may still SAY "DEV" (they document the stripping); executable console calls may not.
-  const bare = src.replace(/\/\*[\s\S]*?\*\/|(?<!:)\/\/.*$/gm, "");
-  if (/console\.(warn|error|log|info|debug)/.test(bare)) {
-    fail(`prod core artifact ${file} still contains a console call — DEV fold regressed`);
+/** Executable text only — strips block and line comments so doc-comments can't false-positive. */
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\/|(?<!:)\/\/.*$/gm, "");
+}
+
+// One devWarn message fragment per layer that carries diagnostics — must be IN the dev build
+// and OUT of prod. Checked on comment-stripped text.
+const MARKERS = {
+  "index.js": "a tick body receives only",
+  "durable/index.js": "is unresolved or malformed",
+  "ephemeral/index.js": "peerId reuse detected",
+};
+// console.error budget per prod entry closure (console.warn budget is zero EVERYWHERE):
+// durable's three deliberate isolation sites, nothing else anywhere.
+const PROD_ERROR_BUDGET = { "durable/index.js": 3 };
+
+const ENTRIES = [
+  "index.js",
+  "durable/index.js",
+  "ephemeral/index.js",
+  "tools/index.js",
+  "react/index.js",
+];
+for (const entry of ENTRIES) {
+  const closure = importClosure(join(ROOT, "dist", "prod", entry));
+  let errors = 0;
+  for (const file of closure) {
+    const bare = stripComments(readFileSync(file, "utf8"));
+    if (/console\.(warn|log|info|debug)/.test(bare)) {
+      fail(`prod ${entry} closure: ${file} contains a console call — DEV fold regressed`);
+    }
+    errors += (bare.match(/console\.error/g) ?? []).length;
+    for (const marker of Object.values(MARKERS)) {
+      if (bare.includes(marker)) {
+        fail(`prod ${entry} closure: ${file} still contains dev-warn marker "${marker}"`);
+      }
+    }
   }
-  if (src.includes(DEV_MARKER)) {
-    fail(`prod core artifact ${file} still contains the dev-warn marker string`);
+  const budget = PROD_ERROR_BUDGET[entry] ?? 0;
+  if (errors !== budget) {
+    fail(
+      `prod ${entry} closure has ${errors} console.error sites, expected ${budget} — ` +
+        `a diagnostic leaked into prod, or a deliberate isolation site moved (update the pin knowingly)`,
+    );
   }
 }
-const devCore = importClosure(join(ROOT, "dist", "dev", "index.js"));
-if (!devCore.some((f) => readFileSync(f, "utf8").includes(DEV_MARKER))) {
-  fail("dev core artifact lost its dev-warn marker — the marker or the dev define broke");
+for (const [entry, marker] of Object.entries(MARKERS)) {
+  const closure = importClosure(join(ROOT, "dist", "dev", entry));
+  if (!closure.some((f) => stripComments(readFileSync(f, "utf8")).includes(marker))) {
+    fail(
+      `dev ${entry} closure lost its marker "${marker}" — the marker moved or the dev define broke`,
+    );
+  }
+}
+
+// The build-time global must never leak into the shipped types: a `declare global` reaching a
+// public d.ts would inject `var __STRATA_DEV__` into every consumer's global scope.
+for (const f of readdirSync(join(ROOT, "dist"), { recursive: true })) {
+  const p = String(f);
+  if (
+    p.endsWith(".d.ts") &&
+    readFileSync(join(ROOT, "dist", p), "utf8").includes("__STRATA_DEV__")
+  ) {
+    fail(`shipped types leak the build-time global: dist/${p} mentions __STRATA_DEV__`);
+  }
 }
 console.log(
-  `  ok — prod core closure (${prodCore.length} files) console-free; dev keeps diagnostics`,
+  "  ok — all prod entry closures diagnostic-free (durable's 3 pinned console.error kept); dev keeps diagnostics; d.ts clean",
 );
 
 // --- 2. Pack the tarball and install it into a fresh consumer project -----------------------
 log("npm pack");
 const packDir = mkdtempSync(join(tmpdir(), "strata-pack-"));
-const packOut = runCapture(`npm pack --pack-destination "${packDir}"`, ROOT).trim();
-const tarball = join(packDir, packOut.split(/\r?\n/).pop());
+// --json rather than scraping stdout lines: notices go to stderr, but the filename line's shape
+// is not contractual across npm majors — the JSON report is.
+const packOut = runCapture(`npm pack --json --pack-destination "${packDir}"`, ROOT);
+const tarball = join(packDir, JSON.parse(packOut)[0].filename);
 if (!existsSync(tarball)) fail(`npm pack reported ${tarball}, which does not exist`);
 
 log("fresh consumer project (no optional peers)");

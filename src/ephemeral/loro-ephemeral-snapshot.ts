@@ -96,9 +96,10 @@
  * ============================================================================================
  *
  * WHAT THIS FILE IS NOT: not the `EphemeralStore` (the Entity-level Mutator, ephemeral-store.ts),
- * not `attachEphemeral` / inbound projection / the timers / status (attach.ts), not the public
- * `@vibecook/strata-ecs/ephemeral` barrel (index.ts). It is the medium adapter: it moves blobs and
- * reports the three events, and makes no apply/skip/partition decision.
+ * not `attachEphemeral` / inbound projection / the timers (attach.ts), not the status resource
+ * (sync-status.ts), not the public `@vibecook/strata-ecs/ephemeral` barrel (index.ts). It is the
+ * medium adapter: it moves blobs and reports the three events, and makes no apply/skip/partition
+ * decision.
  */
 
 import { EphemeralStore } from "loro-crdt";

@@ -865,8 +865,8 @@
     <p>
       The <code>access.write</code> envelope names every column a system may mutate across all of its
       conditions. It is optional in the base runtime, but once reactivity is active it does real work:
-      it is how the framework knows which columns a system stamped, and — in dev builds — it enforces
-      that a system only writes what it declared. A gated-off system never runs, so it never stamps;
+      it is how the framework knows which columns a system stamped, and — in dev builds, on the typed
+      write path — it enforces that a system only writes what it declared. A gated-off system never runs, so it never stamps;
       that keeps idle frames stamp-free and is why the <code>runIf</code> gate is load-bearing under
       reactivity.
     </p>
@@ -880,7 +880,7 @@
       <strong>What access metadata is not:</strong> a capability or security boundary. It is diagnostic
       and scheduling metadata — it drives dev-mode misuse warnings and reactive wake-ups, and it depends
       on declarations being honest. The dev-mode subset check covers the typed write path
-      (<code>batch.set(...)</code> and friends); writing through a raw <code>col()</code> array bypasses
+      (<code>edit().set(...)</code> and friends); writing through a raw <code>col()</code> array bypasses
       it, which is legal and why the framework attributes such writes conservatively (whole-query
       stamping at walk end) rather than pretending to have seen them. Production builds run no
       enforcement at all. Trust it for correctness of <em>wake-ups</em>, never for containing untrusted

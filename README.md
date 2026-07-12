@@ -370,11 +370,11 @@ needed for the entry points that use them.
 
 Every entry ships **two builds** behind export conditions: a `development` build with
 dev-mode diagnostics (misuse warnings on the console) and a production build with those
-branches — message strings included — compiled out entirely. Bundlers pick the right one
-automatically (Vite and webpack apply the `development` condition in dev mode and the
-default in production builds); no `process.env` shim or define is needed. Plain Node
-resolves the production build — opt into diagnostics with
-`node --conditions=development`.
+branches — message strings included — compiled out entirely. App bundlers like Vite and
+webpack pick the right one automatically (they apply the `development` condition in dev
+mode and the default in production builds); no `process.env` shim or define is needed.
+Tools that don't apply the condition (esbuild, plain Rollup, Bun) and plain Node resolve
+the production build — opt into diagnostics there with `--conditions=development`.
 
 ## Development
 
