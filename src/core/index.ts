@@ -6,8 +6,8 @@
  * value-driven tick pipeline. Zero durability, zero sync. See `docs/design.md`.
  */
 
-/** Package version. Kept in sync with package.json at release time. */
-export const VERSION = "0.0.0";
+/** Package version. Kept in sync with package.json at release time (pinned by api-surface.test.ts). */
+export const VERSION = "0.5.1";
 
 // --- entity handle ---
 export type { Entity } from "./entity";

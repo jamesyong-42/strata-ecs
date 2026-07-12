@@ -4,6 +4,49 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [0.5.1] — 2026-07-12
+
+Hardening release — packaging, artifact honesty, and consumer-facing guarantees. No API
+changes (now provable: the public surface is pinned by test).
+
+### Changed
+
+- **Dev diagnostics are truly eliminated from production artifacts.** Every entry now ships
+  two builds behind export conditions: a `development` build with all dev-mode warnings live,
+  and a production build (the default) with `if (DEV)` branches — message strings included —
+  constant-folded away. Previously an unshimmed browser production bundle not only retained
+  the diagnostics but RAN them (`DEV` evaluated true wherever `process` was absent). Bundlers
+  pick the right artifact automatically (Vite/webpack apply the `development` condition in dev
+  mode); no `process.env` define is needed anymore. **Behavior note:** plain `node` now
+  resolves the production build — run `node --conditions=development` to get diagnostics
+  outside a bundler. Running from source (vitest, live-src aliases) keeps the old NODE_ENV
+  fallback.
+- Fixed a doubled `strata: strata:` prefix in the `defineTickSystem` arity warning.
+- `VERSION` now reports the real package version — it had shipped as a stale `"0.0.0"` since
+  0.1.0. Pinned to package.json by test so it cannot drift again.
+- Comparative benchmarks refreshed against the 0.5.1 **production artifact** (they previously
+  ran the runtime DEV check with `NODE_ENV` unset — dev mode). Absolute numbers moved ~10% up
+  across ALL five libraries (same machine, newer OS); every relative standing is unchanged and
+  [BENCHMARKS.md](BENCHMARKS.md) now records the benchmark date and commit.
+
+### Added
+
+- **Consumer smoke in CI** (`scripts/consumer-smoke.mjs`, `consumer` matrix job on
+  ubuntu/windows/macos × Node 24 + a Node 20 engines-floor leg): installs the packed tarball
+  into a fresh npm project and verifies what consumers actually get — every exports-map target
+  exists, core + `/tools` work with zero optional peers, `/durable`/`/ephemeral`/`/react` fail
+  with a clear module-not-found naming their absent peer (and work once installed), the
+  dev/prod condition contract is observed at runtime, DEV code is grep-provably absent from
+  the production artifact, and a Vite production build runs and fits a 32 KB gzip core budget.
+- **Public API surface pins** (`src/api-surface.test.ts` + per-project halves): every runtime
+  export of the five entries and the exports-map subpaths, as literal arrays — removing or
+  renaming a public name can no longer happen by accident, and adding one is an explicit
+  release decision.
+- README: a "When not to use strata-ecs" section, and a Package exports note documenting the
+  two-build export conditions.
+- Access metadata is now explicitly documented as diagnostic + scheduling metadata, **not** a
+  capability or security boundary (guide + `SystemAccess` API notes).
+
 ## [0.5.0] — 2026-07-11
 
 System execution semantics: the scheduler owns system cardinality, queries own data cardinality.

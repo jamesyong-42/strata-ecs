@@ -79,6 +79,10 @@ describe("public API surface", () => {
     });
   }
 
+  test("VERSION tracks package.json (it shipped as a stale 0.0.0 for five releases)", () => {
+    expect(core.VERSION).toBe(pkg.version);
+  });
+
   test("exports-map subpaths match the pinned entry points", () => {
     expect(Object.keys(pkg.exports).sort(), surfaceChangeHint("exports map")).toEqual([
       ".",
