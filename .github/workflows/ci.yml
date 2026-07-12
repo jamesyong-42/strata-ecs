@@ -1,6 +1,9 @@
-# The merge gate, verbatim: `pnpm run ci` = typecheck + lint + unit suites + stress smoke —
-# the same command run locally before every commit. One job on purpose; the suite is fast
-# (a few minutes) and a single green check is easier to reason about than a matrix.
+# Two lines of defense. `ci` is the merge gate, verbatim: `pnpm run ci` = typecheck + lint +
+# unit suites + stress smoke — the same command run locally before every commit; one job on
+# purpose, a single green check is easier to reason about. `consumer` validates the PACKAGED
+# ARTIFACT instead of the sources: it packs the tarball and installs it into a fresh npm
+# project on every OS (plus the engines-floor Node), exercising the exports map, the
+# optional-peer contract, and a Vite production build (scripts/consumer-smoke.mjs).
 name: ci
 
 on:
@@ -34,3 +37,33 @@ jobs:
 
       # The publish artifact must stay buildable — dts generation can break independently of tests.
       - run: pnpm build
+
+  consumer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [24]
+        include:
+          # engines floor (package.json declares node >=20) — one leg is enough.
+          - os: ubuntu-latest
+            node: 20
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      # Deliberately NOT .nvmrc here: the matrix's whole point is consuming the package on
+      # Node versions and platforms the repo itself doesn't develop on.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: node scripts/consumer-smoke.mjs

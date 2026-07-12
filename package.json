@@ -66,6 +66,7 @@
     "test:stress": "vitest run --config vitest.stress.config.ts",
     "test:stress:smoke": "STRESS_SCALE=0.1 vitest run --config vitest.smoke.config.ts",
     "bench": "vitest bench --run",
+    "smoke:consumer": "node scripts/consumer-smoke.mjs",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

@@ -8,6 +8,12 @@ export default tseslint.config(
   { ignores: ["dist/", "coverage/", "node_modules/", "bench/compare/", "examples/"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  // scripts/ are repo tooling run under plain Node (no TS toolchain). Unlike bench/compare
+  // they guard CI behavior, so they stay linted — they just need the Node globals declared.
+  {
+    files: ["scripts/**/*.mjs"],
+    languageOptions: { globals: { console: "readonly", process: "readonly" } },
+  },
   {
     rules: {
       "@typescript-eslint/no-unused-vars": [
