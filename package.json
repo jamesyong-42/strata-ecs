@@ -31,34 +31,39 @@
   "files": [
     "dist"
   ],
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
+  "main": "./dist/prod/index.js",
+  "module": "./dist/prod/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "development": "./dist/dev/index.js",
+      "default": "./dist/prod/index.js"
     },
     "./durable": {
       "types": "./dist/durable/index.d.ts",
-      "import": "./dist/durable/index.js"
+      "development": "./dist/dev/durable/index.js",
+      "default": "./dist/prod/durable/index.js"
     },
     "./ephemeral": {
       "types": "./dist/ephemeral/index.d.ts",
-      "import": "./dist/ephemeral/index.js"
+      "development": "./dist/dev/ephemeral/index.js",
+      "default": "./dist/prod/ephemeral/index.js"
     },
     "./tools": {
       "types": "./dist/tools/index.d.ts",
-      "import": "./dist/tools/index.js"
+      "development": "./dist/dev/tools/index.js",
+      "default": "./dist/prod/tools/index.js"
     },
     "./react": {
       "types": "./dist/react/index.d.ts",
-      "import": "./dist/react/index.js"
+      "development": "./dist/dev/react/index.js",
+      "default": "./dist/prod/react/index.js"
     },
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit && tsc -p src/tools --noEmit && tsc -p src/react --noEmit",
     "test": "vitest run",

@@ -2,10 +2,12 @@
  * Consumer smoke — validates the PACKAGED ARTIFACT, not the repository sources.
  *
  * `pnpm run ci` proves the sources; this proves what `npm install @vibecook/strata-ecs`
- * actually delivers: the exports map resolves, every dist file the map names exists, core
- * works WITHOUT the optional peers (react, loro-crdt), the peer-gated subpaths fail with a
- * CLEAR module-not-found when their peer is absent and work once it is installed, and a
- * Vite production build of a consumer app succeeds and produces a runnable bundle.
+ * actually delivers: the exports map resolves and every dist file it names exists, the DEV
+ * diagnostics are folded OUT of the production artifact and kept in the `development` one
+ * (grepped AND observed at runtime via node --conditions), core works WITHOUT the optional
+ * peers (react, loro-crdt), the peer-gated subpaths fail with a CLEAR module-not-found when
+ * their peer is absent and work once it is installed, and a Vite production build of a
+ * consumer app succeeds, runs, and fits the core size budget.
  *
  * Run locally:  pnpm build && pnpm smoke:consumer
  * CI:           the `consumer` matrix job (ubuntu/windows/macos) runs this on every push.
@@ -16,11 +18,12 @@
  * child processes, temp dirs under os.tmpdir().
  */
 
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PKG = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
@@ -68,6 +71,54 @@ for (const rel of mapTargets) {
   if (!existsSync(join(ROOT, rel))) fail(`exports map names ${rel}, which does not exist`);
 }
 console.log(`  ok — ${mapTargets.length} exports-map targets present`);
+
+// --- 1b. Artifact honesty: DEV diagnostics exist in the dev build, are ELIMINATED in prod ----
+// The default (production) artifact must not carry dev-mode diagnostics — not as live code and
+// not as dead strings. The core entry's whole import closure must be console-free (the durable
+// layer keeps three deliberate non-DEV console.error sites for isolated user-callback failures,
+// which is why the walk is per-entry rather than a blanket dist/prod grep).
+log("artifact honesty — DEV code folded out of prod, present in dev");
+
+/**
+ * entry + every transitively imported relative module — covers `import ... from`,
+ * `export ... from`, and bare side-effect imports, in either quote style (tsup's treeshake
+ * pass reprints with single quotes).
+ */
+function importClosure(entryAbs) {
+  const seen = new Set();
+  const queue = [entryAbs];
+  while (queue.length) {
+    const file = queue.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const src = readFileSync(file, "utf8");
+    for (const m of src.matchAll(/(?:from\s*|import\s*)["'](\.[^"']+)["']/g)) {
+      queue.push(resolve(dirname(file), m[1]));
+    }
+  }
+  return [...seen];
+}
+
+const DEV_MARKER = "a tick body receives only"; // a devWarn message unique to dev-gated code
+const prodCore = importClosure(join(ROOT, "dist", "prod", "index.js"));
+for (const file of prodCore) {
+  const src = readFileSync(file, "utf8");
+  // Comments may still SAY "DEV" (they document the stripping); executable console calls may not.
+  const bare = src.replace(/\/\*[\s\S]*?\*\/|(?<!:)\/\/.*$/gm, "");
+  if (/console\.(warn|error|log|info|debug)/.test(bare)) {
+    fail(`prod core artifact ${file} still contains a console call — DEV fold regressed`);
+  }
+  if (src.includes(DEV_MARKER)) {
+    fail(`prod core artifact ${file} still contains the dev-warn marker string`);
+  }
+}
+const devCore = importClosure(join(ROOT, "dist", "dev", "index.js"));
+if (!devCore.some((f) => readFileSync(f, "utf8").includes(DEV_MARKER))) {
+  fail("dev core artifact lost its dev-warn marker — the marker or the dev define broke");
+}
+console.log(
+  `  ok — prod core closure (${prodCore.length} files) console-free; dev keeps diagnostics`,
+);
 
 // --- 2. Pack the tarball and install it into a fresh consumer project -----------------------
 log("npm pack");
@@ -157,6 +208,33 @@ console.log("phase A ok — /durable, /ephemeral, /react fail with a clear modul
 );
 run("node a-peer-absence.mjs", consumer);
 
+log("phase A — exports-map conditions pick the right artifact at runtime");
+// A 2-parameter tick body triggers a devWarn. Default resolution must be the production build
+// (silent); `--conditions=development` must pick the dev build (warns). This pins the WHOLE
+// conditional-exports feature end to end: map → artifact → folded/live diagnostics.
+writeFileSync(
+  join(consumer, "a-condition.mjs"),
+  `import { defineTickSystem } from "@vibecook/strata-ecs";
+defineTickSystem((ctx, extra) => { void ctx; void extra; });
+console.log("condition-probe ran");
+`,
+);
+function runProbe(extraNodeArgs) {
+  const r = spawnSync(process.execPath, [...extraNodeArgs, "a-condition.mjs"], {
+    cwd: consumer,
+    encoding: "utf8",
+  });
+  if (r.status !== 0) fail(`condition probe exited ${r.status}: ${r.stderr}`);
+  return r.stderr ?? "";
+}
+if (runProbe([]).includes("strata:")) {
+  fail("default resolution warned — node picked the dev artifact instead of prod");
+}
+if (!runProbe(["--conditions=development"]).includes("declares 2 parameters")) {
+  fail("--conditions=development did not warn — the development condition is not wired");
+}
+console.log("  ok — default resolution is silent (prod), development condition warns (dev)");
+
 // --- 4. Phase B: install the optional peers, durable + react subpaths work ------------------
 log("phase B — install optional peers (latest), durable + react subpaths");
 run("npm install react@latest loro-crdt@latest --no-audit --no-fund --loglevel=error", consumer);
@@ -225,7 +303,22 @@ const bundleOut = runCapture("node dist/bundle.js", consumer);
 if (!bundleOut.includes("CONSUMER_BUNDLE_OK")) {
   fail(`built bundle ran but did not print its marker; stdout was:\n${bundleOut}`);
 }
-console.log("  ok — production bundle builds and executes correctly");
+
+// Size budget: what a core-only consumer app actually ships. The number is a REGRESSION TRIP
+// WIRE, not a target — set ~25% above the measured size at introduction; when a legitimate
+// feature crosses it, raise it deliberately in the same PR and say so in the changelog.
+const CORE_BUNDLE_GZIP_BUDGET_KB = 32; // measured 26.0 KB at introduction (0.5.x)
+const bundleBytes = readFileSync(bundlePath);
+const gzipKb = gzipSync(bundleBytes).length / 1024;
+console.log(
+  `  core-only consumer bundle: ${(bundleBytes.length / 1024).toFixed(1)} KB raw, ${gzipKb.toFixed(1)} KB gzip`,
+);
+if (CORE_BUNDLE_GZIP_BUDGET_KB > 0 && gzipKb > CORE_BUNDLE_GZIP_BUDGET_KB) {
+  fail(
+    `core bundle ${gzipKb.toFixed(1)} KB gzip exceeds the ${CORE_BUNDLE_GZIP_BUDGET_KB} KB budget`,
+  );
+}
+console.log("  ok — production bundle builds, executes correctly, and fits the size budget");
 
 // --- done ------------------------------------------------------------------------------------
 log("PASS — packaged artifact verified");

@@ -289,7 +289,7 @@ export function defineTickSystem(
     // A tick body receives only (ctx); a 2-parameter function is almost certainly a chunk body
     // (batch, ctx) handed to the wrong definer. TypeScript rejects this; the warn catches JS and casts.
     devWarn(
-      `strata: defineTickSystem body "${opts?.name ?? body.name ?? "system"}" declares ${body.length} parameters — a tick body receives only (ctx). Did you mean defineSystem(query, body)?`,
+      `defineTickSystem body "${opts?.name ?? body.name ?? "system"}" declares ${body.length} parameters — a tick body receives only (ctx). Did you mean defineSystem(query, body)?`,
     );
   }
   return {
