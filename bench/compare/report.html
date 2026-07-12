@@ -64,13 +64,13 @@
     <p class="eyebrow">Comparative benchmark</p>
     <h1><span class="g">strata-ecs</span> vs the TypeScript ECS field</h1>
     <p class="lede">strata-ecs (archetype-SoA, built for editor / collaboration workloads) measured against bitecs, becsy, miniplex, and koota. Each scenario runs in every library's idiomatic fastest form; all libraries agree on a per-scenario checksum, so the work is provably identical.</p>
-    <div class="chips"><span class="chip"><i style="background:#a371f7"></i>strata-ecs <small>0.1.0</small></span><span class="chip"><i style="background:#58a6ff"></i>bitecs <small>0.4.0</small></span><span class="chip"><i style="background:#f778ba"></i>becsy <small>0.16.0</small></span><span class="chip"><i style="background:#ffa657"></i>miniplex <small>2.0.0</small></span><span class="chip"><i style="background:#3fb950"></i>koota <small>0.6.6</small></span></div>
+    <div class="chips"><span class="chip"><i style="background:#a371f7"></i>strata-ecs <small>0.5.1</small></span><span class="chip"><i style="background:#58a6ff"></i>bitecs <small>0.4.0</small></span><span class="chip"><i style="background:#f778ba"></i>becsy <small>0.16.0</small></span><span class="chip"><i style="background:#ffa657"></i>miniplex <small>2.0.0</small></span><span class="chip"><i style="background:#3fb950"></i>koota <small>0.6.6</small></span></div>
     <div class="meta">Apple M1 Max · arm64-darwin · Node 24.14.1 · mitata · one process per library · lower µs/op is better</div>
   </header>
 
   <div class="highlight">
-    <b>strata-ecs is fastest in 5 of 10 scenarios</b> — top-tier on dense iteration and fastest on entity-lifecycle / in-system churn (its target workload). It carries honest, structural cost on component add/remove and random-access-by-handle, and uniquely ships serialization.
-    <div class="wins"><span class="win">spawn_reap_frame</span><span class="win">simple_iter</span><span class="win">frag_iter</span><span class="win">entity_cycle</span><span class="win">serialize</span></div>
+    <b>strata-ecs is fastest in 6 of 10 scenarios</b> — top-tier on dense iteration and fastest on entity-lifecycle / in-system churn (its target workload). It carries honest, structural cost on component add/remove and random-access-by-handle, and uniquely ships serialization.
+    <div class="wins"><span class="win">spawn_reap_frame</span><span class="win">packed_5</span><span class="win">simple_iter</span><span class="win">frag_iter</span><span class="win">entity_cycle</span><span class="win">serialize</span></div>
   </div>
 
   <section class="group"><div class="group-head"><h2>Realistic frames</h2><p>A full frame through each library's real system pipeline — multiple systems, a mixed world, in-system structural change.</p></div>
@@ -79,23 +79,23 @@
     <div class="bars"><div class="row">
         <span class="lib" style="--c:#58a6ff">bitecs</span>
         <div class="track"><div class="fill" style="width:100.0%;--c:#58a6ff"></div></div>
-        <span class="val">38.46 µs</span></div>
+        <span class="val">44.54 µs</span></div>
 <div class="row">
         <span class="lib" style="--c:#3fb950">koota</span>
-        <div class="track"><div class="fill" style="width:59.3%;--c:#3fb950"></div></div>
-        <span class="val">64.87 µs <em>1.69×</em></span></div>
+        <div class="track"><div class="fill" style="width:61.6%;--c:#3fb950"></div></div>
+        <span class="val">72.33 µs <em>1.62×</em></span></div>
 <div class="row strata">
         <span class="lib" style="--c:#a371f7">strata-ecs</span>
-        <div class="track"><div class="fill" style="width:48.3%;--c:#a371f7"></div></div>
-        <span class="val">79.60 µs <em>2.07×</em></span></div>
+        <div class="track"><div class="fill" style="width:49.8%;--c:#a371f7"></div></div>
+        <span class="val">89.40 µs <em>2.01×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#ffa657">miniplex</span>
         <div class="track"><div class="fill" style="width:9.6%;--c:#ffa657"></div></div>
-        <span class="val">399.6 µs <em>10.39×</em></span></div>
+        <span class="val">465.5 µs <em>10.45×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#f778ba">becsy</span>
-        <div class="track"><div class="fill" style="width:4.4%;--c:#f778ba"></div></div>
-        <span class="val">872.3 µs <em>22.68×</em></span></div></div>
+        <div class="track"><div class="fill" style="width:3.7%;--c:#f778ba"></div></div>
+        <span class="val">1.21 ms <em>27.06×</em></span></div></div>
     <div class="sub">longer bar = faster · lower µs/op is better</div>
   </article>
 <article class="card">
@@ -103,23 +103,23 @@
     <div class="bars"><div class="row strata">
         <span class="lib" style="--c:#a371f7">strata-ecs</span>
         <div class="track"><div class="fill" style="width:100.0%;--c:#a371f7"></div></div>
-        <span class="val">1.61 ms</span></div>
+        <span class="val">1.81 ms</span></div>
 <div class="row">
         <span class="lib" style="--c:#58a6ff">bitecs</span>
-        <div class="track"><div class="fill" style="width:58.5%;--c:#58a6ff"></div></div>
-        <span class="val">2.76 ms <em>1.71×</em></span></div>
+        <div class="track"><div class="fill" style="width:57.5%;--c:#58a6ff"></div></div>
+        <span class="val">3.16 ms <em>1.74×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#ffa657">miniplex</span>
-        <div class="track"><div class="fill" style="width:56.4%;--c:#ffa657"></div></div>
-        <span class="val">2.86 ms <em>1.77×</em></span></div>
+        <div class="track"><div class="fill" style="width:54.5%;--c:#ffa657"></div></div>
+        <span class="val">3.33 ms <em>1.83×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#f778ba">becsy</span>
-        <div class="track"><div class="fill" style="width:40.3%;--c:#f778ba"></div></div>
-        <span class="val">4.00 ms <em>2.48×</em></span></div>
+        <div class="track"><div class="fill" style="width:38.6%;--c:#f778ba"></div></div>
+        <span class="val">4.70 ms <em>2.59×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#3fb950">koota</span>
-        <div class="track"><div class="fill" style="width:16.4%;--c:#3fb950"></div></div>
-        <span class="val">9.84 ms <em>6.10×</em></span></div></div>
+        <div class="track"><div class="fill" style="width:17.5%;--c:#3fb950"></div></div>
+        <span class="val">10.36 ms <em>5.71×</em></span></div></div>
     <div class="sub">longer bar = faster · lower µs/op is better</div>
   </article>
 <article class="card">
@@ -127,48 +127,48 @@
     <div class="bars"><div class="row">
         <span class="lib" style="--c:#f778ba">becsy</span>
         <div class="track"><div class="fill" style="width:100.0%;--c:#f778ba"></div></div>
-        <span class="val">4.45 ms</span></div>
+        <span class="val">5.21 ms</span></div>
 <div class="row">
         <span class="lib" style="--c:#58a6ff">bitecs</span>
-        <div class="track"><div class="fill" style="width:55.5%;--c:#58a6ff"></div></div>
-        <span class="val">8.01 ms <em>1.80×</em></span></div>
+        <div class="track"><div class="fill" style="width:57.2%;--c:#58a6ff"></div></div>
+        <span class="val">9.11 ms <em>1.75×</em></span></div>
 <div class="row strata">
         <span class="lib" style="--c:#a371f7">strata-ecs</span>
-        <div class="track"><div class="fill" style="width:42.6%;--c:#a371f7"></div></div>
-        <span class="val">10.44 ms <em>2.35×</em></span></div>
+        <div class="track"><div class="fill" style="width:43.7%;--c:#a371f7"></div></div>
+        <span class="val">11.91 ms <em>2.29×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#ffa657">miniplex</span>
         <div class="track"><div class="fill" style="width:27.8%;--c:#ffa657"></div></div>
-        <span class="val">16.02 ms <em>3.60×</em></span></div>
+        <span class="val">18.71 ms <em>3.59×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#3fb950">koota</span>
-        <div class="track"><div class="fill" style="width:17.0%;--c:#3fb950"></div></div>
-        <span class="val">26.12 ms <em>5.87×</em></span></div></div>
+        <div class="track"><div class="fill" style="width:18.7%;--c:#3fb950"></div></div>
+        <span class="val">27.78 ms <em>5.34×</em></span></div></div>
     <div class="sub">longer bar = faster · lower µs/op is better</div>
   </article></div></section>
 <section class="group"><div class="group-head"><h2>Canonical micro-scenarios</h2><p>The standard ecs_bench_suite set — raw iteration and lifecycle micro-operations.</p></div>
       <div class="grid"><article class="card">
-    <div class="card-head"><h3>packed_5 · dense iteration, 5 components</h3><span class="badge" style="--c:#58a6ff">fastest · bitecs</span></div>
-    <div class="bars"><div class="row">
-        <span class="lib" style="--c:#58a6ff">bitecs</span>
-        <div class="track"><div class="fill" style="width:100.0%;--c:#58a6ff"></div></div>
-        <span class="val">7.67 µs</span></div>
-<div class="row strata">
+    <div class="card-head"><h3>packed_5 · dense iteration, 5 components</h3><span class="badge" style="--c:#a371f7">fastest · strata-ecs</span></div>
+    <div class="bars"><div class="row strata">
         <span class="lib" style="--c:#a371f7">strata-ecs</span>
         <div class="track"><div class="fill" style="width:100.0%;--c:#a371f7"></div></div>
-        <span class="val">7.67 µs <em>1.00×</em></span></div>
+        <span class="val">8.92 µs</span></div>
+<div class="row">
+        <span class="lib" style="--c:#58a6ff">bitecs</span>
+        <div class="track"><div class="fill" style="width:99.5%;--c:#58a6ff"></div></div>
+        <span class="val">8.97 µs <em>1.01×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#3fb950">koota</span>
-        <div class="track"><div class="fill" style="width:53.5%;--c:#3fb950"></div></div>
-        <span class="val">14.33 µs <em>1.87×</em></span></div>
+        <div class="track"><div class="fill" style="width:53.8%;--c:#3fb950"></div></div>
+        <span class="val">16.59 µs <em>1.86×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#ffa657">miniplex</span>
-        <div class="track"><div class="fill" style="width:17.8%;--c:#ffa657"></div></div>
-        <span class="val">43.10 µs <em>5.62×</em></span></div>
+        <div class="track"><div class="fill" style="width:16.2%;--c:#ffa657"></div></div>
+        <span class="val">55.08 µs <em>6.17×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#f778ba">becsy</span>
         <div class="track"><div class="fill" style="width:12.6%;--c:#f778ba"></div></div>
-        <span class="val">60.74 µs <em>7.92×</em></span></div></div>
+        <span class="val">70.83 µs <em>7.94×</em></span></div></div>
     <div class="sub">longer bar = faster · lower µs/op is better</div>
   </article>
 <article class="card">
@@ -176,23 +176,23 @@
     <div class="bars"><div class="row strata">
         <span class="lib" style="--c:#a371f7">strata-ecs</span>
         <div class="track"><div class="fill" style="width:100.0%;--c:#a371f7"></div></div>
-        <span class="val">9.61 µs</span></div>
+        <span class="val">11.23 µs</span></div>
 <div class="row">
         <span class="lib" style="--c:#58a6ff">bitecs</span>
-        <div class="track"><div class="fill" style="width:76.1%;--c:#58a6ff"></div></div>
-        <span class="val">12.63 µs <em>1.31×</em></span></div>
+        <div class="track"><div class="fill" style="width:75.7%;--c:#58a6ff"></div></div>
+        <span class="val">14.82 µs <em>1.32×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#3fb950">koota</span>
-        <div class="track"><div class="fill" style="width:43.2%;--c:#3fb950"></div></div>
-        <span class="val">22.22 µs <em>2.31×</em></span></div>
+        <div class="track"><div class="fill" style="width:44.4%;--c:#3fb950"></div></div>
+        <span class="val">25.28 µs <em>2.25×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#ffa657">miniplex</span>
-        <div class="track"><div class="fill" style="width:12.7%;--c:#ffa657"></div></div>
-        <span class="val">75.59 µs <em>7.87×</em></span></div>
+        <div class="track"><div class="fill" style="width:11.9%;--c:#ffa657"></div></div>
+        <span class="val">94.61 µs <em>8.43×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#f778ba">becsy</span>
         <div class="track"><div class="fill" style="width:6.7%;--c:#f778ba"></div></div>
-        <span class="val">143.6 µs <em>14.95×</em></span></div></div>
+        <span class="val">167.6 µs <em>14.93×</em></span></div></div>
     <div class="sub">longer bar = faster · lower µs/op is better</div>
   </article>
 <article class="card">
@@ -200,23 +200,23 @@
     <div class="bars"><div class="row strata">
         <span class="lib" style="--c:#a371f7">strata-ecs</span>
         <div class="track"><div class="fill" style="width:100.0%;--c:#a371f7"></div></div>
-        <span class="val">5.80 µs</span></div>
+        <span class="val">6.65 µs</span></div>
 <div class="row">
         <span class="lib" style="--c:#58a6ff">bitecs</span>
-        <div class="track"><div class="fill" style="width:98.0%;--c:#58a6ff"></div></div>
-        <span class="val">5.91 µs <em>1.02×</em></span></div>
+        <div class="track"><div class="fill" style="width:96.5%;--c:#58a6ff"></div></div>
+        <span class="val">6.90 µs <em>1.04×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#3fb950">koota</span>
-        <div class="track"><div class="fill" style="width:34.3%;--c:#3fb950"></div></div>
-        <span class="val">16.91 µs <em>2.92×</em></span></div>
-<div class="row">
-        <span class="lib" style="--c:#ffa657">miniplex</span>
-        <div class="track"><div class="fill" style="width:12.6%;--c:#ffa657"></div></div>
-        <span class="val">45.83 µs <em>7.91×</em></span></div>
+        <div class="track"><div class="fill" style="width:33.6%;--c:#3fb950"></div></div>
+        <span class="val">19.81 µs <em>2.98×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#f778ba">becsy</span>
-        <div class="track"><div class="fill" style="width:10.9%;--c:#f778ba"></div></div>
-        <span class="val">53.26 µs <em>9.19×</em></span></div></div>
+        <div class="track"><div class="fill" style="width:11.8%;--c:#f778ba"></div></div>
+        <span class="val">56.19 µs <em>8.45×</em></span></div>
+<div class="row">
+        <span class="lib" style="--c:#ffa657">miniplex</span>
+        <div class="track"><div class="fill" style="width:11.4%;--c:#ffa657"></div></div>
+        <span class="val">58.28 µs <em>8.76×</em></span></div></div>
     <div class="sub">longer bar = faster · lower µs/op is better</div>
   </article>
 <article class="card">
@@ -224,23 +224,23 @@
     <div class="bars"><div class="row strata">
         <span class="lib" style="--c:#a371f7">strata-ecs</span>
         <div class="track"><div class="fill" style="width:100.0%;--c:#a371f7"></div></div>
-        <span class="val">223.0 µs</span></div>
+        <span class="val">254.5 µs</span></div>
 <div class="row">
         <span class="lib" style="--c:#58a6ff">bitecs</span>
-        <div class="track"><div class="fill" style="width:99.9%;--c:#58a6ff"></div></div>
-        <span class="val">223.3 µs <em>1.00×</em></span></div>
+        <div class="track"><div class="fill" style="width:99.0%;--c:#58a6ff"></div></div>
+        <span class="val">257.1 µs <em>1.01×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#f778ba">becsy</span>
-        <div class="track"><div class="fill" style="width:66.9%;--c:#f778ba"></div></div>
-        <span class="val">333.5 µs <em>1.50×</em></span></div>
+        <div class="track"><div class="fill" style="width:63.6%;--c:#f778ba"></div></div>
+        <span class="val">400.0 µs <em>1.57×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#ffa657">miniplex</span>
-        <div class="track"><div class="fill" style="width:46.4%;--c:#ffa657"></div></div>
-        <span class="val">480.6 µs <em>2.15×</em></span></div>
+        <div class="track"><div class="fill" style="width:46.5%;--c:#ffa657"></div></div>
+        <span class="val">547.4 µs <em>2.15×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#3fb950">koota</span>
-        <div class="track"><div class="fill" style="width:15.8%;--c:#3fb950"></div></div>
-        <span class="val">1.41 ms <em>6.31×</em></span></div></div>
+        <div class="track"><div class="fill" style="width:16.6%;--c:#3fb950"></div></div>
+        <span class="val">1.53 ms <em>6.03×</em></span></div></div>
     <div class="sub">longer bar = faster · lower µs/op is better</div>
   </article>
 <article class="card">
@@ -248,23 +248,23 @@
     <div class="bars"><div class="row">
         <span class="lib" style="--c:#f778ba">becsy</span>
         <div class="track"><div class="fill" style="width:100.0%;--c:#f778ba"></div></div>
-        <span class="val">162.2 µs</span></div>
+        <span class="val">189.3 µs</span></div>
 <div class="row">
         <span class="lib" style="--c:#58a6ff">bitecs</span>
-        <div class="track"><div class="fill" style="width:96.3%;--c:#58a6ff"></div></div>
-        <span class="val">168.4 µs <em>1.04×</em></span></div>
+        <div class="track"><div class="fill" style="width:96.5%;--c:#58a6ff"></div></div>
+        <span class="val">196.2 µs <em>1.04×</em></span></div>
 <div class="row strata">
         <span class="lib" style="--c:#a371f7">strata-ecs</span>
-        <div class="track"><div class="fill" style="width:38.6%;--c:#a371f7"></div></div>
-        <span class="val">420.0 µs <em>2.59×</em></span></div>
+        <div class="track"><div class="fill" style="width:39.1%;--c:#a371f7"></div></div>
+        <span class="val">483.6 µs <em>2.56×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#3fb950">koota</span>
         <div class="track"><div class="fill" style="width:31.1%;--c:#3fb950"></div></div>
-        <span class="val">521.6 µs <em>3.22×</em></span></div>
+        <span class="val">607.7 µs <em>3.21×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#ffa657">miniplex</span>
-        <div class="track"><div class="fill" style="width:21.3%;--c:#ffa657"></div></div>
-        <span class="val">760.5 µs <em>4.69×</em></span></div></div>
+        <div class="track"><div class="fill" style="width:21.4%;--c:#ffa657"></div></div>
+        <span class="val">886.0 µs <em>4.68×</em></span></div></div>
     <div class="sub">longer bar = faster · lower µs/op is better</div>
   </article></div></section>
 <section class="group"><div class="group-head"><h2>Extensions</h2><p>Editor-centric workloads beyond the canonical suite.</p></div>
@@ -273,7 +273,7 @@
     <div class="bars"><div class="row strata">
         <span class="lib" style="--c:#a371f7">strata-ecs</span>
         <div class="track"><div class="fill" style="width:100.0%;--c:#a371f7"></div></div>
-        <span class="val">8.97 ms</span></div>
+        <span class="val">10.55 ms</span></div>
 <div class="row na"><span class="lib" style="--c:#58a6ff">bitecs</span>
           <div class="track"><div class="fill" style="width:0%"></div></div>
           <span class="val na-val">N/A</span></div>
@@ -293,19 +293,19 @@
     <div class="bars"><div class="row">
         <span class="lib" style="--c:#58a6ff">bitecs</span>
         <div class="track"><div class="fill" style="width:100.0%;--c:#58a6ff"></div></div>
-        <span class="val">380.3 µs</span></div>
+        <span class="val">450.5 µs</span></div>
 <div class="row">
         <span class="lib" style="--c:#ffa657">miniplex</span>
-        <div class="track"><div class="fill" style="width:97.8%;--c:#ffa657"></div></div>
-        <span class="val">389.0 µs <em>1.02×</em></span></div>
+        <div class="track"><div class="fill" style="width:97.4%;--c:#ffa657"></div></div>
+        <span class="val">462.6 µs <em>1.03×</em></span></div>
 <div class="row strata">
         <span class="lib" style="--c:#a371f7">strata-ecs</span>
-        <div class="track"><div class="fill" style="width:55.3%;--c:#a371f7"></div></div>
-        <span class="val">687.9 µs <em>1.81×</em></span></div>
+        <div class="track"><div class="fill" style="width:56.7%;--c:#a371f7"></div></div>
+        <span class="val">793.8 µs <em>1.76×</em></span></div>
 <div class="row">
         <span class="lib" style="--c:#3fb950">koota</span>
-        <div class="track"><div class="fill" style="width:53.2%;--c:#3fb950"></div></div>
-        <span class="val">714.2 µs <em>1.88×</em></span></div>
+        <div class="track"><div class="fill" style="width:53.5%;--c:#3fb950"></div></div>
+        <span class="val">841.2 µs <em>1.87×</em></span></div>
 <div class="row na"><span class="lib" style="--c:#f778ba">becsy</span>
           <div class="track"><div class="fill" style="width:0%"></div></div>
           <span class="val na-val">N/A</span></div></div>

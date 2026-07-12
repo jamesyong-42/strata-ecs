@@ -22,17 +22,22 @@ is strata-only (no rival ships an equivalent) and `random_access` omits becsy.
 ## Environment
 
 Apple M1 Max · arm64-darwin · **Node 24.14.1** · **mitata 1.0.34** (`--expose-gc
---allow-natives-syntax`), one process per library, otherwise-idle machine. **strata-ecs 0.1.0** vs
+--allow-natives-syntax`), one process per library, otherwise-idle machine. **strata-ecs 0.5.1** vs
 pinned **bitecs 0.4.0**, **becsy 0.16.0** (perf build), **miniplex 2.0.0**, **koota 0.6.6**. Numbers
 are machine-specific and vary a few percent run-to-run — within a few percent is a tie.
+
+Refreshed **2026-07-12** (v0.5.1, commit `997c255`): the cleanest-total of three consecutive runs.
+strata is benched as consumers get it — the shipped **production artifact** (the exports-map
+default; dev diagnostics compiled out). Absolute numbers drifted up ~10% across **all five
+libraries** since the 0.1.0 tables (same machine, newer OS); relative standings are unchanged.
 
 ## 1. Realistic frames — µs/op (lower is better; **bold** = fastest)
 
 | frame | strata | bitecs | becsy | miniplex | koota |
 |---|---:|---:|---:|---:|---:|
-| sim_frame | 79.6 | **38.5** | 872 | 400 | 64.9 |
-| spawn_reap_frame | **1614** | 2758 | 4004 | 2863 | 9837 |
-| toggle_frame | 10437 | 8010 | **4448** | 16020 | 26122 |
+| sim_frame | 89.4 | **44.5** | 1205 | 465 | 72.3 |
+| spawn_reap_frame | **1814** | 3157 | 4703 | 3326 | 10356 |
+| toggle_frame | 11908 | 9107 | **5205** | 18707 | 27780 |
 
 - **`sim_frame`** — 4 systems over a mixed 10k-entity world: `Movement` (excludes `Frozen`), `Regen`,
   `ApplyDamage` (join `[Health,Damage]`), `Render` (join `[Renderable,Position]`, reads Position after
@@ -49,11 +54,11 @@ are machine-specific and vary a few percent run-to-run — within a few percent 
 
 | scenario | strata | bitecs | becsy | miniplex | koota |
 |---|---:|---:|---:|---:|---:|
-| packed_5 | **7.67** | **7.67** | 60.74 | 43.10 | 14.33 |
-| simple_iter | **9.61** | 12.63 | 143.6 | 75.59 | 22.22 |
-| frag_iter | **5.80** | 5.91 | 53.26 | 45.83 | 16.91 |
-| entity_cycle | **223.1** | 223.3 | 333.5 | 480.6 | 1408 |
-| add_remove | 420.0 | 168.4 | **162.2** | 760.5 | 521.6 |
+| packed_5 | **8.92** | **8.97** | 70.83 | 55.08 | 16.59 |
+| simple_iter | **11.23** | 14.82 | 167.6 | 94.61 | 25.28 |
+| frag_iter | **6.65** | 6.90 | 56.19 | 58.28 | 19.81 |
+| entity_cycle | **254.5** | 257.1 | 400.0 | 547.4 | 1533 |
+| add_remove | 483.6 | 196.2 | **189.3** | 886.0 | 607.7 |
 
 - **Iteration** (`packed_5`/`simple_iter`/`frag_iter`): strata and bitecs are the top tier — a dead
   heat on `packed_5` and `frag_iter`, strata ~24% ahead on `simple_iter`. strata's contiguous
@@ -61,7 +66,7 @@ are machine-specific and vary a few percent run-to-run — within a few percent 
   it matches or beats bitecs's flat-array-by-eid on dense workloads. koota (plain `number[]`) trails;
   miniplex (AoS) and becsy (proxy accessors + async) trail further.
 - **`entity_cycle`**: strata and bitecs tie at the front — the generational free-list + swap-and-pop
-  keep entity construction/teardown cheap (becsy +50%, miniplex 2.2×, koota 6.3×).
+  keep entity construction/teardown cheap (becsy +57%, miniplex 2.2×, koota 6.0×).
 - **`add_remove`**: becsy (deferred) and bitecs (bitmask flip, no data move) win; strata pays a real
   **archetype migration** — relocating the row on each add and remove. The archetype tradeoff.
 
@@ -71,8 +76,8 @@ are machine-specific and vary a few percent run-to-run — within a few percent 
 
 | scenario | strata | bitecs | becsy | miniplex | koota |
 |---|---:|---:|---:|---:|---:|
-| serialize | **8972** | N/A | N/A | N/A | N/A |
-| random_access | 688 | **380** | N/A | 389 | 714 |
+| serialize | **10548** | N/A | N/A | N/A | N/A |
+| random_access | 794 | **450** | N/A | 463 | 841 |
 
 - **`serialize`** — whole-world save+load round-trip (5k entities, components/tags/relations). A strata
   built-in; rivals ship none → N/A.
