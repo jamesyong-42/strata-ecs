@@ -109,7 +109,8 @@ export interface ProfilerRecorderOptions {
 
 export interface ProfilerRecorder {
   /** Report a host-side cost for the CURRENT frame (between this tick and the next). Multiple
-   *  reports to one lane within a frame accumulate. Non-finite/negative ms is ignored. */
+   *  reports to one lane within a frame accumulate. Non-finite/negative ms is ignored. Lane
+   *  names should be a small fixed set — slots are never evicted. */
   lane(name: string, ms: number): void;
   /** Snapshot of everything — computed on demand, never per frame. */
   stats(): ProfilerStats;
@@ -212,6 +213,14 @@ export function createProfilerRecorder(world: World, opts: ProfilerRecorderOptio
       l = { name, acc: 0, ring: ring(windowSize) };
       laneSlots.set(name, l);
       laneOrder.push(l);
+      // Slots are never evicted — deriving lane names from data leaks memory. Diagnose the
+      // flood once, at the crossing (size only ever grows, so this fires at most once).
+      if (DEV && laneSlots.size === 33) {
+        devWarn(
+          `profiler has 33 distinct lanes — lane names should be a small fixed set ` +
+            `("paint", "layout", …); slots are never evicted, so data-derived names grow without bound`,
+        );
+      }
     }
     return l;
   };

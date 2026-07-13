@@ -5,8 +5,11 @@
  *   world.tick(pipeline)    ← all per-frame logic (systems)
  *   paint()                 ← rendering reads the draw buffer AFTER tick returns
  *
- * The HUD gets ECS time and paint time as separate numbers every frame — Canvas2D will be
- * the bottleneck long before the ECS is, and the split keeps that visible and honest.
+ * Frame and tick timing live in the strata-ecs/tools profiler overlay (it measures both
+ * through the world's observer hooks — one tick per rAF makes tick-to-tick THE frame). The
+ * loop reports only what the ECS cannot see: the app's two paint costs, which main.ts
+ * forwards as profiler lanes. Canvas2D will be the bottleneck long before the ECS is, and
+ * that split keeps it visible and honest.
  */
 
 import type { Pipeline } from "@vibecook/strata-ecs";
@@ -18,13 +21,10 @@ import { syncGestureResource } from "./tools";
 import { world } from "./worldRef";
 
 export interface FrameStats {
-  frameMs: number;
-  ecsMs: number;
   /** Content-layer paint (0 on frames the dirty gate skipped). */
   contentMs: number;
   /** Overlay paint — every frame, reported separately so an overlay bottleneck is visible. */
   overlayMs: number;
-  painted: boolean;
 }
 
 export function startFrameLoop(
@@ -33,8 +33,7 @@ export function startFrameLoop(
   paintOverlay: () => void,
   onFrame: (s: FrameStats) => void,
 ): void {
-  let last = performance.now();
-  const frame = (now: number): void => {
+  const frame = (): void => {
     requestAnimationFrame(frame);
 
     world.sync(); // Part I no-op — kept from day one so the durable layer attaches with zero rewrite
@@ -45,9 +44,7 @@ export function startFrameLoop(
     syncGestureResource(); // pointer deltas accumulated between frames → the Gesture resource
 
     drawBuffer.reset();
-    const t0 = performance.now();
     world.tick(pipeline());
-    const ecsMs = performance.now() - t0;
 
     // THE settled point (002 §4.1): after all ticks, compare stamps and fire dirty observers.
     // The renderable Tier-1 observer (app/reactivity.ts) sets repaint.doc here when any drawn
@@ -72,8 +69,7 @@ export function startFrameLoop(
     paintOverlay();
     const p2 = performance.now();
 
-    onFrame({ frameMs: now - last, ecsMs, contentMs: p1 - p0, overlayMs: p2 - p1, painted });
-    last = now;
+    onFrame({ contentMs: p1 - p0, overlayMs: p2 - p1 });
   };
   requestAnimationFrame(frame);
 }

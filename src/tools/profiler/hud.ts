@@ -40,7 +40,8 @@ export interface ProfilerOptions {
 
 export interface ProfilerHandle {
   /** Report a host-side cost (ms) for the current frame — paint, layout, network decode…
-   *  Multiple reports to one lane within a frame accumulate. */
+   *  Multiple reports to one lane within a frame accumulate. Lane names should be a small
+   *  fixed set — slots are never evicted. */
   lane(name: string, ms: number): void;
   /** Programmatic snapshot of everything the overlay shows. */
   stats(): ProfilerStats;
@@ -89,7 +90,9 @@ function injectStyle(doc: Document): void {
   doc.head.appendChild(el);
 }
 
-const esc = (s: string): string => s.replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
+// `"` and `'` included: names are untrusted display strings and one sink is a title="…" attribute.
+const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => ESC[c]);
 const fmtMs = (ms: number): string => (ms >= 1 ? `${ms.toFixed(2)}ms` : `${(ms * 1000).toFixed(0)}µs`);
 const fmtUs = (us: number): string => (us >= 1000 ? `${(us / 1000).toFixed(2)}ms` : `${us.toFixed(0)}µs`);
 

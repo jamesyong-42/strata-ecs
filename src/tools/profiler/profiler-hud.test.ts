@@ -64,6 +64,24 @@ describe("attachProfiler overlay", () => {
     expect(body).toContain("paint");
   });
 
+  it("escapes untrusted names — a quote-bearing phase cannot break out of the title attribute", () => {
+    const w = createWorld();
+    handle = attachProfiler(w, { container, expanded: true });
+    const evilPhase = `x" onmouseover="alert(1)`;
+    const evilSystem = `<b>&"'sys`;
+    const spin = defineTickSystem(() => {}, { name: evilSystem });
+    w.tick([phase(evilPhase, [spin])]);
+    w.tick([phase(evilPhase, [spin])]);
+    $(".strata-prof-head").click(); // close
+    $(".strata-prof-head").click(); // open + fresh render
+
+    const titles = [...container.querySelectorAll(".strata-prof-row[title]")].map((r) => r.getAttribute("title"));
+    expect(titles).toContain(evilPhase); // round-trips intact — the quote stayed inside the attribute
+    expect(container.querySelector("[onmouseover]")).toBeNull(); // no attribute breakout
+    expect(container.querySelector(".strata-prof-body b")).toBeNull(); // name renders as text, not markup
+    expect($(".strata-prof-body").textContent ?? "").toContain(evilSystem);
+  });
+
   it("the reset button clears the window and the head returns to waiting", () => {
     const w = createWorld();
     handle = attachProfiler(w, { container, expanded: true });
