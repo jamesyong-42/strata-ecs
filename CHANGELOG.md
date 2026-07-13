@@ -4,6 +4,21 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [Unreleased]
+
+### Added
+
+- **`attachProfiler` — a frame-profiler overlay in `@vibecook/strata-ecs/tools`.** The inspector
+  panel's sibling: a compact always-on meter (fps, tick cost, frame-time sparkline against a
+  budget line) that expands into frame/tick **percentiles** (p50/p95/p99/max), host-reported
+  per-**lane** costs (`prof.lane("paint", ms)` — the tick read in context of the whole frame),
+  the hottest systems, and a **worst-frame capture**: the full per-system µs breakdown of the
+  worst frame since attach/reset. A "frame" is one tick-to-tick interval, so in the canonical
+  one-tick-per-rAF loop attaching is a single line with no loop rewiring; `stats()` exposes the
+  same snapshot programmatically (budget assertions in tests, custom telemetry). Rides the
+  existing `WorldObserver` contract — worlds still pay nothing while no tool is attached. The
+  canvas-editor example now uses it in place of its hand-rolled HUD readout.
+
 ## [0.5.1] — 2026-07-12
 
 Hardening release — packaging, artifact honesty, and consumer-facing guarantees. No API

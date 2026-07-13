@@ -19,6 +19,17 @@
  * Costs: the world pays the observer-attached telemetry path only while attached (and
  * exactly one branch-on-null when not); the panel itself polls at ~8 Hz and draws the
  * timeline on its own rAF only while that tab is visible.
+ *
+ * The PROFILER is the panel's sibling overlay — a meter you leave on, not an inspector
+ * you open:
+ *
+ *   import { attachProfiler } from "@vibecook/strata-ecs/tools";
+ *   const prof = attachProfiler(world);   // fps + sparkline + percentiles + worst-frame capture
+ *   prof.lane("paint", ms);               // optional host lanes, read in frame context
+ *
+ * A "frame" is one tick-to-tick interval (the canonical loop shape makes that the render
+ * frame) — see profiler/recorder.ts for the model and what makes this a profiler rather
+ * than an fps meter.
  */
 
 import type { World } from "../core/index";
@@ -34,6 +45,16 @@ import { TimelineTab } from "./observer/timeline";
 
 export type { DescribeFn, EntityDescription, LifecycleRecorder, LifeRecord };
 export { createLifecycleRecorder, defaultDescribe };
+
+export { attachProfiler, type ProfilerHandle, type ProfilerOptions } from "./profiler/hud";
+export type {
+  ProfilerCapturedSystem,
+  ProfilerFrameCapture,
+  ProfilerLaneStat,
+  ProfilerPercentiles,
+  ProfilerStats,
+  ProfilerSystemStat,
+} from "./profiler/recorder";
 
 /**
  * ════════════════════════════════════════════════════════════════════════════════════════════

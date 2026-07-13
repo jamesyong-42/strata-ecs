@@ -399,6 +399,7 @@
     <span class="lbl">tools</span>
     <a href="#mod-tools">Observability</a>
     <a href="#tools-attachObserver" class="sub">attachObserver</a>
+    <a href="#tools-attachProfiler" class="sub">attachProfiler</a>
     <a href="#tools-recorder" class="sub">recorder</a>
   </div>
   <div class="nav-group g-durable">
@@ -519,12 +520,15 @@
       </tbody>
     </table></div>
 
-    <h3 class="grp"><code>@vibecook/strata-ecs/tools</code> — 9 exports</h3>
+    <h3 class="grp"><code>@vibecook/strata-ecs/tools</code> — 18 exports</h3>
     <div class="tbl"><table>
       <thead><tr><th>Export</th><th>Kind</th><th>Role</th></tr></thead>
       <tbody>
         <tr><td class="band b-tools"><a href="#tools-attachObserver"><code>attachObserver</code></a></td><td class="k">fn</td><td>Mount the vanilla-DOM inspector panel over a world.</td></tr>
         <tr><td class="band b-tools"><a href="#tools-attachObserver"><code>ObserverOptions</code> <code>ObserverHandle</code></a></td><td class="k">type</td><td>The panel's options and its dispose handle.</td></tr>
+        <tr><td class="band b-tools"><a href="#tools-attachProfiler"><code>attachProfiler</code></a></td><td class="k">fn</td><td>Mount the frame-profiler overlay — fps, percentiles, worst-frame capture.</td></tr>
+        <tr><td class="band b-tools"><a href="#tools-attachProfiler"><code>ProfilerOptions</code> <code>ProfilerHandle</code></a></td><td class="k">type</td><td>The overlay's options and its lane/stats/reset/dispose handle.</td></tr>
+        <tr><td class="band b-tools"><a href="#tools-attachProfiler"><code>ProfilerStats</code> <code>ProfilerPercentiles</code> <code>ProfilerSystemStat</code> <code>ProfilerLaneStat</code> <code>ProfilerFrameCapture</code> <code>ProfilerCapturedSystem</code></a></td><td class="k">type</td><td>The <code>stats()</code> snapshot family.</td></tr>
         <tr><td class="band b-tools"><a href="#tools-recorder"><code>createLifecycleRecorder</code></a></td><td class="k">fn</td><td>The timeline's data layer — capture over lifecycle hooks.</td></tr>
         <tr><td class="band b-tools"><a href="#tools-recorder"><code>LifecycleRecorder</code> <code>LifeRecord</code></a></td><td class="k">type</td><td>The recorder handle and one birth-to-death record.</td></tr>
         <tr><td class="band b-tools"><a href="#tools-recorder"><code>defaultDescribe</code> <code>DescribeFn</code> <code>EntityDescription</code></a></td><td class="k">const · type</td><td>Entity labelling — the default and its callback shape.</td></tr>
@@ -1147,8 +1151,9 @@
     <p class="sec-eyebrow l-neutral">strata-ecs/tools · observability</p>
     <h2><svg class="glyph" data-band="1" data-hue="neutral"></svg>Observability <code>"@vibecook/strata-ecs/tools"</code><a class="anchor" href="#mod-tools">#</a></h2>
     <p>
-      A zero-dependency vanilla-DOM inspector built on the core's <a href="#core-WorldObserver"><code>WorldObserver</code></a>
-      contract, usable from any host app. The world pays the attached-telemetry path only while attached
+      Zero-dependency vanilla-DOM devtools built on the core's <a href="#core-WorldObserver"><code>WorldObserver</code></a>
+      contract, usable from any host app: an inspector <em>panel</em> you open and a frame-profiler
+      <em>overlay</em> you leave on. The world pays the attached-telemetry path only while attached
       (and one branch-on-null when not). See the guide's <a href="index.html#tools">Observability &amp; tools</a>.
     </p>
 
@@ -1166,6 +1171,32 @@
       <ul class="notes">
         <li><span class="nl">Options</span> <code>container</code>, <code>describe</code>, <code>recorderCap</code> (default 4000), <code>defaultTab</code>, and <code>tab</code> (force-open, for shareable links).</li>
         <li><span class="nl">Cost</span> The panel polls at ~8 Hz and draws the timeline on its own rAF only while that tab is visible.</li>
+      </ul>
+    </article>
+
+    <article class="entry" id="tools-attachProfiler">
+      <h3><span class="k">function</span>attachProfiler<a class="anchor" href="#tools-attachProfiler">#</a></h3>
+      <figure class="code" data-file="tools-attachProfiler" data-kind="function"></figure>
+      <p>
+        Mount the frame-profiler overlay — the panel's sibling, a meter you <em>leave on</em> rather than
+        an inspector you open. Collapsed it shows fps, the last tick's cost, and a frame-time sparkline
+        (gray bars = whole frame, purple = the ECS share, green line = budget); expanded it adds frame and
+        tick <strong>percentiles</strong> (p50/p95/p99/max — averages hide the spikes profilers exist to
+        find), per-<strong>lane</strong> costs, the hottest systems, and a <strong>worst-frame capture</strong>:
+        the full per-system breakdown of the worst frame since attach/reset, so "what made <em>that</em>
+        frame slow" stays answerable after the fact.
+      </p>
+      <p>
+        A "frame" is one tick-to-tick interval — in the canonical loop shape (one <code>world.tick()</code>
+        per rAF) that <em>is</em> the render frame, so attaching is one line with no loop rewiring. Apps
+        ticking on another cadence get honest tick-cadence stats instead. <code>lane(name, ms)</code> is the
+        optional extra fidelity: report host-side costs (paint, layout, …) and the tick is read in context
+        of the whole frame without the tool knowing anything about rendering.
+      </p>
+      <ul class="notes">
+        <li><span class="nl">Options</span> <code>container</code>, <code>budgetMs</code> (default 16.7), <code>windowSize</code> (default 240 frames), <code>lanes</code> (pre-register for stable order), <code>corner</code>, <code>expanded</code>.</li>
+        <li><span class="nl">Cost</span> Telemetry is paid only while attached (the core's <code>WorldObserver</code> contract); the sparkline draws on the overlay's own rAF, text re-renders at 10 Hz, aggregation runs on demand — never inside a tick.</li>
+        <li><span class="nl">Headless</span> <code>stats()</code> returns the whole snapshot programmatically — assert frame budgets in integration tests, ship the numbers to your own telemetry.</li>
       </ul>
     </article>
 
@@ -1749,6 +1780,32 @@ interface ObserverOptions {
   tab?: "entities" | "systems" | "timeline";   // force-open, beats a persisted layout
 }
 interface ObserverHandle { dispose(): void }   // detaches world hooks, DOM, timers</script>
+
+<script type="text/plain" data-code="tools-attachProfiler">function attachProfiler(world: World, opts?: ProfilerOptions): ProfilerHandle;
+
+interface ProfilerOptions {
+  container?: HTMLElement;               // default: document.body
+  budgetMs?: number;                     // default 16.7 — the green line, the over-budget counter
+  windowSize?: number;                   // default 240 frames (~4s at 60fps)
+  lanes?: readonly string[];             // pre-register for stable display order
+  corner?: "tl" | "tr" | "bl" | "br";    // default "br"
+  expanded?: boolean;                    // start with the detail sections open
+}
+interface ProfilerHandle {
+  lane(name: string, ms: number): void;  // report a host cost for the CURRENT frame (accumulates)
+  stats(): ProfilerStats;                // the whole snapshot, programmatically
+  reset(): void;                         // fresh window + clears the worst-frame capture
+  dispose(): void;                       // detaches world hooks, rAF, DOM
+}
+
+interface ProfilerStats {
+  fps: number;                           // EMA; 0 until the first frame closes
+  samples: number;  overBudgetPct: number;
+  frame: ProfilerPercentiles;  tick: ProfilerPercentiles;   // { p50, p95, p99, max, last } in ms
+  lanes: readonly ProfilerLaneStat[];    // { name, avgMs, maxMs, lastMs }
+  systems: readonly ProfilerSystemStat[];// { phase, name, isFlush, avgUs, maxUs, runs, skips, share }
+  worst: ProfilerFrameCapture | null;    // { frameMs, tickMs, tick, lanes, systems } — cost-descending
+}</script>
 
 <script type="text/plain" data-code="tools-recorder">function createLifecycleRecorder(world: World, describe: DescribeFn, cap?: number): LifecycleRecorder;
 const defaultDescribe: DescribeFn;

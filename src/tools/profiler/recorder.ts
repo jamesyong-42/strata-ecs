@@ -113,6 +113,10 @@ export interface ProfilerRecorder {
   lane(name: string, ms: number): void;
   /** Snapshot of everything — computed on demand, never per frame. */
   stats(): ProfilerStats;
+  /** Fill `out` with the most recent closed-frame samples of one series (ms, chronological —
+   *  newest last) and return the count written (≤ out.length). Allocation-free by design:
+   *  the overlay's sparkline refills one fixed buffer per animation frame. */
+  copyRecent(which: "frame" | "tick", out: Float32Array): number;
   /** Start measuring fresh: clears rings, run/skip counts, fps and the worst capture.
    *  Lane/system registrations survive (display order stays stable). */
   reset(): void;
@@ -287,6 +291,16 @@ export function createProfilerRecorder(world: World, opts: ProfilerRecorderOptio
         return;
       }
       laneSlot(name).acc += ms;
+    },
+
+    copyRecent(which, out) {
+      const r = which === "frame" ? frameRing : tickRing;
+      const take = Math.min(r.n, out.length);
+      const len = r.buf.length;
+      for (let i = 0; i < take; i++) {
+        out[take - 1 - i] = r.buf[(r.idx - 1 - i + len) % len];
+      }
+      return take;
     },
 
     stats(): ProfilerStats {

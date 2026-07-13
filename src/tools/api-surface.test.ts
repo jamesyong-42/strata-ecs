@@ -12,5 +12,5 @@ test("/tools runtime exports match the pinned surface", () => {
     Object.keys(tools).sort(),
     `the "/tools" public surface changed. If intended: update this pin, CHANGELOG.md, and ` +
       `docs/api.html in the SAME commit (removal/rename = breaking). If not: a barrel edit leaked.`,
-  ).toEqual(["attachObserver", "createLifecycleRecorder", "defaultDescribe"]);
+  ).toEqual(["attachObserver", "attachProfiler", "createLifecycleRecorder", "defaultDescribe"]);
 });

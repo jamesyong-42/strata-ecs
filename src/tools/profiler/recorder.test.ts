@@ -93,6 +93,23 @@ describe("profiler recorder — frame model", () => {
     expect(s.frame.last).toBe(100);
   });
 
+  it("copyRecent returns the newest samples chronologically, correct across ring wrap", () => {
+    const h = harness({ windowSize: 4 });
+    const frames = [10, 20, 30, 40, 50, 60]; // wraps a 4-slot ring
+    let at = 0;
+    h.tickAt(0, 1);
+    frames.forEach((f, i) => {
+      at += f;
+      h.tickAt(at, i + 2);
+    });
+    const small = new Float32Array(3);
+    expect(h.rec.copyRecent("frame", small)).toBe(3);
+    expect([...small]).toEqual([40, 50, 60]);
+    const big = new Float32Array(8);
+    expect(h.rec.copyRecent("frame", big)).toBe(4); // only the window survives
+    expect([...big.subarray(0, 4)]).toEqual([30, 40, 50, 60]);
+  });
+
   it("the window ring evicts oldest samples; over-budget% counts the window only", () => {
     const h = harness({ windowSize: 4, budgetMs: 45 });
     const frames = [10, 20, 30, 40, 50, 60];

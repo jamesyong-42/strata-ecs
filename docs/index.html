@@ -1368,6 +1368,17 @@
       your own domain terms.
     </p>
     <figure class="code" data-file="panel.ts"></figure>
+    <p>
+      Its sibling is <code>attachProfiler</code> — a frame-profiler <em>overlay</em>: a meter you
+      leave on rather than a panel you open. Collapsed it is fps, tick cost and a frame-time
+      sparkline against the budget line; expanded it adds frame/tick percentiles (p50/p95/p99/max —
+      averages hide the spikes profilers exist to find), host-reported per-lane costs, the hottest
+      systems, and a worst-frame capture: the full per-system breakdown of the worst frame since
+      reset, frozen so "what made <em>that</em> frame slow" stays answerable after it scrolled by.
+      A "frame" is one tick-to-tick interval — in the canonical one-tick-per-rAF loop that
+      <em>is</em> the render frame, so attaching is one line with no loop rewiring.
+    </p>
+    <figure class="code" data-file="profiler.ts"></figure>
 
     <h3>Asserting a read-only window</h3>
     <p>
@@ -1382,10 +1393,11 @@
     </p>
     <figure class="code" data-file="lawwindow.ts"></figure>
     <div class="note">
-      <span class="tag">Note — dev-only, with a browser caveat</span>
-      <p>Both compile out where <code>DEV</code> is false. But in an un-shimmed browser production bundle
-      <code>DEV</code> reads true at runtime, so registration stays live and each mutation pays one tiny
-      roster null-check — gate registration behind your own production flag there.</p>
+      <span class="tag">Note — dev-only</span>
+      <p>Both compile out where <code>DEV</code> is false — and since 0.5.1 the production artifact
+      (the default export condition) ships with <code>DEV</code> constant-folded to false, so this
+      holds in browser bundles too. Under the <code>development</code> condition registration stays
+      live and each mutation pays one tiny roster null-check.</p>
     </div>
   </section>
 
@@ -1636,6 +1648,15 @@ const obs = attachObserver(world, {
 });
 // …later
 obs.dispose();
+</script>
+
+<script type="text/plain" data-code="profiler.ts">import { attachProfiler } from "@vibecook/strata-ecs/tools";
+
+const prof = attachProfiler(world, { budgetMs: 16.7 });   // ← the whole integration
+prof.lane("paint", paintMs);   // optional: host costs, stacked next to the ECS share
+prof.stats();                  // { fps, frame: { p50, p95, p99, max }, systems, worst, … }
+// …later
+prof.dispose();
 </script>
 
 <script type="text/plain" data-code="lawwindow.ts">import type { ReadonlyWorld } from "@vibecook/strata-ecs";

@@ -36,8 +36,8 @@ haven't turned on.
   built in and multiplayer-correct: each peer undoes only its own changes.
 - **Transport-agnostic** — the framework converges documents; your app moves bytes.
   Any channel that carries a `Uint8Array` works: WebSocket, `BroadcastChannel`, WebRTC.
-- **First-party devtools and React binding** — a drop-in inspector panel
-  (`@vibecook/strata-ecs/tools`) and two `useSyncExternalStore` hooks (`@vibecook/strata-ecs/react`).
+- **First-party devtools and React binding** — a drop-in inspector panel and a frame-profiler
+  overlay (`@vibecook/strata-ecs/tools`), plus two `useSyncExternalStore` hooks (`@vibecook/strata-ecs/react`).
 
 **Documentation:** [the guide](https://jamesyong-42.github.io/strata-ecs/) ·
 [API reference](https://jamesyong-42.github.io/strata-ecs/api.html) ·
@@ -323,6 +323,19 @@ timeline — and, when collaboration is attached, a **durable** tab (baseline vs
 document side by side; highlighted rows are the un-reconciled sync delta) and an
 **ephemeral** tab (every peer's live presence, grouped by writer).
 
+```ts
+import { attachProfiler } from "@vibecook/strata-ecs/tools";
+const prof = attachProfiler(world);   // fps + sparkline, one line, no loop rewiring
+prof.lane("paint", paintMs);          // optional: stack host costs next to the ECS share
+```
+
+Its sibling is a frame-profiler **overlay** — a meter you leave on rather than a panel you
+open. Collapsed: fps, tick cost, and a frame-time sparkline against the budget line.
+Expanded: frame/tick **percentiles** (p50/p95/p99/max — averages hide spikes), per-lane
+costs, the hottest systems, and a **worst-frame capture** — the full per-system breakdown
+of the worst frame since reset, so "what made *that* frame slow" stays answerable after
+the fact. `stats()` returns the same snapshot programmatically for tests or telemetry.
+
 ## The example app
 
 [`examples/canvas-editor`](examples/canvas-editor) — an infinite-canvas whiteboard in
@@ -363,7 +376,7 @@ Full cross-library tables, methodology, and the losses included:
 | `@vibecook/strata-ecs/durable`   | the Document (durable) layer         | `loro-crdt`   |
 | `@vibecook/strata-ecs/ephemeral` | the Presence (ephemeral) layer       | `loro-crdt`   |
 | `@vibecook/strata-ecs/react`     | `useComponent` / `useResource` hooks | `react >= 18` |
-| `@vibecook/strata-ecs/tools`     | the inspector panel                  | nothing       |
+| `@vibecook/strata-ecs/tools`     | the inspector panel + frame profiler | nothing       |
 
 ESM-only. `loro-crdt` and `react` are optional peer dependencies — never bundled, only
 needed for the entry points that use them.
