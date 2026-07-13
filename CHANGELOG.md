@@ -4,7 +4,7 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
-## [Unreleased]
+## [0.6.0] — 2026-07-13
 
 ### Added
 
@@ -23,6 +23,10 @@ All notable changes to strata-ecs are documented here. The format follows
 
 Hardening release — packaging, artifact honesty, and consumer-facing guarantees. No API
 changes (now provable: the public surface is pinned by test).
+
+> Publishing note: the npm artifact for 0.5.1 was built from `d69bf31` (a day past this
+> section), so it already contains `attachProfiler` — the feature documented under 0.6.0
+> above. Fully tested code, wrong label; 0.6.0 is the properly documented release.
 
 ### Changed
 
