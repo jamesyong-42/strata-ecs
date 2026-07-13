@@ -8,7 +8,7 @@
  * verification screenshots; also a handy smoke test after refactors).
  */
 
-import { attachObserver, type ObserverOptions } from "@vibecook/strata-ecs/tools";
+import { attachObserver, attachProfiler, type ObserverOptions } from "@vibecook/strata-ecs/tools";
 import { cam, panBy, setViewportSize, zoomToFit } from "./app/camera";
 import { dirty, setOnMutate, stats } from "./app/commands";
 import { duplicateSelection, setSelection } from "./app/editorOps";
@@ -197,6 +197,10 @@ const obsOpts: ObserverOptions = {
   ephemeral: () => activeCollab()?.eph ?? null,
 };
 attachObserver(world, obsOpts); // mounted for the app's life — no dispose (the World never swaps, R3)
+// The framework's frame profiler (strata-ecs/tools): fps + sparkline + percentiles + worst-frame
+// breakdown. The tick side is automatic; the two lane() calls below are the app's whole
+// contribution — paint costs stacked next to the ECS share. Bottom-LEFT: the app HUD owns br.
+const prof = attachProfiler(world, { lanes: ["paint", "overlay"], corner: "bl" });
 // Restore clears the World in place (R3): the observer panel and the reactive repaint watch both
 // survive it, so there is nothing to re-attach or re-subscribe. onRestore only re-syncs the chrome
 // the snapshot changed — the sim toggle (SimMode rides the snapshot, so a restored storm resumes).
@@ -205,7 +209,11 @@ startFrameLoop(
   () => pipeline,
   () => contentLayer.paint(drawBuffer),
   () => overlayLayer.paint(),
-  (s) => hud.frame(s, overlayLayer.selectedCount),
+  (s) => {
+    hud.frame(overlayLayer.selectedCount);
+    prof.lane("paint", s.contentMs); // 0 on frames the dirty gate skipped — a real 0-cost frame
+    prof.lane("overlay", s.overlayMs);
+  },
 );
 
 // ?sim=1 boots straight into simulate mode (headless verification / shareable links).

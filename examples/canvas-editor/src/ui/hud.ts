@@ -1,20 +1,14 @@
 /**
- * The app HUD: fps + the ECS-vs-paint frame split, a frame-time sparkline (a wandering line
- * is more credible than a pinned 60), stress controls, SIMULATE, and the self-inflicted-
- * jank toggles. The per-system µs table lives in the strata-ecs/tools observer panel — this HUD
- * is the app's own cockpit. Text updates at 10 Hz; only the tiny sparkline draws per frame.
+ * The app HUD — the app's own cockpit: document stats, stress controls, SIMULATE, and the
+ * self-inflicted-jank toggles. The PERF readout lives in the framework's tools now: fps,
+ * sparkline, percentiles and the worst-frame breakdown in the strata-ecs/tools profiler
+ * overlay (bottom-left; this HUD grew into it and then handed that job back to the library),
+ * and the per-system µs table in the observer panel. Text updates at 10 Hz.
  */
 
-import type { FrameStats } from "../app/frameLoop";
 import { stats } from "../app/commands";
 import { drawBuffer } from "../render/drawBuffer";
 import { cam } from "../app/camera";
-
-const fmtMs = (ms: number): string => (ms >= 1 ? `${ms.toFixed(2)}ms` : `${(ms * 1000).toFixed(0)}µs`);
-
-const SPARK_W = 240;
-const SPARK_H = 34;
-const SAMPLES = 120;
 
 export interface HudActions {
   onSimToggle(on: boolean): void;
@@ -27,19 +21,11 @@ export interface HudActions {
 }
 
 export class Hud {
-  private fpsEma = 60;
-  private ecsEma = 0;
-  private contentEma = 0;
-  private overlayEma = 0;
   private lastText = 0;
   private readonly note: HTMLDivElement;
   private readonly collab: HTMLDivElement;
   private readonly body: HTMLDivElement;
   private readonly controls: HTMLDivElement;
-  private readonly spark: CanvasRenderingContext2D;
-  private readonly frameRing = new Float32Array(SAMPLES);
-  private readonly ecsRing = new Float32Array(SAMPLES);
-  private ringIdx = 0;
   private simOn = false;
   private simBtn!: HTMLButtonElement;
   // undo/redo — created only in collab mode (enableHistory); disabled state driven reactively.
@@ -51,16 +37,12 @@ export class Hud {
       `<div class="hud-title">strata canvas</div>` +
       `<div class="hud-collab"></div>` +
       `<div class="hud-body"></div>` +
-      `<canvas class="hud-spark" width="${SPARK_W * 2}" height="${SPARK_H * 2}" style="width:${SPARK_W}px;height:${SPARK_H}px"></canvas>` +
       `<div class="hud-controls"></div>` +
       `<div class="hud-note"></div>`;
     this.body = root.querySelector(".hud-body") as HTMLDivElement;
     this.note = root.querySelector(".hud-note") as HTMLDivElement;
     this.collab = root.querySelector(".hud-collab") as HTMLDivElement;
     this.controls = root.querySelector(".hud-controls") as HTMLDivElement;
-    const sparkEl = root.querySelector(".hud-spark") as HTMLCanvasElement;
-    this.spark = sparkEl.getContext("2d") as CanvasRenderingContext2D;
-    this.spark.scale(2, 2);
     this.buildControls(this.controls, actions);
   }
 
@@ -154,45 +136,13 @@ export class Hud {
     this.simBtn.classList.toggle("on", on);
   }
 
-  frame(s: FrameStats, selected = 0): void {
-    const a = 0.08;
-    this.fpsEma += (1000 / Math.max(s.frameMs, 0.01) - this.fpsEma) * a;
-    this.ecsEma += (s.ecsMs - this.ecsEma) * a;
-    if (s.painted) this.contentEma += (s.contentMs - this.contentEma) * 0.3;
-    this.overlayEma += (s.overlayMs - this.overlayEma) * a;
-
-    this.frameRing[this.ringIdx] = s.frameMs;
-    this.ecsRing[this.ringIdx] = s.ecsMs;
-    this.ringIdx = (this.ringIdx + 1) % SAMPLES;
-    this.drawSpark();
-
+  /** Called per frame; writes DOM at 10 Hz — the HUD must not become the cost. */
+  frame(selected = 0): void {
     const now = performance.now();
-    if (now - this.lastText < 100) return; // 10 Hz DOM writes — the HUD must not become the cost
+    if (now - this.lastText < 100) return;
     this.lastText = now;
     this.body.textContent =
-      `${this.fpsEma.toFixed(0)} fps · ecs ${fmtMs(this.ecsEma)} · paint ${fmtMs(this.contentEma)} +${fmtMs(this.overlayEma)} overlay\n` +
       `${stats.entities.toLocaleString()} entities · ${drawBuffer.count.toLocaleString()} visible · ` +
       `${selected.toLocaleString()} selected · zoom ${(cam.zoom * 100).toFixed(0)}%`;
-  }
-
-  /** 2px bars: gray = whole frame, purple overlay = the ECS share. 33ms tops the scale. */
-  private drawSpark(): void {
-    const ctx = this.spark;
-    ctx.clearRect(0, 0, SPARK_W, SPARK_H);
-    ctx.fillStyle = "rgba(110,118,129,.28)";
-    for (let i = 0; i < SAMPLES; i++) {
-      const v = this.frameRing[(this.ringIdx + i) % SAMPLES];
-      const h = Math.min(v / 33.3, 1) * SPARK_H;
-      ctx.fillRect(i * 2, SPARK_H - h, 1.6, h);
-    }
-    ctx.fillStyle = "#a371f7";
-    for (let i = 0; i < SAMPLES; i++) {
-      const v = this.ecsRing[(this.ringIdx + i) % SAMPLES];
-      const h = Math.min(v / 33.3, 1) * SPARK_H;
-      ctx.fillRect(i * 2, SPARK_H - h, 1.6, h);
-    }
-    // the 60fps line
-    ctx.fillStyle = "rgba(63,185,80,.5)";
-    ctx.fillRect(0, SPARK_H - (16.7 / 33.3) * SPARK_H, SPARK_W, 1);
   }
 }

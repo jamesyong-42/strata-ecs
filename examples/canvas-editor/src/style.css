@@ -86,13 +86,6 @@ body {
   user-select: none;
 }
 
-#hud .hud-spark {
-  display: block;
-  margin: 6px 0 4px;
-  border-radius: 4px;
-  background: rgba(13, 17, 23, 0.6);
-}
-
 #hud .hud-controls {
   display: flex;
   flex-wrap: wrap;
