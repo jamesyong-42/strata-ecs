@@ -7,7 +7,7 @@
  */
 
 /** Package version. Kept in sync with package.json at release time (pinned by api-surface.test.ts). */
-export const VERSION = "0.6.0";
+export const VERSION = "0.7.0";
 
 // --- entity handle ---
 export type { Entity } from "./entity";
@@ -56,6 +56,9 @@ export type {
 // --- queries ---
 export { defineQuery, Not, Any, All, Related } from "./query";
 export type { Query, QueryTerm, Atom, RelTerm, Batch } from "./query";
+
+// --- change collectors (Patch Note 004 — pull-based journal; petition 7) ---
+export type { ChangeCollector, ChangeDelta, CollectOptions, WorldChanges } from "./changes";
 
 // --- systems + schedule ---
 export { defineSystem, defineTickSystem, phase } from "./system";

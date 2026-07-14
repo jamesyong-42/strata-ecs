@@ -16,6 +16,7 @@ import type { WorldObserver } from "./observe";
 import { RuntimeStore, type WriteKind } from "./runtime-store";
 import { type EntityEditor, type Pipeline, type System, type TickSystem, SystemCtx, makeEditor } from "./system";
 import { Reactive } from "./reactive";
+import { ChangesRegistry, type CollectOptions, type WorldChanges } from "./changes";
 import { validatePipelineAccess } from "./access-diagnostics";
 import { applySnapshot, exportSnapshot, importSnapshot, parseSnapshot } from "./snapshot";
 
@@ -43,6 +44,13 @@ export class World {
    * nothing (no per-system stamping, no dev-enforcement). Does NOT survive a world swap (002 §6).
    */
   private reactiveInstance: Reactive | null = null;
+  /**
+   * The change-journal registry (Patch Note 004), created lazily on first `world.changes` access —
+   * `null` until then, so a world that never collects pays one dormant null test per chokepoint.
+   * Its gate is INDEPENDENT of the reactive layer's (a collector neither arms nor requires
+   * `reactiveOn`). Does not survive a world swap, same as reactive.
+   */
+  private changesInstance: WorldChanges | null = null;
   /**
    * True for the duration of `tick()` — the guard `reset()` reads so an in-place teardown can never
    * run mid-tick / mid-flush (it would corrupt an in-flight command-buffer drain or system pass).
@@ -93,6 +101,23 @@ export class World {
       this.reactiveInstance = new Reactive(this.store);
     }
     return this.reactiveInstance;
+  }
+
+  /**
+   * The change-journal layer (Patch Note 004 — pull-based ChangeCollector; petition 7). READING
+   * this getter installs the registry sink (one null-test per chokepoint thereafter); journaling
+   * work only happens for components/tags some live collector subscribed. `drain()` is callable
+   * INSIDE the pipeline — same-frame, unlike the notify-boundary reactive layer.
+   */
+  get changes(): WorldChanges {
+    if (this.changesInstance === null) {
+      const registry = new ChangesRegistry();
+      this.store.setChangesSink(registry);
+      this.changesInstance = {
+        collect: (opts?: CollectOptions) => registry.collect(opts),
+      };
+    }
+    return this.changesInstance;
   }
 
   /** Whether reactive stamping is armed (side-effect-free probe; arms on the first observe* call). */
@@ -204,7 +229,10 @@ export class World {
   private walkAttributed(q: Query, fn: (batch: Batch) => void): void {
     this.eachGuarded(this.store.query(q), fn);
     const w = this.activeSystemWrites;
-    if (w !== null) this.store.stampWrites(q, w);
+    if (w !== null) {
+      this.store.stampWrites(q, w); // reactive route (stampComponent self-gates on reactiveOn)
+      this.store.markCoarseWrites(w); // Patch Note 004 — collectors' honest raw-write fallback
+    }
   }
 
   /**
@@ -240,6 +268,7 @@ export class World {
     const w = this.activeSystemWrites;
     if (w !== null) {
       if (system.query !== undefined) this.store.stampWrites(system.query, w);
+      this.store.markCoarseWrites(w); // Patch Note 004 — tick systems included (they have no query)
       this.activeSystemWrites = null;
     }
   }
@@ -463,7 +492,9 @@ export class World {
             if (DEV && reactive !== null) this.store.beginSystemAccess(system); // 001 Rule 3 enforcement window
             // Arm walk attribution for this run (petition 5): inner walks — `ctx.query` or
             // `world.query` from the body — stamp the declared writes over what they walked.
-            if (reactive !== null) {
+            // Collectors arm it too (Patch Note 004): their coarse raw-write fallback rides the
+            // same declared-writes blanket, independent of the reactive layer.
+            if (reactive !== null || this.store.hasChangesSink) {
               const w = system.access?.write;
               this.activeSystemWrites = w !== undefined && w.length > 0 ? w : null;
             }

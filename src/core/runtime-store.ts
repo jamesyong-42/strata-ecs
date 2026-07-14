@@ -9,6 +9,7 @@
  */
 
 import { type Entity, genOf, slotOf } from "./entity";
+import type { ChangesSink } from "./changes";
 import { EntityTable } from "./entity-table";
 import { Archetype } from "./archetype";
 import { TagStore } from "./tags";
@@ -196,6 +197,29 @@ export class RuntimeStore implements ECSStore {
    *  (reading `world.reactive` is side-effect-free; only registering an observer arms stamping). */
   enableReactive(): void {
     this.reactiveOn = true;
+  }
+
+  /**
+   * The change-journal sink (Patch Note 004 — ChangeCollector). `null` until the first
+   * `world.changes.collect()` — its OWN gate, deliberately independent of {@link reactiveOn}
+   * (a value observer must not tax writes with journal checks, and a collector must not flip
+   * the +17–28% stamping profile). Every chokepoint call is behind one null test.
+   */
+  private changesSink: ChangesSink | null = null;
+
+  /** @internal Install the per-world collector registry (world.changes, first access). */
+  setChangesSink(sink: ChangesSink): void {
+    this.changesSink = sink;
+  }
+
+  /** @internal Whether any collector registry is attached (arms declared-write coarse reporting). */
+  get hasChangesSink(): boolean {
+    return this.changesSink !== null;
+  }
+
+  /** @internal Declared-writes blanket → component-granular coarse records (raw column writers). */
+  markCoarseWrites(comps: readonly Component[]): void {
+    if (this.changesSink !== null) this.changesSink.coarseWrites(comps);
   }
 
   /** @internal Side-effect-free probe for `world.isReactiveEnabled` (review-part1 Tier-3). */
@@ -783,6 +807,9 @@ export class RuntimeStore implements ECSStore {
     this.table.setPlacement(slotOf(e), A.id, row);
     A.count++;
     if (this.reactiveOn) A.lastStructuralFrame = this.frameCounter; // rows-version bump (002 §4.2)
+    // Patch Note 004 — exact journal: spawn / first-place / migrate-target all land here. Carried
+    // components over-report as changed (collectors' consumers re-read state — safe by contract).
+    if (this.changesSink !== null) this.changesSink.archetypeTouched(e, A);
   }
 
   /**
@@ -834,6 +861,9 @@ export class RuntimeStore implements ECSStore {
     }
     this.place(e, newA, fieldValues); // appends to newA, re-points table[slot] → newA
     this.unplace(oldA, oldRow, e); // swap-pop out of the captured old location
+    // Patch Note 004 — exact journal: place() reported the NEW archetype; the OLD one covers
+    // REMOVALS (a subscribed component present before, gone after → the consumer rechecks).
+    if (this.changesSink !== null) this.changesSink.archetypeTouched(e, oldA);
     // Reconcile the destination's per-column value stamps (002 §2.2(2)). One pass over the
     // destination's sorted componentIds (the loop index IS the stamp slot — no scans):
     //   - ADDED column (absent in the source) → a gained component is a value write → stamp now.
@@ -973,6 +1003,13 @@ export class RuntimeStore implements ECSStore {
     // are undefined and the substores skip the bookkeeping, keeping the non-reactive path zero-cost).
     // This covers watches on a tag the entity carried, rel-filtered watches on its outgoing edges, and
     // seeded watches whose target was this entity (its incoming edges clear → that relation is reported).
+    // Patch Note 004 — removed record, BEFORE teardown (archetype + tag bits still readable).
+    // `removed` is the one class the consumer cannot recheck (the handle goes dead) — it drops
+    // the entity by its cached key. Packed handles stay valid as keys after death.
+    if (this.changesSink !== null) {
+      const A = this.table.isPlaced(e) ? this.archetypesById[this.table.archetypeOf(slot)] : null;
+      this.changesSink.destroyed(e, A ?? null, (tid) => this.tags.has(tid, slot));
+    }
     const onRel = this.reactiveOn ? this.onRelTeardown : undefined;
     const onTag = this.reactiveOn ? this.onTagTeardown : undefined;
     this.relations.clearEntity(e, onRel); // both directions, inline, terminal
@@ -1029,6 +1066,7 @@ export class RuntimeStore implements ECSStore {
       );
     }
     if (DEV && this.writeHooks !== null) this.fireWrite("structural"); // petition 4 — before arch.clear, so a veto leaves the world intact
+    if (this.changesSink !== null) this.changesSink.reset(); // Patch Note 004 — wholesale marker subsumes the journal
     const frame = this.frameCounter; // reset stamps at the CURRENT frame — a normal mutation burst
     // Empty every archetype that holds rows (keep identity for the query caches). Bump the emptied
     // archetype's rows-version so surviving Tier-1 watches wake at the next notify (002 §4.2).
@@ -1134,6 +1172,7 @@ export class RuntimeStore implements ECSStore {
       writeCell(A.columns.get(f.fieldId) as Column, f.kind, row, encoded.get(f.fieldId) as Stored);
     }
     this.stampComponent(A, c.id); // edit-path value write (002 §2.2(3), 001 §3.1 route 2)
+    if (this.changesSink !== null) this.changesSink.componentTouched(e, c.id); // Patch Note 004 — exact journal
   }
 
   /** Overwrite the value of a component the entity already has (value change). Throws if absent. */
@@ -1256,12 +1295,14 @@ export class RuntimeStore implements ECSStore {
     this.ensurePlaced(e); // an identity-only source becomes queryable once tagged (§5.2)
     this.tags.set(tagId, slotOf(e));
     this.bumpTag(tagId); // this tag's filtered membership changed (002 §4.2)
+    if (this.changesSink !== null) this.changesSink.tagTouched(e, tagId); // Patch Note 004
   }
 
   private doRemoveTag(e: Entity, tagId: number): void {
     if (DEV && this.writeHooks !== null) this.fireWrite("tag"); // petition 4
     this.tags.clear(tagId, slotOf(e)); // does not unplace the entity
     this.bumpTag(tagId);
+    if (this.changesSink !== null) this.changesSink.tagTouched(e, tagId); // Patch Note 004
   }
 
   private doSetRelation(e: Entity, rel: Relation, target: Entity): void {

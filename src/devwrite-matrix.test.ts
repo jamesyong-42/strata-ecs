@@ -875,6 +875,9 @@ const ECS_MUTATORS = new Set<string>(Object.keys(MUTATOR_MANIFEST));
 const READERS = new Set<string>([
   "tickCount",
   "reactive",
+  // Patch Note 004: like `reactive`, a lazy layer getter — collecting journals
+  // OBSERVES writes (the fire sites live with the mutators), never mutates ECS.
+  "changes",
   "isReactiveEnabled",
   "observe",
   "devOnWrite",

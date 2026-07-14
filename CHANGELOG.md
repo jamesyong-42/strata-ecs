@@ -4,6 +4,34 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [0.7.0] — 2026-07-14
+
+### Added
+
+- **`world.changes` — opt-in, pull-based ChangeCollectors (Patch Note 004; born as
+  infinite-canvas-engine petition 7).** The missing layer between stamps ("might anything have
+  changed?") and value observers ("did this decoded value differ?"): a collector journals WHICH
+  entities were touched. `world.changes.collect({ components, tags })` returns a
+  `ChangeCollector` whose `drain()` is callable **inside the pipeline** (between systems/phases)
+  — same-frame, unlike the notify-boundary reactive layer — yielding `{ changed, removed,
+  coarse, reset }`. Exact records at every sparse chokepoint (edit/set, add/remove component,
+  spawn, destroy, tag flips — immediate AND ctx-flush paths); component removal reports as
+  `changed` (the entity is alive and re-checkable), `removed` is reserved for destroys (packed
+  handles remain valid as removal keys); raw `batch.col()` writers degrade HONESTLY to
+  component-granular `coarse` records via the declared `access.write` blanket — never a miss,
+  over-reporting is the escape valve. Per-collector dedup; drain-cursor semantics with REUSED
+  buffers (a per-frame drain allocates nothing; returned arrays are valid until the next
+  drain); `reset` marker on `world.reset()`. `coarse: false` is a per-collector ATTESTATION
+  ("all writers of my components are store-visible — no raw column pokes"): the blanket is
+  conservative by construction (it cannot tell a declared writer that wrote through the exact
+  chokepoints from one that wrote raw), so exact-path pipelines whose declared writers run
+  every frame opt out rather than drown in permanent full-rescan records; the explicit
+  `touch()` row operation remains the planned precision upgrade for mixed pipelines. **Gate
+  independence**: collectors have their own
+  attachment gate — they neither arm nor require `reactiveOn` (a value observer must not tax
+  writes with journal checks; a collector must not flip the +17–28% stamping profile). A world
+  that never collects pays one dormant null test per chokepoint.
+
 ## [0.6.0] — 2026-07-13
 
 ### Added
