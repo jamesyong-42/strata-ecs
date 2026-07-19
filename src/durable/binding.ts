@@ -74,6 +74,7 @@
  */
 
 import { DEV, devWarn } from "../core/dev";
+import { relationById, relationCount } from "../core/schema";
 import type {
   Component,
   ComponentId,
@@ -202,6 +203,21 @@ export function attachDurable(world: World, store: DurableStore): Attachment {
     throw new Error(
       "strata: attachDurable() cannot run from inside an observer or reactive callback — attach's projection half-applies through the mixed in-emit guards; schedule it for the next frame boundary.",
     );
+  }
+
+  // plan-ordered-relations M1 window (rev-m1-spec F10): ordered relations are runtime-only until
+  // the durable order protocol lands (M2/M3) — edges sync as rel1: cells, but each peer's sibling
+  // ORDER is a local projection artifact, so it will NOT converge across peers. Warn once so the
+  // gap is never a silent surprise; retire this with the M3 order cells.
+  if (DEV) {
+    for (let rid = 0; rid < relationCount(); rid++) {
+      if (relationById(rid)?.ordered) {
+        devWarn(
+          "strata: an ordered relation is defined while attaching a durable store — sibling ORDER is runtime-only until the durable order protocol ships; edges sync, order will not converge across peers.",
+        );
+        break;
+      }
+    }
   }
 
   const binding = new DurableBinding(world, store);

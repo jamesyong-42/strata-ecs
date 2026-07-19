@@ -8,7 +8,7 @@
  */
 
 import type { Entity } from "./entity";
-import type { Component, Relation, Resource, SpawnInitOf, Tag } from "./schema";
+import type { Component, OrderPlace, Relation, Resource, SpawnInitOf, Tag } from "./schema";
 import type { FieldInput } from "./field";
 import type { Batch, Query } from "./query";
 import { DEV, devError } from "./dev";
@@ -309,9 +309,15 @@ export class World {
     this.assertNotIterating("removeTag");
     this.store.removeTag(e, t);
   }
-  setRelation(e: Entity, r: Relation, target: Entity): void {
+  setRelation(e: Entity, r: Relation, target: Entity, place?: OrderPlace): void {
     this.assertNotIterating("setRelation");
-    this.store.setRelation(e, r, target);
+    this.store.setRelation(e, r, target, place);
+  }
+  /** Reorder `e` within its current parent's sibling sequence — ordered relations only
+   *  (plan-ordered-relations §3.3). No edge → DEV-warn + no-op. */
+  moveRelation(e: Entity, r: Relation, place: OrderPlace): void {
+    this.assertNotIterating("moveRelation");
+    this.store.moveRelation(e, r, place);
   }
   addRelation(e: Entity, r: Relation, target: Entity): void {
     this.assertNotIterating("addRelation");
@@ -352,6 +358,12 @@ export class World {
   }
   getReverse(e: Entity, r: Relation): Entity[] {
     return this.store.getReverse(e, r);
+  }
+  /** The effective-order version of `parent` under ordered `r` — monotonic, 0 until a change is
+   *  seen; the FIRST call arms stamp collection (plan-ordered-relations §3.3). Pull-only: pair
+   *  with an `observeQuery` naming `r` for the wake, poll this for the did-it-change filter. */
+  orderStamp(parent: Entity, r: Relation): number {
+    return this.store.orderStamp(parent, r);
   }
   firstOf(q: Query): Entity | undefined {
     return this.store.firstOf(q);
@@ -698,6 +710,7 @@ export type WorldMutatorName =
   | "setRelation"
   | "addRelation"
   | "removeRelation"
+  | "moveRelation"
   | "setResource"
   | "updateResource"
   | "removeResource"

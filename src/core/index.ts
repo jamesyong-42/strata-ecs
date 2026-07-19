@@ -25,6 +25,7 @@ export type {
   Relation,
   Resource,
   Arity,
+  OrderPlace,
   ComponentId,
   TagId,
   RelationId,

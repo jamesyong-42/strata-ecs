@@ -12,24 +12,67 @@
  */
 
 import type { Entity } from "./entity";
-import { type Relation, type RelationId, relationById } from "./schema";
+import { type OrderPlace, type Relation, type RelationId, relationById } from "./schema";
+
+/** Outcome of an ordered placement — `fellBack` marks a `before`/`after` anchor that was not a
+ *  sibling of the same parent (degraded to "last"; the caller DEV-warns, never throws — §3.3). */
+export interface PlaceOutcome {
+  moved: boolean;
+  fellBack: boolean;
+}
+
+/** Shared no-op outcomes (allocation-free hot path — the R5 discipline). */
+const NO_PLACE: PlaceOutcome = { moved: false, fellBack: false };
+const NO_EDGE: PlaceOutcome = { moved: false, fellBack: false };
+const EMPTY_ORDER: ReadonlyMap<Entity, Entity[]> = new Map();
 
 export class RelationStore {
   private readonly oneForward = new Map<RelationId, Map<Entity, Entity>>();
   private readonly manyForward = new Map<RelationId, Map<Entity, Set<Entity>>>();
   private readonly reverse = new Map<RelationId, Map<Entity, Set<Entity>>>();
+  /**
+   * Sibling sequences for ORDERED relations only (plan-ordered-relations §3.2): per relation, each
+   * parent's children as a dense array — the runtime's authoritative order. Membership is still
+   * owned by the edge indices above; these arrays are maintained in lockstep at every edge
+   * mutation site and never disagree (despawn splices eagerly, so entries are alive by
+   * construction — reads keep the validate-on-read filter as belt and braces).
+   */
+  private readonly orderedReverse = new Map<RelationId, Map<Entity, Entity[]>>();
+  /** Fired on every effective-order change of (rel, parent) — the runtime store's orderStamp bump
+   *  seam (bound once at construction; armed-check lives on the runtime side). */
+  onOrderChanged: ((rel: Relation, parent: Entity) => void) | null = null;
 
   constructor(private readonly isAlive: (e: Entity) => boolean) {}
 
   // --- mutation ---
 
-  /** Arity "one": set/replace the single target, unlinking the previous target's reverse edge. */
+  /** Arity "one": set/replace the single target, unlinking the previous target's reverse edge.
+   *  UNORDERED relations only — kept byte-identical to its pre-ordered shape so the hot path
+   *  stays inlinable (the petitions-3/4 inlining-cliff lesson; the D8 bench gate measured the
+   *  merged form at +12.7%). Ordered relations route through {@link setOneOrdered}. */
   setOne(rel: Relation, source: Entity, target: Entity): void {
     const fwd = this.mapFor(this.oneForward, rel.id);
     const old = fwd.get(source);
     if (old !== undefined) this.reverse.get(rel.id)?.get(old)?.delete(source);
     fwd.set(source, target);
     this.addReverse(rel.id, target, source);
+  }
+
+  /**
+   * The ORDERED sibling of {@link setOne}: same edge semantics, plus `place` positions `source`
+   * among the new target's children (default "last"). Re-setting the SAME target: with a
+   * `place` it acts as a move; without one the current position is KEPT (idempotent re-set
+   * never reorders — §3.3).
+   */
+  setOneOrdered(rel: Relation, source: Entity, target: Entity, place?: OrderPlace): PlaceOutcome {
+    const fwd = this.mapFor(this.oneForward, rel.id);
+    const old = fwd.get(source);
+    if (old !== undefined) this.reverse.get(rel.id)?.get(old)?.delete(source);
+    fwd.set(source, target);
+    this.addReverse(rel.id, target, source);
+    if (old === target && place === undefined) return NO_PLACE; // idempotent re-set: keep position
+    if (old !== undefined && old !== target) this.spliceOrdered(rel, old, source); // leave the old parent's sequence
+    return this.insertOrdered(rel, target, source, place ?? "last");
   }
 
   /** Arity "many": add an edge (idempotent — a Set can't hold a duplicate, §3.3). */
@@ -52,6 +95,7 @@ export class RelationStore {
       if (old !== undefined && (target === undefined || target === old)) {
         fwd!.delete(source);
         this.reverse.get(rel.id)?.get(old)?.delete(source);
+        if (rel.ordered) this.spliceOrdered(rel, old, source);
       }
       return;
     }
@@ -82,6 +126,8 @@ export class RelationStore {
       if (target !== undefined) {
         this.reverse.get(rid)?.get(target)?.delete(e);
         fwd.delete(e);
+        const rel = relationById(rid);
+        if (rel?.ordered) this.spliceOrdered(rel, target, e); // the child leaves its parent's sequence
         onCleared?.(rid);
       }
     }
@@ -106,6 +152,9 @@ export class RelationStore {
       rev.delete(e);
       onCleared?.(rid); // e had incoming edges under rid — wakes a seeded watch whose target was e
     }
+    // e as PARENT of an ordered sequence: drop the whole array (no per-parent bump — the parent is
+    // dying; watchers ride the incoming-edge report above).
+    for (const [, byParent] of this.orderedReverse) byParent.delete(e);
   }
 
   // --- traversal (validate-on-read: dangling targets are skipped) ---
@@ -124,11 +173,30 @@ export class RelationStore {
   }
 
   getReverse(rel: Relation, target: Entity): Entity[] {
+    if (rel.ordered) {
+      // Sibling order IS the contract for ordered relations (§3.3). Entries are alive by
+      // construction (despawn splices eagerly); the filter is belt and braces, same as below.
+      const arr = this.orderedReverse.get(rel.id)?.get(target);
+      if (arr === undefined) return [];
+      const out: Entity[] = [];
+      for (const s of arr) if (this.isAlive(s)) out.push(s);
+      return out;
+    }
     const set = this.reverse.get(rel.id)?.get(target);
     if (set === undefined) return [];
     const out: Entity[] = [];
     for (const s of set) if (this.isAlive(s)) out.push(s);
     return out;
+  }
+
+  /**
+   * Reorder `source` within its CURRENT parent's sibling sequence (§3.3). `moved` is false when
+   * `source` has no edge under `rel` (the caller DEV-warns + no-ops — remote/hostile robustness).
+   */
+  moveOne(rel: Relation, source: Entity, place: OrderPlace): PlaceOutcome {
+    const parent = this.oneForward.get(rel.id)?.get(source);
+    if (parent === undefined) return NO_EDGE;
+    return this.insertOrdered(rel, parent, source, place);
   }
 
   /** Raw reverse set for a concrete target — used by concrete-target query seeding (§6.4). */
@@ -154,6 +222,29 @@ export class RelationStore {
     this.oneForward.clear();
     this.manyForward.clear();
     this.reverse.clear();
+    this.orderedReverse.clear();
+  }
+
+  /** @internal Every (parent, children) sequence of an ordered relation — the snapshot exporter
+   *  walks these (§3.5). Live view; do not mutate. */
+  orderedEntries(rel: Relation): IterableIterator<[Entity, readonly Entity[]]> {
+    return (this.orderedReverse.get(rel.id) ?? EMPTY_ORDER).entries();
+  }
+
+  /**
+   * @internal Overwrite a parent's sibling sequence wholesale — the snapshot importer's D7
+   * application (§3.5) and, later, the projector's order-cell application (M2). The caller is
+   * responsible for `children` being exactly the parent's current children (any order); this
+   * only assigns sequence, never membership.
+   */
+  setOrderedChildren(rel: Relation, parent: Entity, children: Entity[]): void {
+    let byParent = this.orderedReverse.get(rel.id);
+    if (byParent === undefined) {
+      byParent = new Map();
+      this.orderedReverse.set(rel.id, byParent);
+    }
+    byParent.set(parent, children);
+    this.onOrderChanged?.(rel, parent);
   }
 
   /** @internal Every relation id with any stored edge in any direction — reset's per-id membership
@@ -163,6 +254,58 @@ export class RelationStore {
     yield* this.oneForward.keys();
     yield* this.manyForward.keys();
     yield* this.reverse.keys();
+  }
+
+  /** Remove `source` from `parent`'s sibling sequence (edge already unlinked by the caller). */
+  private spliceOrdered(rel: Relation, parent: Entity, source: Entity): void {
+    const arr = this.orderedReverse.get(rel.id)?.get(parent);
+    if (arr === undefined) return;
+    const i = arr.indexOf(source);
+    if (i >= 0) {
+      arr.splice(i, 1);
+      this.onOrderChanged?.(rel, parent);
+    }
+  }
+
+  /**
+   * Place `source` in `parent`'s sibling sequence per `place`. Always splices any existing
+   * occurrence first, so re-placement is a move and the array can never hold a duplicate.
+   * A `before`/`after` anchor that is absent (or is `source` itself, whose position is
+   * indeterminate mid-move) degrades to "last" and reports `fellBack` for the DEV warn.
+   */
+  private insertOrdered(rel: Relation, parent: Entity, source: Entity, place: OrderPlace): PlaceOutcome {
+    let byParent = this.orderedReverse.get(rel.id);
+    if (byParent === undefined) {
+      byParent = new Map();
+      this.orderedReverse.set(rel.id, byParent);
+    }
+    let arr = byParent.get(parent);
+    if (arr === undefined) {
+      arr = [];
+      byParent.set(parent, arr);
+    }
+    const existing = arr.indexOf(source);
+    if (existing >= 0) arr.splice(existing, 1);
+
+    let index: number;
+    let fellBack = false;
+    if (place === "first") {
+      index = 0;
+    } else if (place === "last") {
+      index = arr.length;
+    } else {
+      const anchor = "before" in place ? place.before : place.after;
+      const at = anchor === source ? -1 : arr.indexOf(anchor);
+      if (at < 0) {
+        index = arr.length;
+        fellBack = true;
+      } else {
+        index = "before" in place ? at : at + 1;
+      }
+    }
+    arr.splice(index, 0, source);
+    this.onOrderChanged?.(rel, parent);
+    return { moved: true, fellBack };
   }
 
   private mapFor<V>(index: Map<RelationId, Map<Entity, V>>, rid: RelationId): Map<Entity, V> {

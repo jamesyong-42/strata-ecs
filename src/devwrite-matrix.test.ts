@@ -55,6 +55,7 @@ const Vel = defineComponent("DWVel", { x: "f32", y: "f32" });
 const Sel = defineTag("DWSel");
 const Parent = defineRelation("DWParent", { arity: "one" });
 const Children = defineRelation("DWChildren", { arity: "many" });
+const Stacked = defineRelation("DWStacked", { arity: "one", ordered: true });
 const Cam = defineResource("DWCam", { zoom: "f32" });
 const qPos = defineQuery([Pos]);
 
@@ -165,6 +166,21 @@ const worldRoutes: WorldRoute[] = [
       };
     },
     act: (c) => c.world.setRelation(c.e!, Parent, c.target!),
+    expect: ["relation"],
+  },
+  {
+    name: "moveRelation",
+    mutator: "moveRelation",
+    setup: () => {
+      const world = createWorld();
+      const target = world.spawn({ components: [[Pos, { x: 1, y: 1 }]] });
+      const sib = world.spawn({ components: [[Pos, { x: 2, y: 2 }]] });
+      const e = world.spawn({ components: [[Pos, { x: 0, y: 0 }]] });
+      world.setRelation(sib, Stacked, target);
+      world.setRelation(e, Stacked, target);
+      return { world, e, target };
+    },
+    act: (c) => c.world.moveRelation(c.e!, Stacked, "first"),
     expect: ["relation"],
   },
   {
@@ -856,6 +872,7 @@ const MUTATOR_MANIFEST: Record<WorldMutatorName, string> = {
   addTag: "world route table + ctx.addTag + ephemeral eph.addTag + durable remote drain",
   removeTag: "world route table",
   setRelation: "world route table + ctx.setRelation + durable remote drain",
+  moveRelation: "world route table (ordered sibling reorder, plan-ordered-relations §3.3)",
   addRelation: "world route table",
   removeRelation: "world route table",
   setResource: "world route table + veto + durable tx.setResource + remote drain",
@@ -892,6 +909,9 @@ const READERS = new Set<string>([
   "getRelation",
   "getRelations",
   "getReverse",
+  // plan-ordered-relations §3.3: a pull-only version read (its bump sites live with the
+  // relation mutators); the first call arms collection but never writes ECS state.
+  "orderStamp",
   "firstOf",
   "query",
   "count",
@@ -924,7 +944,7 @@ describe("drift-proofing", () => {
   it("(a) WorldMutatorName is exhaustively covered by this file (compile error when the union grows)", () => {
     // The `Record<WorldMutatorName, string>` type above is the hard gate: this test just proves it is
     // materialized. A `ReadonlyWorld` strips exactly these keys.
-    expect(ECS_MUTATORS.size).toBe(17);
+    expect(ECS_MUTATORS.size).toBe(18);
     for (const name of ECS_MUTATORS) expect(typeof MUTATOR_MANIFEST[name as WorldMutatorName]).toBe("string");
   });
 

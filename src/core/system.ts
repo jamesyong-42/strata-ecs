@@ -12,6 +12,7 @@ import { DEV, devWarn } from "./dev";
 import {
   type Component,
   type ComponentId,
+  type OrderPlace,
   type Relation,
   type Resource,
   type SpawnInitOf,
@@ -164,9 +165,19 @@ export class SystemCtx {
     this.store.enqueue(this.buf, { kind: "removeTag", entity: e, tag: t.id });
   }
 
-  setRelation(e: Entity, r: Relation, target: Entity): void {
+  setRelation(e: Entity, r: Relation, target: Entity, place?: OrderPlace): void {
     if (r.arity !== "one") throw new Error(`strata: setRelation is for arity "one" — use addRelation for "${r.name}".`);
-    this.store.enqueue(this.buf, { kind: "setRelation", entity: e, relation: r.id, target });
+    // Three-path parity (rev-m1-core finding 3): the world path DEV-warns on a place against an
+    // unordered relation; the buffered path gives the same feedback at ENQUEUE, then strips it.
+    if (DEV && place !== undefined && !r.ordered) {
+      devWarn(`strata: ctx.setRelation place ignored — "${r.name}" is not an ordered relation.`);
+    }
+    this.store.enqueue(this.buf, { kind: "setRelation", entity: e, relation: r.id, target, place: r.ordered ? place : undefined });
+  }
+  /** Reorder within the current parent's sibling sequence — ordered relations only (§3.3). */
+  moveRelation(e: Entity, r: Relation, place: OrderPlace): void {
+    if (!r.ordered) throw new Error(`strata: moveRelation requires an ordered relation — "${r.name}" is unordered.`);
+    this.store.enqueue(this.buf, { kind: "moveRelation", entity: e, relation: r.id, place });
   }
   addRelation(e: Entity, r: Relation, target: Entity): void {
     if (r.arity !== "many") throw new Error(`strata: addRelation is for arity "many" — use setRelation for "${r.name}".`);

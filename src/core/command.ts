@@ -8,7 +8,7 @@
  */
 
 import type { Entity } from "./entity";
-import type { ComponentId, RelationId, TagId } from "./schema";
+import type { ComponentId, OrderPlace, RelationId, TagId } from "./schema";
 
 /** Initial components for a spawn — id + raw value object, encoded at flush (§5.3). */
 export type ComponentInit = ReadonlyArray<{ readonly component: ComponentId; readonly value: unknown }>;
@@ -20,7 +20,8 @@ export type StructuralCommand =
   | { readonly kind: "removeComponent"; readonly entity: Entity; readonly component: ComponentId }
   | { readonly kind: "addTag"; readonly entity: Entity; readonly tag: TagId }
   | { readonly kind: "removeTag"; readonly entity: Entity; readonly tag: TagId }
-  | { readonly kind: "setRelation"; readonly entity: Entity; readonly relation: RelationId; readonly target: Entity }
+  | { readonly kind: "setRelation"; readonly entity: Entity; readonly relation: RelationId; readonly target: Entity; readonly place?: OrderPlace }
+  | { readonly kind: "moveRelation"; readonly entity: Entity; readonly relation: RelationId; readonly place: OrderPlace }
   | { readonly kind: "addRelation"; readonly entity: Entity; readonly relation: RelationId; readonly target: Entity }
   | { readonly kind: "removeRelation"; readonly entity: Entity; readonly relation: RelationId; readonly target?: Entity };
 

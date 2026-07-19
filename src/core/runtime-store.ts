@@ -28,6 +28,7 @@ import {
   type ComponentId,
   type FieldId,
   type FieldMeta,
+  type OrderPlace,
   type Relation,
   type RelationId,
   type Resource,
@@ -149,6 +150,11 @@ export class RuntimeStore implements ECSStore {
    */
   private tagFrames = new Float64Array(0);
   private relFrames = new Float64Array(0);
+  /** Per-(relation, parent) effective-order versions (plan-ordered-relations §3.3). Pull-only —
+   *  consumers poll after a reactive wake; armed on the first orderStamp() read. */
+  private readonly orderStamps = new Map<RelationId, Map<Entity, number>>();
+  private orderStampsArmed = false;
+  private orderStampCounter = 0;
   /**
    * Per-resource `lastWrittenFrame` (Patch Note 003 §1.2), a dense array indexed by `ResourceId`
    * (ids are dense). Bumped in `setResource` only — resources have no column/structural path — behind
@@ -309,6 +315,18 @@ export class RuntimeStore implements ECSStore {
         if (this.archetypeMatchesQuery(q, arch)) list.push(arch);
       }
     });
+    // orderStamp bump seam (plan-ordered-relations §3.3): fires on every effective-order change
+    // inside the relation substore. Dormant until the first orderStamp() read arms it — the
+    // reactiveOn mirror — so worlds that never consult order versions pay one null-ish branch.
+    this.relations.onOrderChanged = (rel, parent) => {
+      if (!this.orderStampsArmed) return;
+      let byParent = this.orderStamps.get(rel.id);
+      if (byParent === undefined) {
+        byParent = new Map();
+        this.orderStamps.set(rel.id, byParent);
+      }
+      byParent.set(parent, ++this.orderStampCounter);
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -1013,6 +1031,12 @@ export class RuntimeStore implements ECSStore {
     const onRel = this.reactiveOn ? this.onRelTeardown : undefined;
     const onTag = this.reactiveOn ? this.onTagTeardown : undefined;
     this.relations.clearEntity(e, onRel); // both directions, inline, terminal
+    // rev-m1-core finding 1: a destroyed PARENT's per-parent order stamps are dead weight —
+    // without this prune an armed world with parent churn retains one Map entry per ever-
+    // reordered parent forever. Armed-gated: unarmed worlds carry no stamps at all.
+    if (this.orderStampsArmed) {
+      for (const byParent of this.orderStamps.values()) byParent.delete(e);
+    }
     this.tags.clearAll(slot, onTag); // mandatory — bitsets are slot-indexed, not generation-indexed (§3.2)
     if (this.table.isPlaced(e)) {
       const A = this.archetypesById[this.table.archetypeOf(slot)];
@@ -1092,6 +1116,7 @@ export class RuntimeStore implements ECSStore {
     // Clear tags / relations / resources wholesale.
     this.tags.reset();
     this.relations.reset();
+    this.orderStamps.clear(); // stamps die with the sequences; reset is a full invalidation for order caches too
     this.resources.clear();
     // Free every live slot with a generation bump — stale handles now read dead, never aliased.
     this.table.reset();
@@ -1305,11 +1330,39 @@ export class RuntimeStore implements ECSStore {
     if (this.changesSink !== null) this.changesSink.tagTouched(e, tagId); // Patch Note 004
   }
 
-  private doSetRelation(e: Entity, rel: Relation, target: Entity): void {
+  private doSetRelation(e: Entity, rel: Relation, target: Entity, place?: OrderPlace): void {
     if (DEV && this.writeHooks !== null) this.fireWrite("relation"); // petition 4 — before ensurePlaced (which may over-fire "structural")
     this.ensurePlaced(e); // places the source; the target is not placed (§5.2)
-    this.relations.setOne(rel, e, target);
+    // ONE entry-level branch (D8; fire-site placement rule): the unordered arm calls the
+    // baseline-shaped setOne so its inlining is undisturbed; all ordered work lives in the arm.
+    if (rel.ordered) {
+      const outcome = this.relations.setOneOrdered(rel, e, target, place);
+      if (DEV && outcome.fellBack) {
+        devWarn(
+          `strata: setRelation place anchor for "${rel.name}" is not a sibling of the target — placed "last" (anchors race with reparents by design).`,
+        );
+      }
+    } else {
+      this.relations.setOne(rel, e, target);
+    }
     this.bumpRel(rel.id); // this relation's filtered membership changed (002 §4.2)
+  }
+
+  /** Reorder `e` within its current parent's sibling sequence (plan-ordered-relations §3.3).
+   *  No edge → DEV-warn + no-op; never throws on the shared path (remote/hostile robustness). */
+  private doMoveRelation(e: Entity, rel: Relation, place: OrderPlace): void {
+    if (DEV && this.writeHooks !== null) this.fireWrite("relation"); // petition 4 — a reorder IS a relation write
+    const outcome = this.relations.moveOne(rel, e, place);
+    if (!outcome.moved) {
+      if (DEV) devWarn(`strata: moveRelation on "${rel.name}" — entity has no edge; no-op.`);
+      return;
+    }
+    if (DEV && outcome.fellBack) {
+      devWarn(
+        `strata: moveRelation anchor for "${rel.name}" is not a sibling — placed "last" (anchors race with reparents by design).`,
+      );
+    }
+    this.bumpRel(rel.id); // reorder-only bump: legal over-fire for watches naming this relation (§3.4)
   }
 
   private doAddRelation(e: Entity, rel: Relation, target: Entity): void {
@@ -1358,8 +1411,10 @@ export class RuntimeStore implements ECSStore {
   // Relations (bidirectional indices, §3.3)
   // ---------------------------------------------------------------------------
 
-  /** Arity "one": set/replace the target. Places the source; the target is not placed (§5.2). */
-  setRelation(e: Entity, rel: Relation, target: Entity): void {
+  /** Arity "one": set/replace the target. Places the source; the target is not placed (§5.2).
+   *  For ORDERED relations `place` positions the source among the target's children (§3.3);
+   *  on unordered relations a `place` is ignored with a DEV warning. */
+  setRelation(e: Entity, rel: Relation, target: Entity, place?: OrderPlace): void {
     if (this.rejectMutationInEmit("setRelation")) return; // 002 §6
     this.assertAlive(e, "setRelation");
     if (rel.arity !== "one") {
@@ -1367,7 +1422,42 @@ export class RuntimeStore implements ECSStore {
         `strata: setRelation is for arity "one" relations — use addRelation for "${rel.name}".`,
       );
     }
-    this.doSetRelation(e, rel, target);
+    if (DEV && place !== undefined && !rel.ordered) {
+      devWarn(`strata: setRelation place ignored — "${rel.name}" is not an ordered relation.`);
+    }
+    this.doSetRelation(e, rel, target, place); // unordered arm ignores place (one branch, §D8)
+  }
+
+  /**
+   * Reorder `e` within its current parent's sibling sequence (plan-ordered-relations §3.3).
+   * Ordered relations only — calling on an unordered relation is a local API misuse and throws
+   * (parity with the arity guards above). No edge → DEV-warn + no-op.
+   */
+  moveRelation(e: Entity, rel: Relation, place: OrderPlace): void {
+    if (this.rejectMutationInEmit("moveRelation")) return; // 002 §6
+    this.assertAlive(e, "moveRelation");
+    if (!rel.ordered) {
+      throw new Error(`strata: moveRelation requires an ordered relation — "${rel.name}" is unordered.`);
+    }
+    this.doMoveRelation(e, rel, place);
+  }
+
+  /**
+   * The effective-order version of `parent` under ordered relation `rel` — monotonic, bumped on
+   * every sibling-sequence change (§3.3). 0 = never changed since arming. The first call ARMS
+   * stamp collection (the reactiveOn mirror): consumers arm before the mutations they care
+   * about; a pull-only cache keyed on this never misses afterwards.
+   */
+  orderStamp(parent: Entity, rel: Relation): number {
+    if (!rel.ordered) {
+      // rev-m1-core finding 2: polling an unordered relation would read a forever-0 "never
+      // changed" and keep stale caches silently — same misuse class as moveRelation, but a
+      // read stays gentle: DEV-warn + 0, and deliberately does NOT arm collection.
+      if (DEV) devWarn(`strata: orderStamp on "${rel.name}" — not an ordered relation; always 0.`);
+      return 0;
+    }
+    if (!this.orderStampsArmed) this.orderStampsArmed = true;
+    return this.orderStamps.get(rel.id)?.get(parent) ?? 0;
   }
 
   /** Arity "many": add an edge (idempotent). Places the source; the target is not placed. */
@@ -1402,6 +1492,19 @@ export class RuntimeStore implements ECSStore {
   /** The entities pointing at `e` via `rel` (reverse index), validated. */
   getReverse(e: Entity, rel: Relation): Entity[] {
     return this.relations.getReverse(rel, e);
+  }
+
+  /** @internal Every (parent, children) sequence of an ordered relation — snapshot export (§3.5).
+   *  Live view; do not mutate. */
+  orderedEntriesOf(rel: Relation): IterableIterator<[Entity, readonly Entity[]]> {
+    return this.relations.orderedEntries(rel);
+  }
+
+  /** @internal Overwrite a parent's sibling sequence wholesale — snapshot import's D7 application
+   *  (§3.5) and, in M2, the projector's order-cell application. Assigns sequence, never membership:
+   *  the caller passes exactly the parent's current children. */
+  setOrderedChildren(rel: Relation, parent: Entity, children: Entity[]): void {
+    this.relations.setOrderedChildren(rel, parent, children);
   }
 
   // ---------------------------------------------------------------------------
@@ -1569,7 +1672,13 @@ export class RuntimeStore implements ECSStore {
       case "setRelation": {
         const rel = relationById(cmd.relation);
         if (rel === undefined || !this.table.isAlive(cmd.target)) return; // drop an edge to a dead target
-        this.doSetRelation(cmd.entity, rel, cmd.target);
+        this.doSetRelation(cmd.entity, rel, cmd.target, cmd.place);
+        return;
+      }
+      case "moveRelation": {
+        const rel = relationById(cmd.relation);
+        if (rel === undefined || !rel.ordered) return; // deferred op against a retired/unordered id: drop
+        this.doMoveRelation(cmd.entity, rel, cmd.place);
         return;
       }
       case "addRelation": {

@@ -11,6 +11,7 @@
  * framework-name reservations (e.g. the ephemeral store's `Local` tag, §3.4).
  */
 
+import type { Entity } from "./entity";
 import { Registry } from "./registry";
 import {
   type ColumnKind,
@@ -78,11 +79,22 @@ export interface SpawnInitOf<T extends readonly Record<string, FieldInput>[]> {
 
 export type Arity = "one" | "many";
 
+/**
+ * Sibling placement for ordered relations (plan-ordered-relations §3.3). Used by
+ * `setRelation(child, R, parent, place)` and `moveRelation(child, R, place)`. `"last"` is the
+ * default everywhere. A `before`/`after` anchor that is not currently a sibling of the same
+ * parent degrades to `"last"` with a DEV warning — never a throw (anchors race with remote
+ * reparents by design).
+ */
+export type OrderPlace = "first" | "last" | { readonly before: Entity } | { readonly after: Entity };
+
 /** The public relation handle. */
 export interface Relation {
   readonly id: RelationId;
   readonly name: string;
   readonly arity: Arity;
+  /** Ordered relations keep each target's reverse set as a sibling SEQUENCE (plan-ordered-relations D1). */
+  readonly ordered: boolean;
 }
 
 /** The public resource (world-singleton) handle. `S`/`Sch` mirror {@link Component} (§3.4). */
@@ -201,13 +213,23 @@ export function defineFrameworkTag(name: string): Tag {
   return handle;
 }
 
-/** Declare a typed directed link between entities (§4). */
-export function defineRelation(name: string, opts?: { arity?: Arity }): Relation {
+/** Declare a typed directed link between entities (§4). `ordered: true` (arity "one" only,
+ *  plan-ordered-relations D1) makes each target's reverse set a sibling sequence. */
+export function defineRelation(name: string, opts?: { arity?: Arity; ordered?: boolean }): Relation {
   names.define(name);
+  const arity = opts?.arity ?? "one";
+  const ordered = opts?.ordered ?? false;
+  if (ordered && arity !== "one") {
+    // A schema-authoring error, rejected in every build: the CRDT model (D2) rides the
+    // single-parent invariant only arity "one" provides; forward-ordered "many" is a
+    // deliberately deferred extension (plan-ordered-relations §5).
+    throw new Error(`strata: ordered relations require arity "one" — "${name}" declared ordered with arity "many".`);
+  }
   const handle: Relation = {
     id: nextRelationId++,
     name,
-    arity: opts?.arity ?? "one",
+    arity,
+    ordered,
   };
   relationsById[handle.id] = handle;
   relationsByName.set(name, handle);

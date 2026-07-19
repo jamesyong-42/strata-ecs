@@ -16,7 +16,9 @@ import { type Entity, NULL_ENTITY } from "./entity";
 import type { Component, Tag } from "./schema";
 import {
   componentByName,
+  relationById,
   relationByName,
+  relationCount,
   resourceByName,
   tagByName,
 } from "./schema";
@@ -37,6 +39,11 @@ export interface Snapshot {
   meta: { name: string; format_version: number };
   resources: Record<string, unknown>;
   entities: EntityRecord[];
+  // Ordered relations only (plan-ordered-relations §3.5): relation name → parent snapshot id
+  // (object key, so a numeric string) → child snapshot ids in sibling order. ADDITIVE — absent
+  // on legacy snapshots and on worlds with no ordered sequences; import then falls back to the
+  // deterministic completion order (ascending snapshot id).
+  order?: Record<string, Record<string, number[]>>;
 }
 
 function hasEidField(c: Component): boolean {
@@ -86,10 +93,33 @@ export function exportSnapshot(store: RuntimeStore, name: string): Uint8Array {
     records.push({ id: i, components, tags, relations });
   }
 
+  // Ordered sibling sequences (§3.5) — one section per ordered relation with any sequence.
+  // Unplaced parents/children are skipped, mirroring how their edges drop out of `relations`
+  // above; entries are alive by construction (despawn splices eagerly).
+  let order: Record<string, Record<string, number[]>> | undefined;
+  for (let rid = 0; rid < relationCount(); rid++) {
+    const rel = relationById(rid);
+    if (rel === undefined || !rel.ordered) continue;
+    let byParent: Record<string, number[]> | undefined;
+    for (const [parent, children] of store.orderedEntriesOf(rel)) {
+      const pid = idOf.get(parent);
+      if (pid === undefined) continue;
+      const ids: number[] = [];
+      for (const c of children) {
+        const cid = idOf.get(c);
+        if (cid !== undefined) ids.push(cid);
+      }
+      if (ids.length === 0) continue;
+      (byParent ??= {})[pid] = ids;
+    }
+    if (byParent !== undefined) (order ??= {})[rel.name] = byParent;
+  }
+
   const snapshot: Snapshot = {
     meta: { name, format_version: FORMAT_VERSION },
     resources,
     entities: records,
+    ...(order !== undefined ? { order } : {}),
   };
   return new TextEncoder().encode(JSON.stringify(snapshot));
 }
@@ -118,6 +148,28 @@ export function parseSnapshot(bytes: Uint8Array): Snapshot {
     }
     for (const rName of Object.keys(record.relations)) {
       if (relationByName(rName) === undefined) throw new Error(`strata: snapshot references unknown relation "${rName}".`);
+    }
+  }
+  // Order section (§3.5): SHAPE validation only, fail-closed before any reset — semantic
+  // disagreements with the edges (stale/foreign entries) are D7-filtered at apply, never errors.
+  if (snapshot.order !== undefined) {
+    if (typeof snapshot.order !== "object" || snapshot.order === null || Array.isArray(snapshot.order)) {
+      throw new Error("strata: snapshot order section is not an object.");
+    }
+    const ids = new Set(snapshot.entities.map((r) => r.id));
+    for (const [rName, byParent] of Object.entries(snapshot.order)) {
+      const rel = relationByName(rName);
+      if (rel === undefined) throw new Error(`strata: snapshot order references unknown relation "${rName}".`);
+      if (!rel.ordered) throw new Error(`strata: snapshot order references unordered relation "${rName}".`);
+      if (typeof byParent !== "object" || byParent === null || Array.isArray(byParent)) {
+        throw new Error(`strata: snapshot order for "${rName}" is not an object.`);
+      }
+      for (const [pid, children] of Object.entries(byParent)) {
+        if (!ids.has(Number(pid))) throw new Error(`strata: snapshot order for "${rName}" names unknown parent ${pid}.`);
+        if (!Array.isArray(children) || children.some((c) => typeof c !== "number" || !ids.has(c))) {
+          throw new Error(`strata: snapshot order for "${rName}" parent ${pid} has a malformed child list.`);
+        }
+      }
     }
   }
   return snapshot;
@@ -193,6 +245,41 @@ export function applySnapshot(store: RuntimeStore, snapshot: Snapshot): void {
         if (target === undefined) continue;
         if (rel.arity === "one") store.setRelation(handle, rel, target);
         else store.addRelation(handle, rel, target);
+      }
+    }
+  }
+
+  // Phase 3 — ordered sibling sequences, applied per D7 (plan-ordered-relations §3.5): keep the
+  // section's entries that are LIVE CHILDREN of the parent (first occurrence wins), then append
+  // every remaining child in ascending snapshot-id order. A legacy snapshot (no section) leaves
+  // the phase-2 wiring order — records are imported in ascending id order, so that IS the
+  // completion order; both paths are deterministic.
+  if (snapshot.order !== undefined) {
+    const idOfHandle = new Map<Entity, number>();
+    for (const [id, h] of handleOf) idOfHandle.set(h, id);
+    for (const [rName, byParent] of Object.entries(snapshot.order)) {
+      const rel = relationByName(rName);
+      if (rel === undefined || !rel.ordered) {
+        throw new Error(`strata: snapshot order references unknown or unordered relation "${rName}".`);
+      }
+      for (const [pidStr, childIds] of Object.entries(byParent)) {
+        const parent = handleOf.get(Number(pidStr));
+        if (parent === undefined) continue;
+        const current = store.getReverse(parent, rel);
+        if (current.length === 0) continue;
+        const isChild = new Set(current);
+        const seen = new Set<Entity>();
+        const effective: Entity[] = [];
+        for (const cid of childIds) {
+          const child = handleOf.get(cid);
+          if (child === undefined || !isChild.has(child) || seen.has(child)) continue;
+          seen.add(child);
+          effective.push(child);
+        }
+        const rest = current.filter((c) => !seen.has(c));
+        rest.sort((a, b) => (idOfHandle.get(a) ?? 0) - (idOfHandle.get(b) ?? 0));
+        effective.push(...rest);
+        store.setOrderedChildren(rel, parent, effective);
       }
     }
   }
