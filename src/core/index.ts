@@ -7,7 +7,7 @@
  */
 
 /** Package version. Kept in sync with package.json at release time (pinned by api-surface.test.ts). */
-export const VERSION = "0.8.0";
+export const VERSION = "0.9.0";
 
 // --- entity handle ---
 export type { Entity } from "./entity";
