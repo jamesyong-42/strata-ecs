@@ -1,0 +1,2 @@
+# Room snapshots the host autosaves (and any quarantined ones) — runtime state, never committed.
+data/

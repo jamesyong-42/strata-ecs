@@ -1,0 +1,17 @@
+{
+  "name": "@strata-ecs/example-headless-host",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A headless/Node document host for strata-ecs: multiple rooms, each an authoritative World + DurableStore in one process, syncing with clients over WebSocket and persisting to disk. The proof that server-side hosting is a supported mode.",
+  "type": "module",
+  "scripts": {
+    "start": "node src/host.mjs",
+    "client": "node src/client.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@vibecook/strata-ecs": "workspace:*",
+    "loro-crdt": "^1.13.6",
+    "ws": "^8.18.0"
+  }
+}

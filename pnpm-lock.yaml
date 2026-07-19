@@ -126,6 +126,18 @@ importers:
         specifier: ^8.18.0
         version: 8.21.0
 
+  examples/headless-host:
+    dependencies:
+      '@vibecook/strata-ecs':
+        specifier: workspace:*
+        version: link:../..
+      loro-crdt:
+        specifier: ^1.13.6
+        version: 1.13.6
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.0
+
 packages:
 
   '@electron-internal/extract-zip@1.0.4':

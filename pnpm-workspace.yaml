@@ -10,3 +10,6 @@ packages:
   # The Electron desktop shell around the canvas-editor (serverless tailnet collab via truffle) —
   # electron/truffle stay out of strata's graph the same way.
   - "examples/canvas-desktop"
+  # The headless/Node document host — authoritative Worlds server-side, syncing over ws + persisting to
+  # disk; isolated the same way so its ws/loro-crdt deps stay out of strata's own graph.
+  - "examples/headless-host"

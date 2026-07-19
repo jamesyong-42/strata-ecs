@@ -38,6 +38,10 @@ jobs:
       # The publish artifact must stay buildable — dts generation can break independently of tests.
       - run: pnpm build
 
+      # The headless document-host example consumes the built dist; run its smoke (host restart +
+      # multi-room convergence) after the build so a regression in the durable/sync seam is caught here.
+      - run: pnpm --filter @strata-ecs/example-headless-host test
+
   consumer:
     strategy:
       fail-fast: false
