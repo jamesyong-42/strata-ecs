@@ -267,19 +267,27 @@ function parseJsonOpId(id: string): { peer: `${number}`; counter: number } {
  * merge into ONE array-valued op) · delete → `len` · move/set → 1; every map op → 1. Dispatch on
  * the CONTAINER kind so a hostile array-valued map register cannot inflate a map op's span.
  *
- * KNOWN RESIDUAL (rev-m3 finding 1, PRE-EXISTING — the old ops.length shortcut had the identical
- * hole): a hostile LoroText/LoroTree commit still undercounts (a text insert spans its character
- * length in ONE op), mis-splitting THAT FOREIGN WRITER's own commit boundaries. Blast radius is
- * contained to the hostile writer's mixed commits (honest changes' counters come from their own
- * change.id); fixing Text needs its op shape probe-pinned first (M0 discipline) — recorded in
- * plan-ordered-relations §4.5b.
+ * Text (probe-pinned, M4): inserts merge into one op spanning the text's UNICODE CODE POINTS —
+ * `[...text].length`, NOT `.length` (an astral emoji is one counter but two UTF-16 units);
+ * deletes span `len`. KNOWN RESIDUAL: hostile LoroTree commits still count 1 per op (unprobed;
+ * mis-splits only that foreign writer's own commit boundaries — honest changes' counters come
+ * from their own change.id) — recorded in plan-ordered-relations §4.5b.
  */
 function opCounterSpan(op: JsonChange["ops"][number]): number {
-  if (!String(op.container).endsWith("List")) return 1; // "List" catches MovableList + List
-  const content = op.content as { type?: string; value?: unknown; len?: number };
-  if (content.type === "insert" && Array.isArray(content.value)) return content.value.length;
-  if (content.type === "delete" && typeof content.len === "number") return content.len;
-  return 1;
+  const kind = String(op.container);
+  const content = op.content as { type?: string; value?: unknown; len?: number; text?: string };
+  if (kind.endsWith("List")) {
+    // "List" catches MovableList + plain List (same JSON op shapes).
+    if (content.type === "insert" && Array.isArray(content.value)) return content.value.length;
+    if (content.type === "delete" && typeof content.len === "number") return content.len;
+    return 1; // move / set
+  }
+  if (kind.endsWith("Text")) {
+    if (content.type === "insert" && typeof content.text === "string") return [...content.text].length;
+    if (content.type === "delete" && typeof content.len === "number") return content.len;
+    return 1; // mark etc.
+  }
+  return 1; // map / tree / counter ops are one counter each (tree unprobed — see header)
 }
 
 /**

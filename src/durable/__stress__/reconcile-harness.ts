@@ -16,8 +16,8 @@
  */
 
 import { LoroDoc } from "loro-crdt";
-import { createWorld, defineComponent } from "../../core";
-import type { Component, EntityKey, World } from "../../core";
+import { createWorld, defineComponent, defineRelation } from "../../core";
+import type { Component, Entity, EntityKey, OrderPlace, World } from "../../core";
 import { cellEquals } from "../../substrate";
 import type { ComponentValue } from "../../substrate";
 import { createDurableStore, type DurableStore } from "../durable-store";
@@ -27,6 +27,11 @@ import { mulberry32, randInt } from "../../core/__stress__/harness";
 /** Two components: a DRAGGED one (the conflict path) and a never-dragged one (component independence, §13.4). */
 export const HPos = defineComponent("HReconPos", { x: "f32", y: "f32" });
 export const HFill = defineComponent("HReconFill", { r: "u8", g: "u8", b: "u8" });
+/** Ordered arity-one relation (plan-ordered-relations M4 fuzz): entities stack under two shared
+ *  parents; ops reparent/place/move/remove concurrently. The oracle asserts INVARIANTS — identical
+ *  effective order across peers + edge authority — never exact order (loro owns concurrent-move
+ *  outcomes; the M0 probe pins those). */
+export const HStack = defineRelation("HReconStack", { arity: "one", ordered: true });
 
 interface Peer {
   store: DurableStore;
@@ -53,8 +58,24 @@ function readRuntime(peer: Peer, key: EntityKey, comp: Component): ComponentValu
   return h === undefined ? undefined : (peer.world.get(h, comp) as ComponentValue | undefined);
 }
 
+/** A random OrderPlace: first/last or an anchor drawn from the shared key pool (which may be a
+ *  non-sibling or dead — the documented degrade-to-last race, exercised on purpose). */
+function randPlace(peer: Peer, keys: EntityKey[], rng: () => number): OrderPlace {
+  switch (randInt(rng, 4)) {
+    case 0:
+      return "first";
+    case 1:
+      return "last";
+    default: {
+      const anchor = peer.store.resolve(keys[randInt(rng, keys.length)]);
+      if (anchor === undefined) return "last";
+      return randInt(rng, 2) === 0 ? { before: anchor } : { after: anchor };
+    }
+  }
+}
+
 /** Apply one random op to `peer` on one of the shared `keys` (no `sync()` here — the caller syncs every op). */
-function stepPeer(peer: Peer, keys: EntityKey[], rng: () => number): void {
+function stepPeer(peer: Peer, keys: EntityKey[], parents: EntityKey[], rng: () => number): void {
   const idx = randInt(rng, keys.length);
   const key = keys[idx];
   const h = peer.store.resolve(key);
@@ -66,7 +87,7 @@ function stepPeer(peer: Peer, keys: EntityKey[], rng: () => number): void {
   }
   const hasHPos = peer.att.baseline.getComponent(key, HPos) !== undefined;
   const hasHFill = peer.att.baseline.getComponent(key, HFill) !== undefined;
-  switch (randInt(rng, 7)) {
+  switch (randInt(rng, 10)) {
     case 0: {
       // Start/continue a runtime-only DRAG on HPos (divergence from baseline — remote HPos values drop).
       if (!hasHPos) return; // HPos was removed by a destroy/partial-resurrection — nothing to drag
@@ -110,6 +131,25 @@ function stepPeer(peer: Peer, keys: EntityKey[], rng: () => number): void {
       peer.store.transaction((tx) => tx.destroy(h));
       peer.drag.delete(idx);
       break;
+    case 7: {
+      // ORDERED placed set / reparent (plan-ordered-relations M4): stack this entity under a random
+      // parent at a random place. Concurrent same-child reparents + racing anchors on purpose.
+      const parent = peer.store.resolve(parents[randInt(rng, parents.length)]);
+      if (parent === undefined || parent === h) return;
+      const place = randPlace(peer, keys, rng);
+      peer.store.transaction((tx) => tx.setRelation(h, HStack, parent, place));
+      break;
+    }
+    case 8: {
+      // ORDERED move-in-place (no-edge is a legal no-op — the race rule).
+      const place = randPlace(peer, keys, rng);
+      peer.store.transaction((tx) => tx.moveRelation(h, HStack, place));
+      break;
+    }
+    case 9:
+      // ORDERED edge remove (splices the sequence entry with the edge).
+      peer.store.transaction((tx) => tx.removeRelation(h, HStack));
+      break;
   }
 }
 
@@ -137,12 +177,19 @@ export function runConvergenceProperty(opts: { seed: number; ops: number; entiti
   const a = makePeer(1);
   const b = makePeer(2);
 
-  // Shared base: A creates the entities (HPos + HFill), B bootstraps from A's snapshot, both settle.
+  // Shared base: A creates the entities (HPos + HFill) plus TWO stack parents (never destroyed —
+  // ordered ops target them; children churn freely), B bootstraps from A's snapshot, both settle.
   const keys: EntityKey[] = [];
   for (let i = 0; i < entities; i++) {
     const h = a.store.transaction((tx) => tx.spawn({ components: [[HPos, posVal(rng)], [HFill, fillVal(rng)]] }));
     a.world.sync();
     keys.push(a.store.keyOf(h)!);
+  }
+  const parents: EntityKey[] = [];
+  for (let i = 0; i < 2; i++) {
+    const h = a.store.transaction((tx) => tx.spawn({ components: [[HPos, posVal(rng)]] }));
+    a.world.sync();
+    parents.push(a.store.keyOf(h)!);
   }
   b.store.applyRemote(a.store.snapshot.export());
   a.store.applyRemote(b.store.snapshot.export());
@@ -157,8 +204,8 @@ export function runConvergenceProperty(opts: { seed: number; ops: number; entiti
 
   const k = 3; // exchange every k ops
   for (let step = 0; step < ops; step++) {
-    stepPeer(a, keys, rng);
-    stepPeer(b, keys, rng);
+    stepPeer(a, keys, parents, rng);
+    stepPeer(b, keys, parents, rng);
     a.world.sync(); // sync every op — a mid-drag remote drops + holds, a settled cell agrees
     b.world.sync();
     if (step % k === 0) exchange();
@@ -193,6 +240,34 @@ export function runConvergenceProperty(opts: { seed: number; ops: number; entiti
       if (!cellEquals(docA as ComponentValue, docB as ComponentValue)) fail("docA != docB (docs did not converge)");
       if (!cellEquals(ra, docA as ComponentValue)) fail("runtimeA != docA");
       if (!cellEquals(rb, docB as ComponentValue)) fail("runtimeB != docB");
+    }
+  }
+
+  // ORDER INVARIANTS (plan-ordered-relations §4.4.8 — the fuzz asserts invariants, never exact
+  // order): for each stack parent, (1) both peers read the IDENTICAL effective child order;
+  // (2) EDGE AUTHORITY — every entry is a child per the converged DOC, and every doc-child
+  // appears exactly once (permutation, no loss, no duplicate); (3) both docs agree.
+  for (const pk of parents) {
+    const orderOf = (peer: Peer): EntityKey[] | undefined => {
+      const ph = peer.store.resolve(pk);
+      if (ph === undefined) return undefined;
+      return peer.world.getReverse(ph, HStack).map((c: Entity) => peer.store.keyOf(c)!);
+    };
+    const oa = orderOf(a);
+    const ob = orderOf(b);
+    const docChildrenOf = (peer: Peer): EntityKey[] =>
+      keys.filter((ck) => peer.store.snapshot.getRelationOne(ck, HStack) === pk);
+    const da = docChildrenOf(a).sort();
+    const db = docChildrenOf(b).sort();
+    const fail = (why: string): never => {
+      throw new Error(
+        `order-convergence[seed=${seed}] parent=${pk} ${why}: A=${JSON.stringify(oa)} B=${JSON.stringify(ob)} docA=${JSON.stringify(da)} docB=${JSON.stringify(db)}`,
+      );
+    };
+    if (JSON.stringify(da) !== JSON.stringify(db)) fail("doc membership diverged");
+    if (JSON.stringify(oa) !== JSON.stringify(ob)) fail("effective order diverged");
+    if (oa !== undefined && JSON.stringify([...oa].sort()) !== JSON.stringify(da)) {
+      fail("runtime order is not a permutation of the doc's children (edge authority broken)");
     }
   }
 

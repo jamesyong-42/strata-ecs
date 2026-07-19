@@ -828,6 +828,35 @@
         read what you need inside the loop, never retain them past it.
       </p>
     </div>
+
+    <h3 id="ordered-relations">Ordered relations</h3>
+    <p>
+      By default a relation is an unordered set: <code>getReverse</code> hands you a target's inbound
+      edges in no guaranteed order. Declare one <code>ordered</code> and that reverse set becomes a
+      <em>sequence</em> — the children of a parent, in an order you control that survives edits,
+      reparents, and multiplayer merges. Ordered relations are arity <code>one</code> only: each child
+      has a single parent, which is what makes “where does it sit among its siblings?” a well-defined
+      question.
+    </p>
+    <figure class="code" data-file="ordered-relations.ts"></figure>
+    <p>
+      There is no second order API to keep in sync. For an ordered relation,
+      <code>getReverse(parent, ChildOf)</code> <em>is</em> the sibling order — read it and render. You
+      place a child as you link it: <code>setRelation</code> takes a fourth argument —
+      <code>"first"</code>, <code>"last"</code> (the default), or <code>{ before: sibling }</code> /
+      <code>{ after: sibling }</code> — and <code>moveRelation(child, ChildOf, place)</code> reorders it
+      in place afterward. An anchor that is no longer a sibling (a teammate reparented it mid-gesture)
+      never throws: the child lands <code>"last"</code> with a dev-mode warning, because placement races
+      reparents by design.
+    </p>
+    <p>
+      A reorder changes no component value, so a plain query watch on the parent may not fire for it
+      alone. <code>orderStamp(parent, ChildOf)</code> is the cheap poll for exactly that case: a
+      monotonic version number that bumps whenever the parent's sibling order moves, so a render cache
+      can compare last-seen against current and rebuild only the lists that actually reordered. It arms
+      on first read and is pull-only — pair it with a query watch on the relation for the wake, then read
+      the stamp for the did-it-change filter.
+    </p>
   </section>
 
   <!-- ============================================================= SYSTEMS -->
@@ -1191,6 +1220,20 @@
       <span class="tag">Rule — identity</span>
       <p>Persist keys, never handles: <code>doc.keyOf(e)</code> on the way out, <code>doc.resolve(key)</code> on the way in. A stored handle from a past session is meaningless.</p>
     </div>
+    <p>
+      <a href="#ordered-relations">Ordered relations</a> sync through this layer like any other
+      structure: sibling order converges across peers, and two people reordering the same list at once
+      resolve cleanly — the Figma-style sibling-list merge you'd expect, with no ordering code of your
+      own. Because a reorder is recorded inside a <code>doc.transaction</code>, a drag that moves an item
+      is one gesture and one undo step; <code>moveRelation</code> rides the same commit as the rest of
+      the gesture.
+    </p>
+    <div class="rule r-durable">
+      <span class="tag">Rule — everyone on 0.8.0+</span>
+      <p>Documents that use ordered relations need every collaborator on <strong>0.8.0 or newer</strong>.
+      Older builds delete order state when an entity despawns and drop order changes outright, so a single
+      out-of-date peer is enough to lose sibling order for the whole document.</p>
+    </div>
 
     <h3>Document metadata</h3>
     <p>
@@ -1543,6 +1586,19 @@ const children    = defineQuery([Position, Related(ChildOf, parent)]); // a spec
     draw(px[r], py[r], batch.entity(r));
   }
 });
+</script>
+
+<script type="text/plain" data-code="ordered-relations.ts">import { defineRelation } from "@vibecook/strata-ecs";
+
+// arity "one" + ordered — each child has one parent, kept in sibling order.
+const ChildOf = defineRelation("ChildOf", { arity: "one", ordered: true });
+
+world.setRelation(circle, ChildOf, layer);                     // append  → [circle]
+world.setRelation(square, ChildOf, layer, { before: circle }); // insert  → [square, circle]
+world.moveRelation(circle, ChildOf, "first");                  // reorder → [circle, square]
+
+world.getReverse(layer, ChildOf);   // [circle, square] — the reverse set IS the order
+world.orderStamp(layer, ChildOf);   // a number that bumps when this parent reorders
 </script>
 
 <script type="text/plain" data-code="systems.ts">import { defineSystem, defineQuery, phase } from "@vibecook/strata-ecs";

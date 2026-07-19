@@ -4,6 +4,40 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [0.8.0] — 2026-07-19
+
+### Added
+
+- **Ordered relations — sibling order as a first-class, collaborative primitive.**
+  `defineRelation(name, { arity: "one", ordered: true })` makes each target's reverse set an
+  ordered SEQUENCE: `getReverse(parent, R)` returns children in sibling order (that order IS the
+  API), `setRelation(child, R, parent, place?)` takes a placement (`"first" | "last" |
+  { before } | { after }`), and the new `world.moveRelation(child, R, place)` reorders in place.
+  Anchors that lose a race (the sibling vanished or reparented) degrade to `"last"` with a dev
+  warning — placement never throws. The new `world.orderStamp(parent, R)` is a monotonic
+  per-parent order version (armed on first read, pull-only) for render-ordinal caches; reorders
+  wake `observeQuery` watches naming the relation. The JSON snapshot round-trips order through an
+  additive section; legacy snapshots import with a deterministic completion order. This is the
+  tree shape canvas z-stacking, child-order, and layers UIs need — membership stays exactly
+  where it was (the child's single edge), order is a subordinate sequence per parent.
+- **Order syncs through the document layer.** Transactions gain the same surface
+  (`tx.setRelation(…, place?)`, `tx.moveRelation`) — one gesture = one undo step, moves
+  included; reorders reach other peers as compact order updates backed by a CRDT movable list,
+  so concurrent reorders converge like Figma-style sibling lists (native move semantics: a
+  concurrently moved-and-deleted entry survives as a move; a move never duplicates). Undo of a
+  reparent restores the edge and both sequences atomically. Ordered relations are runtime-free
+  when unused and pay one dormant branch when unordered relations mutate — comparative
+  structural benchmarks against 0.7.0 are flat.
+
+### Compatibility
+
+- **Documents that use ordered relations require every collaborator on 0.8.0+.** Older builds
+  neither read nor write sibling order; worse, their despawn path deletes the order container
+  outright (re-opening a convergence hole this layout closed) and they silently drop incoming
+  order updates. Gate mixed-version rooms at your document-open layer (an envelope/schema
+  version, as in the reference apps) before adopting ordered relations in shared docs.
+  Unordered relations and all existing docs are unaffected — the wire format is additive.
+
 ## [0.7.0] — 2026-07-14
 
 ### Added

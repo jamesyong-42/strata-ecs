@@ -473,6 +473,7 @@
         <tr><td class="band b-core"><a href="#core-defineComponent"><code>defineComponent</code></a></td><td class="k">fn</td><td>Declare a component and route its fields to typed columns.</td></tr>
         <tr><td class="band b-core"><a href="#core-defineTag"><code>defineTag</code></a></td><td class="k">fn</td><td>Declare a zero-data marker tag.</td></tr>
         <tr><td class="band b-core"><a href="#core-defineRelation"><code>defineRelation</code></a></td><td class="k">fn</td><td>Declare a directed, inverse-indexed link between entities.</td></tr>
+        <tr><td class="band b-core"><a href="#core-OrderPlace"><code>OrderPlace</code></a></td><td class="k">type</td><td>Sibling placement for an ordered relation — <code>"first"</code>, <code>"last"</code>, <code>{before}</code>, <code>{after}</code>.</td></tr>
         <tr><td class="band b-core"><a href="#core-defineResource"><code>defineResource</code></a></td><td class="k">fn</td><td>Declare a world-scoped singleton.</td></tr>
         <tr><td class="band b-core"><a href="#core-field"><code>field</code></a></td><td class="k">fn</td><td>Wrap a field type with options (a per-field default).</td></tr>
         <tr><td class="band b-core"><a href="#core-enumOf"><code>enumOf</code></a></td><td class="k">fn</td><td>Declare an enum field — a closed label set.</td></tr>
@@ -622,11 +623,34 @@
         a single replaceable target) or <code>"many"</code> (a set of edges). Relations are inverse-indexed,
         so the reverse direction is O(1), and deleting either endpoint cascades the edge away with no
         cleanup code. In a query, one <code>Related</code> term is a single hop — there is no multi-hop
-        traversal (<a href="#core-operators"><code>Related</code></a>).
+        traversal (<a href="#core-operators"><code>Related</code></a>). Pass <code>ordered: true</code>
+        (arity <code>"one"</code> only) to keep each target's reverse set as a sibling <em>sequence</em>
+        you place and reorder — see <a href="#core-OrderPlace"><code>OrderPlace</code></a>.
       </p>
       <ul class="notes">
         <li><span class="nl">Types</span> <code>Arity = "one" | "many"</code>.</li>
+        <li><span class="nl">Ordered</span> <code>ordered: true</code> makes the reverse set an ordered sibling list (<a href="index.html#ordered-relations">Ordered relations</a>). It requires arity <code>"one"</code> — declaring it <code>"many"</code> throws at definition time.</li>
         <li><span class="nl">See</span> <a href="index.html#queries">Queries</a> · <a href="#core-Batch"><code>Batch.getRelated</code></a></li>
+      </ul>
+    </article>
+
+    <article class="entry e-core" id="core-OrderPlace">
+      <h3><span class="k">type</span>OrderPlace<a class="anchor" href="#core-OrderPlace">#</a></h3>
+      <figure class="code" data-file="core-OrderPlace" data-kind="type"></figure>
+      <p>
+        Where to place a child among its siblings under an
+        <a href="index.html#ordered-relations">ordered relation</a>. It is the fourth argument to
+        <code>setRelation</code> and the placement argument to <code>moveRelation</code> — on
+        <code>world</code>, <code>ctx</code>, and a durable <code>tx</code> alike. <code>"last"</code> is
+        the default everywhere; <code>{ before }</code> / <code>{ after }</code> position relative to a
+        current sibling of the same parent.
+      </p>
+      <ul class="notes">
+        <li><span class="nl">Degrades</span> A <code>before</code> / <code>after</code> anchor that is not currently a sibling of the same parent (a concurrent reparent moved it) places the child <code>"last"</code> with a DEV warning — never a throw, since placement races reparents by design.</li>
+        <li><span class="nl">Reorder</span> <code>world.moveRelation(e, r, place)</code> reorders <code>e</code> within its current parent's sibling sequence. It throws on an unordered relation, and is a DEV-warn no-op when <code>e</code> has no edge under <code>r</code>.</li>
+        <li><span class="nl">Read</span> <code>getReverse(parent, r)</code> returns the children in sibling order — for an ordered relation the reverse set <em>is</em> the order.</li>
+        <li><span class="nl">Poll</span> <code>world.orderStamp(parent, r): number</code> is a monotonic per-parent version that bumps when the parent's sibling order changes; it arms on first read and is pull-only (pair it with an <code>observeQuery</code> naming <code>r</code> for the wake). Use it to rebuild a render cache only for the lists that actually reordered.</li>
+        <li><span class="nl">Scope</span> Ordered relations are arity <code>"one"</code> only (<a href="#core-defineRelation"><code>defineRelation</code></a>).</li>
       </ul>
     </article>
 
@@ -953,6 +977,7 @@
         <li><span class="nl">Persist</span> <code>export()</code> returns readable UTF-8 JSON bytes; plain <code>import</code> needs an empty world; <code>import(bytes, { replace: true })</code> validates, then resets in place — keeping this <code>World</code> and every observer / reactive registration (<a href="index.html#persistence">Persistence</a>).</li>
         <li><span class="nl">Reset</span> After <code>reset()</code> / replace-import, every pre-reset handle reads dead, never aliased to a later entity; a single <code>onReset</code> fires, never per-entity <code>onDestroy</code>.</li>
         <li><span class="nl">spawn</span> The published <code>spawn</code> is generic: <code>spawn&lt;const T&gt;(init?: SpawnInitOf&lt;T&gt;)</code> infers each component's schema literal for per-field checking — condensed to <code>SpawnInit</code> above (<a href="#core-store">store seam</a>).</li>
+        <li><span class="nl">Ordered</span> For an ordered relation, <code>setRelation</code> takes a fourth <code>place</code> argument, <code>moveRelation(e, r, place)</code> reorders within the current parent, <code>getReverse</code> returns siblings in order, and <code>orderStamp(parent, r)</code> is the pull-only order-version poll (<a href="#core-OrderPlace"><code>OrderPlace</code></a>).</li>
       </ul>
     </article>
 
@@ -1289,6 +1314,7 @@
       <ul class="notes">
         <li><span class="nl d">Legal only</span> On an attached store, and not re-entrantly — one open transaction per store (a nested <code>transaction</code> throws).</li>
         <li><span class="nl d">Access</span> A value commit to a pre-existing component <em>inside a system</em> rides 001 enforcement — the system must declare it in <code>access.write</code>, or a dev build throws once an observer has armed enforcement.</li>
+        <li><span class="nl d">Ordered</span> <code>tx.setRelation</code> takes a <code>place</code> and <code>tx.moveRelation</code> reorders within the parent (<a href="#core-OrderPlace"><code>OrderPlace</code></a>). A <code>before</code> / <code>after</code> anchor is resolved when the call is recorded and re-checked at commit — if it is no longer a sibling then, the child degrades to <code>"last"</code>.</li>
         <li><span class="nl">Undoability</span> <code>opts.undoable: false</code> excludes this transaction's commit from the <strong>local</strong> undo stack — for document migrations, format upgrades, and read-repair at open. It is otherwise an ordinary commit: peers receive it as a normal remote batch, history hooks don't fire for it, and a pending redo survives it. Contrast <code>clearHistory()</code>, which empties both stacks wholesale.</li>
       </ul>
     </article>
@@ -1545,8 +1571,10 @@
 
 <script type="text/plain" data-code="core-defineTag">function defineTag(name: string): Tag;</script>
 
-<script type="text/plain" data-code="core-defineRelation">function defineRelation(name: string, opts?: { arity?: Arity }): Relation;
-type Arity = "one" | "many";</script>
+<script type="text/plain" data-code="core-defineRelation">function defineRelation(name: string, opts?: { arity?: Arity; ordered?: boolean }): Relation;
+type Arity = "one" | "many";   // ordered relations are arity "one" only</script>
+
+<script type="text/plain" data-code="core-OrderPlace">type OrderPlace = "first" | "last" | { before: Entity } | { after: Entity };</script>
 
 <script type="text/plain" data-code="core-defineResource">function defineResource<const Sch extends Record<string, FieldInput>>(
   name: string,
@@ -1569,7 +1597,7 @@ type EntityKey = string & { readonly __entityKey: unique symbol }; // stable cro
 
 interface Component<S = unknown, Sch = Record<string, FieldInput>> { id; name; fields; fieldByName }
 interface Tag      { id: TagId; name: string }
-interface Relation { id: RelationId; name: string; arity: Arity }
+interface Relation { id: RelationId; name: string; arity: Arity; ordered: boolean }
 interface Resource<S = unknown, Sch = ...> { id; name; fields; fieldByName }</script>
 
 <script type="text/plain" data-code="core-defineQuery">function defineQuery(terms: readonly QueryTerm[]): Query;
@@ -1642,7 +1670,9 @@ type Pipeline = readonly Phase[];   // positional — array order is run order</
   destroy(e: Entity): void;
   addComponent<S>(e, c: Component<S>, value: S): void;   removeComponent(e, c: Component): void;
   addTag(e, t): void;                                     removeTag(e, t): void;
-  setRelation(e, r, target): void; addRelation(e, r, target): void; removeRelation(e, r, target?): void;
+  setRelation(e, r, target, place?: OrderPlace): void;   // 4th arg positions an ordered relation
+  moveRelation(e, r, place: OrderPlace): void;           // reorder within the current parent (ordered only)
+  addRelation(e, r, target): void; removeRelation(e, r, target?): void;
 }</script>
 
 <script type="text/plain" data-code="core-SystemAccess">interface SystemAccess {
@@ -1670,7 +1700,9 @@ type Pipeline = readonly Phase[];   // positional — array order is run order</
   destroy(e: Entity): void;
   addComponent<S>(e, c: Component<S>, v: S): void;   removeComponent(e, c: Component): void;
   addTag(e, t: Tag): void;                            removeTag(e, t: Tag): void;
-  setRelation(e, r, target): void; addRelation(e, r, target): void; removeRelation(e, r, target?): void;
+  setRelation(e, r, target, place?: OrderPlace): void;   // 4th arg positions an ordered relation
+  moveRelation(e, r, place: OrderPlace): void;           // reorder within the current parent (ordered only)
+  addRelation(e, r, target): void; removeRelation(e, r, target?): void;
 
   // value — immediate, iteration-safe
   edit(e: Entity): EntityEditor;
@@ -1681,7 +1713,8 @@ type Pipeline = readonly Phase[];   // positional — array order is run order</
   read<S>(e, c: Component<S>): S;          get<S>(e, c: Component<S>): S | undefined;
   readField<S, K extends keyof S & string>(e, c: Component<S>, field: K): S[K] | undefined;
   has(e, c): boolean; hasTag(e, t): boolean;
-  getRelation(e, r): Entity | undefined; getRelations(e, r): Entity[]; getReverse(e, r): Entity[];
+  getRelation(e, r): Entity | undefined; getRelations(e, r): Entity[]; getReverse(e, r): Entity[]; // ordered: sibling order
+  orderStamp(parent, r): number;         // per-parent order version — arms on first read, pull-only
   getResource<S>(res: Resource<S>): S | undefined;   firstOf(q: Query): Entity | undefined;
   isAlive(e): boolean; isPlaced(e): boolean; isIdentityOnly(e): boolean;
 
@@ -1848,7 +1881,9 @@ interface Mutator {   // the tx vocabulary — same surface as world/ctx, sealed
   addComponent<S>(e, c: Component<S>, v: S): void;   removeComponent(e, c: Component): void;
   edit(e: Entity): TxEditor;
   addTag(e, t): void; removeTag(e, t): void;
-  setRelation(e, r, target): void; addRelation(e, r, target): void; removeRelation(e, r, target?): void;
+  setRelation(e, r, target, place?: OrderPlace): void;   // place resolves at record time, re-checked at commit
+  moveRelation(e, r, place: OrderPlace): void;           // reorder within the current parent (ordered only)
+  addRelation(e, r, target): void; removeRelation(e, r, target?): void;
   setResource<S>(res: Resource<S>, v: S): void;   removeResource(res: Resource): void;
 }
 interface TxEditor { set<S>(c: Component<S>, v: S): TxEditor }</script>

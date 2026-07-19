@@ -142,6 +142,31 @@ describe("M0 probe A — counter spans (GO/NO-GO 1)", () => {
   });
 });
 
+describe("M0 probe A2 — LoroText counter spans (M4 addendum; the hostile-text hole)", () => {
+  it("text inserts merge and span UNICODE CODE POINTS (not UTF-16 units); deletes span len", () => {
+    const doc = new LoroDoc();
+    doc.setPeerId(9);
+    const t = doc.getText("t");
+    t.insert(0, "hello");
+    t.insert(5, " wörld \u{1f44b}"); // multibyte + astral — merges into ONE op
+    t.delete(2, 3);
+    doc.getMap("entities").set("k", 1);
+    doc.commit();
+    const ops = doc.exportJsonUpdates().changes[0]!.ops;
+    expect(ops.length).toBe(3);
+    const [ins, del, map] = ops as unknown as [
+      { counter: number; content: { text: string } },
+      { counter: number; content: { len: number } },
+      { counter: number },
+    ];
+    const codePoints = [...ins.content.text].length; // 13 — "👋".length is 2 but ONE counter
+    expect(ins.content.text.length).toBe(14); // the UTF-16 trap, pinned
+    expect(del.counter).toBe(ins.counter + codePoints);
+    expect(map.counter).toBe(del.counter + del.content.len);
+    expect(doc.frontiers()[0]!.counter).toBe(map.counter); // map op spans 1
+  });
+});
+
 describe("M0 probe B — diff visibility (GO/NO-GO 2)", () => {
   it("a pure-reorder commit is ONE list-diff pair at the relO: path; creation is map-pair + list-pair", () => {
     const doc = new LoroDoc();
