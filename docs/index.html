@@ -409,6 +409,7 @@
     <a href="#undo" class="sub">Undo &amp; history</a>
     <a href="#ephemeral" class="sub">The presence layer</a>
     <a href="#transport" class="sub">Transport</a>
+    <a href="#headless">Headless in Node</a>
   </div>
   <div class="nav-group g-more">
     <span class="lbl">More</span>
@@ -1388,6 +1389,59 @@
     </div>
   </section>
 
+  <!-- ============================================================= HEADLESS -->
+  <section id="headless">
+    <p class="sec-eyebrow l-durable">Server-side, no browser</p>
+    <h2><svg class="glyph" data-band="2" data-hue="durable"></svg>Headless in Node<a class="anchor" href="#headless">#</a></h2>
+    <p>
+      strata runs headless in Node as a first-class mode, not a workaround. The core reaches for no DOM
+      and no <code>requestAnimationFrame</code> anywhere, and the document layer's wire is plain bytes —
+      <code>subscribeOutbound</code> hands you a room's outgoing commits, <code>applyRemote</code> takes an
+      incoming one, <code>exportSnapshot</code> serialises the whole converged document — all of it
+      transport-agnostic. The same document that syncs between two browser tabs syncs, unchanged, between a
+      Node server and its clients.
+    </p>
+    <p>
+      The natural server shape is a <strong>document host</strong>: one process holding many rooms, each an
+      authoritative <code>World</code> plus <code>DurableStore</code> that applies every client's commit
+      into its own converged document, persists it, and relays it to the room's other clients. Many rooms
+      means many Worlds in one process — the one thing they share is the schema. <code>defineComponent</code>
+      and its siblings register names in a <strong>process-global</strong> table, so you define the schema
+      once at module level and every World speaks that one vocabulary; a duplicate name throws. Bytes cross
+      the wire matched by component <em>name</em>, so the host and every client must import the identical
+      schema module.
+    </p>
+    <p>
+      Nothing drives the frame for you server-side — there is no rAF — so you drive it with a plain timer:
+      <code>world.sync()</code> to absorb inbound commits, then <code>world.tick(pipeline)</code> to run
+      systems, on whatever cadence the room needs.
+    </p>
+    <figure class="code" data-file="headless-host.ts"></figure>
+    <p>
+      There is deliberately no framework "tick driver" to call. The driver <em>is</em> those three lines,
+      and wrapping them would only hide the one decision an embedder actually makes — the cadence, and what
+      runs in the pipeline.
+    </p>
+    <div class="rule r-durable">
+      <span class="tag">Rule — operating headless</span>
+      <p><strong>Bootstrap is bidirectional.</strong> A joiner imports the host's snapshot as its causal
+      base, then sends its <em>own</em> base back; the host absorbs it so the joiner's later increments
+      don't quarantine, and relays it to the room's other clients so a peer that predates the joiner
+      absorbs it too.</p>
+      <p><strong>A quarantine is permanent for that document instance.</strong> Once an import throws
+      <code>PendingImportError</code>, that store is poisoned for good — there is no in-place repair.
+      Recovery is to reconnect and re-bootstrap from a <em>fresh</em> document; never retry the import.</p>
+      <p><strong>Restore from disk into a fresh store.</strong> Import a saved snapshot into a brand-new
+      store; if that import quarantines, quarantine the <em>file</em> (rename it aside) and start the room
+      on a fresh document — never reuse the poisoned instance, and never let a bad file brick boot.</p>
+    </div>
+    <p>
+      A complete, runnable version — rooms by URL path, disk persistence, the bidirectional relay, and a
+      <code>setInterval</code> tick driver — is
+      <a href="https://github.com/jamesyong-42/strata-ecs/tree/main/examples/headless-host"><code>examples/headless-host</code> ↗</a>.
+    </p>
+  </section>
+
   <!-- ============================================================= TOOLS -->
   <section id="tools">
     <p class="sec-eyebrow l-neutral">Introspection</p>
@@ -1839,6 +1893,26 @@ channel.onMessage((env) => {
     case "snapshot": doc.applyRemote(env.bytes); drain(buffer); break;
   }
 });
+</script>
+
+<script type="text/plain" data-code="headless-host.ts">import { createWorld } from "@vibecook/strata-ecs";
+import { LoroDoc } from "loro-crdt";
+import { createDurableStore, attachDurable } from "@vibecook/strata-ecs/durable";
+
+// A room is an authoritative World + document. No DOM, no rAF anywhere.
+const world = createWorld();
+const doc = createDurableStore(new LoroDoc());
+attachDurable(world, doc);
+
+// The wire is plain bytes — hand them to any transport.
+doc.subscribeOutbound((bytes) => socket.send(bytes));   // local commits → clients
+socket.onMessage((bytes) => doc.applyRemote(bytes));    // client commits → here
+
+// Drive the frame with a plain timer. This IS the tick driver — ~30 Hz here.
+setInterval(() => {
+  world.sync();            // absorb inbound commits
+  world.tick(pipeline);    // run systems
+}, 33);
 </script>
 
 <script type="text/plain" data-code="run.sh">pnpm install

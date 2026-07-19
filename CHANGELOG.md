@@ -4,6 +4,27 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [0.9.0] — 2026-07-19
+
+### Added
+
+- **`world.componentsOf(e)` / `world.tagsOf(e)` — exhaustive entity introspection (born as
+  infinite-canvas-engine petition 6).** Two pure, iteration-safe readers that return EVERY component
+  / tag actually present on an entity — beyond any declared or prefab-eligible set, so a cell
+  attached after the fact still lists (the devtools-inspector case). Both allocate a fresh array; a
+  dead, stale, or identity-only handle reads `[]`. Neither is reactive (they read and write no
+  stamps — pair with `world.reactive` for a wake on a shape change). Promoting them out of the
+  engine's internal use HARDENED the handle semantics: the pre-promotion internal readers threw or
+  misread on a stale handle rather than returning `[]`.
+- **Headless / Node hosting, blessed as a first-class mode.** A new guide section documents running
+  strata server-side with no DOM and no `requestAnimationFrame`: the core depends on neither, and
+  the document layer's wire is plain bytes (`subscribeOutbound` / `applyRemote` / `exportSnapshot`),
+  transport-agnostic. The document-host pattern — many rooms = many Worlds in one process over a
+  process-global schema — drives its frame from a plain `setInterval`. No API change: the tick
+  driver is deliberately NOT an API, because the three lines (`world.sync()` then
+  `world.tick(pipeline)`) already ARE the driver. A complete, runnable `examples/headless-host`
+  document host lands alongside.
+
 ## [0.8.0] — 2026-07-19
 
 ### Added

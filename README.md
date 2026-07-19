@@ -357,6 +357,11 @@ pnpm collab:server           # dumb byte relay — ws://localhost:8787
 #   http://localhost:5173/?collab=demo&ws
 ```
 
+[`examples/headless-host`](examples/headless-host) is its server-side counterpart — strata
+running **headless** in Node, no DOM and no `requestAnimationFrame`. It is a runnable **document
+host**: many rooms as many authoritative Worlds in one process, synced to clients over WebSocket
+and persisted to disk. Headless/server hosting is a first-class mode, not a workaround.
+
 ## Performance
 
 On the canonical ECS micro-benchmarks (Node 24), strata-ecs ties or beats bitecs — the
