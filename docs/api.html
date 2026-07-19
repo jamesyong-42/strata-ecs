@@ -1282,8 +1282,20 @@
         reads the <em>document's</em> converged value (distinct from the runtime read).
         <code>subscribeOutbound</code> ships each sealed local commit's bytes to transport;
         <code>applyRemote</code> is the fire-and-forget inbound entry; <code>exportSnapshot</code> is the full
-        snapshot a late joiner bootstraps from.
+        snapshot a late joiner bootstraps from — or, with <code>{ mode: "shallow" }</code>, a
+        history-compacted at-rest save (the live state complete, the oplog truncated at the current point;
+        roughly 1.5–2.6x smaller).
       </p>
+      <div class="rule r-durable">
+        <span class="tag">Rule — restoring a saved snapshot</span>
+        <p>
+          Restore a saved snapshot the fast way: import its bytes into the <code>LoroDoc</code>
+          <em>before</em> <code>createDurableStore</code> wraps it — the reload recipe, and the quickest
+          restore for a full snapshot too. A document restored from a <code>{ mode: "shallow" }</code> save
+          cannot exchange increments with a peer that still holds the full history: everyone reloading from
+          the same shallow save syncs (and undoes) normally, but a mixed base forces a fresh re-bootstrap.
+        </p>
+      </div>
       <ul class="notes">
         <li><span class="nl">Pre-attach</span> <code>keyOf</code> / <code>resolve</code> / <code>getComponent</code> are handle-addressed and return <code>undefined</code> until <a href="#durable-attachDurable"><code>attachDurable</code></a> installs the bijection.</li>
         <li><span class="nl d">Throws</span> <code>applyRemote</code> lets <a href="#durable-PendingImportError"><code>PendingImportError</code></a> propagate uncaught — the transport must resync (fresh doc + snapshot).</li>
@@ -1872,7 +1884,7 @@ interface DurableStoreOptions {
   getComponent<S>(e: Entity, c: Component<S>): S | undefined; // the document's CONVERGED value
 
   applyRemote(bytes: Uint8Array): void;                    // INBOUND wire (may throw PendingImportError)
-  exportSnapshot(): Uint8Array;                            // full snapshot for a joiner's bootstrap
+  exportSnapshot(opts?: { mode?: "shallow" }): Uint8Array; // full snapshot; "shallow" = compacted at-rest save
   subscribeOutbound(fn: (bytes: Uint8Array) => void): Unsubscribe;  // OUTBOUND wire
 }</script>
 

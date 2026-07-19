@@ -1111,6 +1111,15 @@
       columns raises a debounced export on idle, deferring while a gesture is in flight so a multi-ms
       world walk never hitches a drag.
     </p>
+    <p>
+      That autosave serialises the runtime; the document layer (below) saves itself separately.
+      <code>doc.exportSnapshot()</code> writes the whole converged document, and a long-lived one
+      accumulates a lot of edit history — so <code>doc.exportSnapshot({ mode: "shallow" })</code> writes a
+      history-compacted at-rest save instead: the live state complete, the oplog truncated at the current
+      point (roughly 1.5–2.6x smaller). Its one law: a document reloaded from a shallow save can't exchange
+      edits with a peer that still holds the full history — everyone reloading from the same shallow save
+      syncs normally, but a mixed base needs a fresh re-bootstrap.
+    </p>
   </section>
 
   <!-- ============================================================= COLLAB -->
@@ -1431,9 +1440,11 @@
       <p><strong>A quarantine is permanent for that document instance.</strong> Once an import throws
       <code>PendingImportError</code>, that store is poisoned for good — there is no in-place repair.
       Recovery is to reconnect and re-bootstrap from a <em>fresh</em> document; never retry the import.</p>
-      <p><strong>Restore from disk into a fresh store.</strong> Import a saved snapshot into a brand-new
-      store; if that import quarantines, quarantine the <em>file</em> (rename it aside) and start the room
-      on a fresh document — never reuse the poisoned instance, and never let a bad file brick boot.</p>
+      <p><strong>Restore by importing the bytes before you construct the store.</strong> Import a saved
+      snapshot into the bare <code>LoroDoc</code> <em>first</em>, then wrap it with
+      <code>createDurableStore</code> — the reload recipe, and the fastest restore path. If that import
+      quarantines, quarantine the <em>file</em> (rename it aside) and start the room on a fresh document —
+      never reuse the poisoned instance, and never let a bad file brick boot.</p>
     </div>
     <p>
       A complete, runnable version — rooms by URL path, disk persistence, the bidirectional relay, and a
