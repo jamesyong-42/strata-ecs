@@ -906,6 +906,10 @@ const READERS = new Set<string>([
   "readField",
   "has",
   "hasTag",
+  // petition 6 — exhaustive entity introspection; pure reads, no stamps touched (delegate to
+  // the store's generation-guarded componentsOf/tagsOf).
+  "componentsOf",
+  "tagsOf",
   "getRelation",
   "getRelations",
   "getReverse",

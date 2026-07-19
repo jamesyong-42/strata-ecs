@@ -1914,8 +1914,11 @@ export class RuntimeStore implements ECSStore {
     return out;
   }
 
-  /** The components present on a placed entity. */
+  /** Every component present on `e`, in archetype order. Generation-guarded like {@link RuntimeStore.has}:
+   *  a dead/stale OR identity-only handle reads `[]` (its archetype has no columns), never a reused slot's
+   *  shape — so tooling can poll any handle. Serialization only ever passes {@link RuntimeStore.placedEntities}. */
   componentsOf(e: Entity): Component[] {
+    if (!this.table.isPlaced(e)) return []; // dead/stale or identity-only — no placed columns to walk (mirrors `has`)
     const arch = this.archetypeOfEntity(e);
     const out: Component[] = [];
     for (const id of arch.componentIds) {
@@ -1925,8 +1928,11 @@ export class RuntimeStore implements ECSStore {
     return out;
   }
 
-  /** The tags set on an entity (walks every tag type — for serialization). */
+  /** Every tag set on `e` (walks every tag type — for serialization / tooling). Generation-guarded like
+   *  {@link RuntimeStore.hasTag}: a stale handle reads `[]`, never the reused slot's bits (§3.2); an
+   *  identity-only handle reads `[]` (tagging places, §5.2). */
   tagsOf(e: Entity): Tag[] {
+    if (!this.table.isAlive(e)) return []; // stale generation — do not read the reused slot's bits (mirrors `hasTag`)
     const slot = slotOf(e);
     const out: Tag[] = [];
     for (let id = 0; id < tagCount(); id++) {

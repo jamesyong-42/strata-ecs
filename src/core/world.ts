@@ -350,6 +350,27 @@ export class World {
   hasTag(e: Entity, t: Tag): boolean {
     return this.store.hasTag(e, t);
   }
+  /**
+   * Exhaustive introspection: EVERY component actually present on `e` — beyond any declared/prefab
+   * eligible set, so a runtime cell attached past a prefab's shape still lists (the @ice/devtools
+   * inspector case, petition 6). Cost: walks `e`'s archetype component list and allocates a fresh
+   * array. A pure read — iteration-safe (may run mid-walk). A dead/stale or identity-only handle
+   * reads `[]` (mirrors {@link World.has}). NOT reactive: reads and writes no stamps, so a poll never
+   * wakes a watcher — pair with {@link World.reactive} if you need a wake on a shape change.
+   */
+  componentsOf(e: Entity): Component[] {
+    return this.store.componentsOf(e);
+  }
+  /**
+   * Exhaustive introspection: EVERY tag actually set on `e` — the companion to {@link World.componentsOf}
+   * (petition 6). Cost: probes every registered tag type and allocates a fresh array. A pure read —
+   * iteration-safe. A dead/stale handle reads `[]` (generation-guarded, mirrors {@link World.hasTag});
+   * an identity-only handle reads `[]` (tagging places, §5.2). NOT reactive: reads/writes no stamps —
+   * pair with {@link World.reactive} for a wake.
+   */
+  tagsOf(e: Entity): Tag[] {
+    return this.store.tagsOf(e);
+  }
   getRelation(e: Entity, r: Relation): Entity | undefined {
     return this.store.getRelation(e, r);
   }

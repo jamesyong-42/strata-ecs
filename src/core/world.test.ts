@@ -3,7 +3,7 @@ import { createWorld, type InboundSource, type World } from "./world";
 import { defineComponent, defineRelation, defineResource, defineTag } from "./schema";
 import { All, Not, type Query, defineQuery } from "./query";
 import { defineSystem, phase } from "./system";
-import type { Entity } from "./entity";
+import { type Entity, slotOf } from "./entity";
 
 const Position = defineComponent("Position", { x: "f32", y: "f32" });
 const Velocity = defineComponent("Velocity", { x: "f32", y: "f32" });
@@ -644,5 +644,89 @@ describe("import() in-emit guard (005 §5.5 / 006 §C2)", () => {
     const w2 = createWorld();
     expect(() => w2.import(bytes)).not.toThrow();
     expect(count(w2, defineQuery([Position]))).toBe(1); // the entity round-tripped
+  });
+});
+
+describe("entity introspection — componentsOf / tagsOf (petition 6)", () => {
+  const names = (xs: ReadonlyArray<{ name: string }>): string[] => xs.map((x) => x.name).sort();
+
+  it("lists EVERY component, including ones attached beyond the spawn-time set", () => {
+    const w = createWorld();
+    const e = w.spawn({ components: [[Position, { x: 0, y: 0 }]] });
+    expect(names(w.componentsOf(e))).toEqual(["Position"]);
+
+    w.addComponent(e, Velocity, { x: 1, y: 1 }); // attached AFTER spawn — the beyond-prefab cell
+    expect(names(w.componentsOf(e))).toEqual(["Position", "Velocity"]);
+
+    w.removeComponent(e, Position); // removed → disappears from the exhaustive list
+    expect(names(w.componentsOf(e))).toEqual(["Velocity"]);
+  });
+
+  it("lists tags after addTag and drops them after removeTag", () => {
+    const w = createWorld();
+    const e = w.spawn();
+    expect(w.tagsOf(e)).toEqual([]);
+
+    w.addTag(e, Marker);
+    w.addTag(e, Trigger);
+    expect(names(w.tagsOf(e))).toEqual(["Marker", "Trigger"]);
+
+    w.removeTag(e, Marker);
+    expect(names(w.tagsOf(e))).toEqual(["Trigger"]);
+  });
+
+  it("a placed-but-empty entity (no components / no tags) reads as empty arrays", () => {
+    const w = createWorld();
+    const e = w.spawn(); // placed into the empty archetype
+    expect(w.isPlaced(e)).toBe(true);
+    expect(w.componentsOf(e)).toEqual([]);
+    expect(w.tagsOf(e)).toEqual([]);
+  });
+
+  it("a genuinely identity-only handle (alive, unplaced) reads as empty arrays — no throw", () => {
+    // componentsOf without its !isPlaced guard would deref archetypesById[NO_ARCHETYPE] === undefined
+    // and throw a raw TypeError; the guard makes it read like `has` (nothing present).
+    const w = createWorld();
+    const id = w.runtime.allocateIdentity();
+    expect(w.isAlive(id)).toBe(true);
+    expect(w.isIdentityOnly(id)).toBe(true);
+    expect(w.componentsOf(id)).toEqual([]);
+    expect(w.tagsOf(id)).toEqual([]);
+  });
+
+  it("a dead handle reads as empty arrays — never the reused slot's shape (generation-guarded)", () => {
+    const w = createWorld();
+    const a = w.spawn({ components: [[Position, { x: 1, y: 2 }]], tags: [Marker] });
+    w.destroy(a);
+    // Dead handle: both readers report an empty shape rather than throwing / misreading.
+    expect(w.componentsOf(a)).toEqual([]);
+    expect(w.tagsOf(a)).toEqual([]);
+
+    // LIFO freelist reuse: `b` takes `a`'s slot with a DIFFERENT shape. The stale handle `a` must
+    // still read empty — the guards key on generation, not the raw slot's live bits.
+    const b = w.spawn({ components: [[Health, { hp: 5 }]], tags: [Trigger] });
+    expect(slotOf(a)).toBe(slotOf(b)); // precondition: the slot really was recycled
+    expect(w.componentsOf(a)).toEqual([]); // NOT ["Health"]
+    expect(w.tagsOf(a)).toEqual([]); // NOT ["Trigger"]
+    expect(names(w.componentsOf(b))).toEqual(["Health"]);
+    expect(names(w.tagsOf(b))).toEqual(["Trigger"]);
+  });
+
+  it("both readers are pure — callable mid-iteration without tripping the query guard", () => {
+    const w = createWorld();
+    w.spawn({ components: [[Position, { x: 0, y: 0 }]], tags: [Marker] });
+    let seenComps: string[] = [];
+    let seenTags: string[] = [];
+    expect(() => {
+      w.query(defineQuery([Position])).each((b) => {
+        for (const r of b) {
+          const ent = b.entity(r);
+          seenComps = names(w.componentsOf(ent));
+          seenTags = names(w.tagsOf(ent));
+        }
+      });
+    }).not.toThrow();
+    expect(seenComps).toEqual(["Position"]);
+    expect(seenTags).toEqual(["Marker"]);
   });
 });
