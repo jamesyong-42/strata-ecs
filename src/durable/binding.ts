@@ -74,7 +74,6 @@
  */
 
 import { DEV, devWarn } from "../core/dev";
-import { relationById, relationCount } from "../core/schema";
 import type {
   Component,
   ComponentId,
@@ -205,21 +204,8 @@ export function attachDurable(world: World, store: DurableStore): Attachment {
     );
   }
 
-  // plan-ordered-relations M1 window (rev-m1-spec F10): ordered relations are runtime-only until
-  // the durable order protocol lands (M2/M3) — edges sync as rel1: cells, but each peer's sibling
-  // ORDER is a local projection artifact, so it will NOT converge across peers. Warn once so the
-  // gap is never a silent surprise; retire this with the M3 order cells.
-  if (DEV) {
-    for (let rid = 0; rid < relationCount(); rid++) {
-      if (relationById(rid)?.ordered) {
-        devWarn(
-          "strata: an ordered relation is defined while attaching a durable store — sibling ORDER is runtime-only until the durable order protocol ships; edges sync, order will not converge across peers.",
-        );
-        break;
-      }
-    }
-  }
-
+  // (The M1 F10 "ordered relations are runtime-only" warn is RETIRED: the adapter now carries the
+  // relO: order protocol end-to-end — plan-ordered-relations M3.)
   const binding = new DurableBinding(world, store);
   binding.seed(); // two-phase projection + baseline seeding (the founding agreement)
 
@@ -354,6 +340,18 @@ class DurableBinding implements InboundSource {
         this.applied++;
       },
     );
+    // THE M2 WIRING RULE (plan-ordered-relations §4.5a): the projector's OrderSource is the DOC's
+    // CONVERGED read — constant-final during a drain — NEVER the binding baseline (one event stale
+    // under the projector-first drain order, and reconcile writes it placeless; wiring it would
+    // strand wrong order forever). readOrder is adapter store-support, probed structurally so a
+    // non-loro CRDTSnapshot without order capability degrades to D7 completion-only (null source).
+    const src = store.snapshot as Partial<{
+      readOrder(key: EntityKey, r: Relation): readonly EntityKey[] | undefined;
+    }>;
+    if (typeof src.readOrder === "function") {
+      const readOrder = src.readOrder.bind(store.snapshot);
+      this.projector.setOrderSource({ readOrder });
+    }
   }
 
   /** @internal Read-only baseline view for the {@link Attachment} inspection seam (founding agreement). */
@@ -626,7 +624,10 @@ class DurableBinding implements InboundSource {
       // projector-first/baseline-second order below makes the binding baseline STALE here) —
       // never the binding's baseline.
       case "order-invalidate":
-        this.projector.applyOrder(ev.key, ev.rel);
+        // Count like the resource arms (rev-m3 finding 2): a REAL re-derivation is an apply and
+        // must advance lastAppliedFrame (006 C7); the inert paths (unknown parent, zero children)
+        // report false and advance nothing.
+        if (this.projector.applyOrder(ev.key, ev.rel)) this.applied++;
         break;
       case "spawn":
         this.projector.applySpawn(ev.key);

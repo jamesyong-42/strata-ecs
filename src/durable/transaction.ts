@@ -65,14 +65,27 @@ import type {
   Entity,
   EntityKey,
   FieldInput,
+  OrderPlace,
   Relation,
   Resource,
   RuntimeStore,
   SpawnInitOf,
   Tag,
 } from "../core";
-import type { BaselineSnapshot, ComponentValue, CRDTSnapshot, Projector } from "../substrate";
+import { DEV, devWarn } from "../core/dev";
+import type { BaselineSnapshot, ComponentValue, CRDTSnapshot, OrderPlaceKey, Projector } from "../substrate";
 import { canon, canonResource, componentByName } from "../substrate";
+
+/**
+ * The ordered-write capability of a history-capable snapshot (plan-ordered-relations §4.3): rides
+ * the ADAPTER's store-support surface, never the frozen {@link CRDTSnapshot} (the 005 §10.8
+ * precedent). The seal probes for it structurally; a snapshot without it degrades placed sets to
+ * placeless (order then follows the D7 completion rule) and drops moves with a DEV warning.
+ */
+interface OrderedWrites {
+  setRelationPlaced(key: EntityKey, r: Relation, target: EntityKey, place?: OrderPlaceKey): void;
+  moveRelationPlaced(key: EntityKey, r: Relation, place: OrderPlaceKey): boolean;
+}
 
 /**
  * The whole-component value-write surface on `tx`, mirroring the runtime's {@link EntityEditor}
@@ -102,8 +115,12 @@ export interface Mutator {
   edit(e: Entity): TxEditor;
   addTag(e: Entity, t: Tag): void;
   removeTag(e: Entity, t: Tag): void;
-  setRelation(e: Entity, r: Relation, target: Entity): void; // arity "one"
+  /** Arity "one". For ORDERED relations `place` positions `e` among the target's children
+   *  (plan-ordered-relations §3.3/§4.3; anchors resolve at record time, re-checked at seal). */
+  setRelation(e: Entity, r: Relation, target: Entity, place?: OrderPlace): void;
   addRelation(e: Entity, r: Relation, target: Entity): void; // arity "many"
+  /** Reorder `e` within its current parent's sibling sequence — ordered relations only. */
+  moveRelation(e: Entity, r: Relation, place: OrderPlace): void;
   removeRelation(e: Entity, r: Relation, target?: Entity): void;
   setResource<S>(res: Resource<S>, v: S): void;
   removeResource(res: Resource): void;
@@ -141,8 +158,9 @@ type RecordedOp =
   | { kind: "removeComponent"; key: EntityKey; comp: Component }
   | { kind: "addTag"; key: EntityKey; tag: Tag }
   | { kind: "removeTag"; key: EntityKey; tag: Tag }
-  | { kind: "setRelation"; key: EntityKey; rel: Relation; targetKey: EntityKey }
+  | { kind: "setRelation"; key: EntityKey; rel: Relation; targetKey: EntityKey; place?: OrderPlaceKey }
   | { kind: "addRelation"; key: EntityKey; rel: Relation; targetKey: EntityKey }
+  | { kind: "moveRelation"; key: EntityKey; rel: Relation; place: OrderPlaceKey }
   | { kind: "removeRelation"; key: EntityKey; rel: Relation; targetKey?: EntityKey }
   | { kind: "setResource"; res: Resource; value: ComponentValue }
   | { kind: "removeResource"; res: Resource }
@@ -300,16 +318,51 @@ class Transaction implements Mutator {
     this.ops.push({ kind: "removeTag", key, tag: t });
   }
 
-  setRelation(e: Entity, r: Relation, target: Entity): void {
+  setRelation(e: Entity, r: Relation, target: Entity, place?: OrderPlace): void {
     const { key } = this.touch(e);
     const targetKey = this.tr.projector.requireKey(target); // §11.2: BOTH endpoints must be in this store
-    this.ops.push({ kind: "setRelation", key, rel: r, targetKey });
+    if (DEV && place !== undefined && !r.ordered) {
+      devWarn(`strata: tx.setRelation place ignored — "${r.name}" is not an ordered relation.`);
+    }
+    this.ops.push({
+      kind: "setRelation",
+      key,
+      rel: r,
+      targetKey,
+      place: r.ordered ? this.resolvePlace(place) : undefined,
+    });
   }
 
   addRelation(e: Entity, r: Relation, target: Entity): void {
     const { key } = this.touch(e);
     const targetKey = this.tr.projector.requireKey(target);
     this.ops.push({ kind: "addRelation", key, rel: r, targetKey });
+  }
+
+  moveRelation(e: Entity, r: Relation, place: OrderPlace): void {
+    if (!r.ordered) {
+      throw new Error(`strata: moveRelation requires an ordered relation — "${r.name}" is unordered.`);
+    }
+    const { key } = this.touch(e);
+    this.ops.push({ kind: "moveRelation", key, rel: r, place: this.resolvePlace(place) ?? "last" });
+  }
+
+  /**
+   * Anchor resolution at RECORD time (plan-ordered-relations §4.3): handle anchors map to keys via
+   * the bijection PEEK — an anchor outside this store cannot be a sibling, so it degrades to
+   * "last" with a DEV warning (the §3.3 rule; never a throw — anchors race with reparents by
+   * design). The seal re-checks against the converged list and degrades again if the anchor
+   * vanished mid-transaction.
+   */
+  private resolvePlace(place: OrderPlace | undefined): OrderPlaceKey | undefined {
+    if (place === undefined || place === "first" || place === "last") return place;
+    const anchor = "before" in place ? place.before : place.after;
+    const anchorKey = this.tr.projector.keyFor(anchor);
+    if (anchorKey === undefined) {
+      if (DEV) devWarn("strata: tx place anchor is not in this store — placed \"last\".");
+      return "last";
+    }
+    return "before" in place ? { before: anchorKey } : { after: anchorKey };
   }
 
   removeRelation(e: Entity, r: Relation, target?: Entity): void {
@@ -389,9 +442,31 @@ class Transaction implements Mutator {
           case "removeTag":
             this.snapshot.removeTag(op.key, op.tag);
             break;
-          case "setRelation":
-            this.snapshot.setRelation(op.key, op.rel, op.targetKey);
+          case "setRelation": {
+            // Ordered placement rides the adapter's store-support surface (OrderedWrites probe);
+            // the frozen ladder stays frozen. Placeless ordered sets go through the frozen method,
+            // whose ordered arm handles append-new/keep-position (§4.1).
+            const ow = this.snapshot as Partial<OrderedWrites> & CRDTSnapshot;
+            if (op.rel.ordered && op.place !== undefined && typeof ow.setRelationPlaced === "function") {
+              ow.setRelationPlaced(op.key, op.rel, op.targetKey, op.place);
+            } else {
+              this.snapshot.setRelation(op.key, op.rel, op.targetKey);
+            }
             break;
+          }
+          case "moveRelation": {
+            const ow = this.snapshot as Partial<OrderedWrites> & CRDTSnapshot;
+            if (typeof ow.moveRelationPlaced === "function") {
+              // false = no edge under r at seal time (destroyed/reparented mid-tx) — the no-edge
+              // race rule: silent no-op in prod, DEV-warn (§3.3).
+              if (!ow.moveRelationPlaced(op.key, op.rel, op.place) && DEV) {
+                devWarn(`strata: tx.moveRelation on "${op.rel.name}" — no edge at seal; no-op.`);
+              }
+            } else if (DEV) {
+              devWarn(`strata: tx.moveRelation dropped — this snapshot has no ordered-write support.`);
+            }
+            break;
+          }
           case "addRelation":
             this.snapshot.addRelation(op.key, op.rel, op.targetKey);
             break;

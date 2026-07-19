@@ -177,7 +177,7 @@
  * and applies cell writes; it makes NO apply/skip decision (005 §1.4).
  */
 
-import { LoroDoc, LoroMap, UndoManager, type Value, isContainer } from "loro-crdt";
+import { LoroDoc, LoroMap, LoroMovableList, UndoManager, type Value, isContainer } from "loro-crdt";
 import type { ContainerID, Diff, JsonChange, OpId, VersionVector } from "loro-crdt";
 import { DEV, devWarn } from "../core/dev";
 import { type EntityKey, entityKey } from "../core/field";
@@ -188,6 +188,7 @@ import {
   type ComponentValue,
   type CRDTSnapshot,
   type EntityRecord,
+  type OrderPlaceKey,
   type Origin,
   type Unsubscribe,
   canon,
@@ -204,12 +205,22 @@ const COMP = "comp:";
 const TAG = "tag:";
 const REL_ONE = "rel1:";
 const REL_MANY = "relN:";
+/**
+ * Ordered sibling sequence (plan-ordered-relations §4.1): `relO:<Name>` on the PARENT's entity map
+ * → a `LoroMovableList` of child EntityKey strings. THE ONE legal container-at-cell-key (the item-12
+ * carve-out). Two laws travel with this prefix: (a) `relO:` keys are ORDERING HINTS, NOT EXISTENCE
+ * FACTS — every liveness/emptiness predicate ignores them (else a despawned parent whose emptied
+ * list key survives reads alive forever); (b) the no-delete law extends to the list: minted at most
+ * once per (entity, relation), despawn CLEARS its entries and keeps the empty list.
+ */
+const REL_ORDER = "relO:";
 
 const compKey = (c: Component): string => COMP + c.name;
 const tagKey = (t: Tag): string => TAG + t.name;
 const relOneKey = (r: Relation): string => REL_ONE + r.name;
 const relManyKey = (r: Relation, target: EntityKey): string =>
   REL_MANY + JSON.stringify([r.name, target]);
+const relOrderKey = (r: Relation): string => REL_ORDER + r.name;
 /**
  * TOTAL parse of a "relN:" edge key back to `[relationName, targetKey]`, or `undefined` when the
  * segment is not a JSON array of exactly two strings. The `relN:` map keys are PEER-CONTROLLED: a
@@ -218,6 +229,17 @@ const relManyKey = (r: Relation, target: EntityKey): string =>
  * `doc.import` already advanced the frontier (the batch is then lost forever — retry returns []),
  * and wedge `getRelationMany`/`readEntity`/despawn for the whole doc. So every caller uses this and
  * treats `undefined` as an unknown edge (skip + one-shot warn), never a throw. */
+/**
+ * The liveness carve-out (plan-ordered-relations §4.1, review finding 1): does the entity map hold
+ * any key that is an EXISTENCE FACT — i.e. anything but a `relO:` ordering hint? A despawned parent
+ * keeps its emptied `relO:` list (no-delete), so counting raw keys would resurrect it on every
+ * predicate, on every peer, forever.
+ */
+function hasLiveKey(m: LoroMap): boolean {
+  for (const k of m.keys()) if (!String(k).startsWith(REL_ORDER)) return true;
+  return false;
+}
+
 function tryParseRelManyKey(mapKey: string): [string, string] | undefined {
   let parsed: unknown;
   try {
@@ -237,6 +259,27 @@ function tryParseRelManyKey(mapKey: string): [string, string] | undefined {
 function parseJsonOpId(id: string): { peer: `${number}`; counter: number } {
   const at = id.lastIndexOf("@");
   return { counter: Number(id.slice(0, at)), peer: id.slice(at + 1) as `${number}` };
+}
+
+/**
+ * Counter span of one oplog op (M0 probe, pinned in ordered-m0.probe.test.ts): list-kind
+ * (MovableList AND plain List — same JSON op shapes) insert → `value.length` (contiguous inserts
+ * merge into ONE array-valued op) · delete → `len` · move/set → 1; every map op → 1. Dispatch on
+ * the CONTAINER kind so a hostile array-valued map register cannot inflate a map op's span.
+ *
+ * KNOWN RESIDUAL (rev-m3 finding 1, PRE-EXISTING — the old ops.length shortcut had the identical
+ * hole): a hostile LoroText/LoroTree commit still undercounts (a text insert spans its character
+ * length in ONE op), mis-splitting THAT FOREIGN WRITER's own commit boundaries. Blast radius is
+ * contained to the hostile writer's mixed commits (honest changes' counters come from their own
+ * change.id); fixing Text needs its op shape probe-pinned first (M0 discipline) — recorded in
+ * plan-ordered-relations §4.5b.
+ */
+function opCounterSpan(op: JsonChange["ops"][number]): number {
+  if (!String(op.container).endsWith("List")) return 1; // "List" catches MovableList + List
+  const content = op.content as { type?: string; value?: unknown; len?: number };
+  if (content.type === "insert" && Array.isArray(content.value)) return content.value.length;
+  if (content.type === "delete" && typeof content.len === "number") return content.len;
+  return 1;
 }
 
 /**
@@ -559,7 +602,7 @@ export class LoroSnapshot implements CRDTSnapshot {
    */
   hasEntity(key: EntityKey): boolean {
     const m = this.childMap(key);
-    return m !== undefined && m.keys().length > 0;
+    return m !== undefined && hasLiveKey(m);
   }
 
   entities(): Iterable<EntityKey> {
@@ -615,7 +658,7 @@ export class LoroSnapshot implements CRDTSnapshot {
   /** Aggregate the entity's cells into a record — the derived bulk view (005 §1.2 direction rule). */
   readEntity(key: EntityKey): EntityRecord | undefined {
     const m = this.childMap(key);
-    if (m === undefined || m.keys().length === 0) return undefined;
+    if (m === undefined || !hasLiveKey(m)) return undefined; // relO: hints are not existence (§4.1)
     const components: Record<string, ComponentValue> = {};
     const tags: string[] = [];
     const relations: Record<string, EntityKey | EntityKey[]> = {};
@@ -642,6 +685,8 @@ export class LoroSnapshot implements CRDTSnapshot {
         if (Array.isArray(cur)) cur.push(entityKey(target));
         else relations[name] = [entityKey(target)];
       }
+      // relO: keys are ordering hints, not record content — the record's relations already carry
+      // membership; order is read via readOrder (plan-ordered-relations §4.1).
     }
     return { key, components, tags, relations };
   }
@@ -671,9 +716,42 @@ export class LoroSnapshot implements CRDTSnapshot {
     // O(entities × edges-per-entity) per despawn — see COST note below). Do this BEFORE clearing `key`'s
     // own map so a self-edge on `key` is handled by the own-key clear, not double-touched.
     this.removeIncoming(key);
-    // Parts 1 + 2: clear `exists`, every comp/tag, and every outgoing edge — but keep the container.
     const m = this.childMap(key);
-    if (m !== undefined) for (const mk of m.keys()) m.delete(String(mk));
+    if (m === undefined) return;
+    // DESPAWN-TIME PRUNE (plan-ordered-relations §4.1): before clearing the dying CHILD's own keys,
+    // read its ordered rel1: cells and remove its entry from each parent's relO: list — the same
+    // commit, a local mutation, so the "reconcile never prunes" rule stands. Best-effort by design:
+    // a CONCURRENT move of this entry survives the merge (M0: move wins over delete) — harmless,
+    // the D7 read filter drops it.
+    for (const rawKey of m.keys()) {
+      const mk = String(rawKey);
+      if (!mk.startsWith(REL_ONE)) continue;
+      const r = relationByName(mk.slice(REL_ONE.length));
+      if (r === undefined || !r.ordered) continue;
+      const parentVal = m.get(mk);
+      if (parentVal === undefined || isContainer(parentVal)) continue;
+      const list = this.orderList(entityKey(String(parentVal)), r);
+      if (list === undefined) continue;
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (String(list.get(i)) === key) list.delete(i, 1);
+      }
+    }
+    // Parts 1 + 2: clear `exists`, every comp/tag, and every outgoing edge — but keep the container.
+    // relO: keys: the NO-DELETE LAW extends to list containers (§4.1) — deleting the KEY deletes a
+    // container and reopens the concurrent-recreation orphan class, so CLEAR the entries and keep
+    // the emptied list (invisible to liveness via the hasLiveKey carve-out). A hostile PLAIN value
+    // at a relO: key is not a container — plain delete is safe and heals the poison.
+    for (const rawKey of m.keys()) {
+      const mk = String(rawKey);
+      if (mk.startsWith(REL_ORDER)) {
+        const v = m.get(mk);
+        if (v instanceof LoroMovableList) {
+          if (v.length > 0) v.delete(0, v.length);
+          continue;
+        }
+      }
+      m.delete(mk);
+    }
   }
 
   setComponent(key: EntityKey, c: Component, v: ComponentValue): void {
@@ -712,7 +790,20 @@ export class LoroSnapshot implements CRDTSnapshot {
         `strata: setRelation is for arity "one" relations — use addRelation for "${r.name}".`,
       );
     }
-    this.ensureChild(key).set(relOneKey(r), target);
+    const child = this.ensureChild(key);
+    if (r.ordered) {
+      // Placeless ordered set (M1 §3.3 parity): NEW edge appends "last"; re-set of the SAME target
+      // keeps position. Old parent's list loses the entry in the same commit.
+      const prevVal = child.get(relOneKey(r));
+      const prev =
+        prevVal === undefined || isContainer(prevVal) ? undefined : entityKey(String(prevVal));
+      child.set(relOneKey(r), target);
+      if (prev === target) return;
+      if (prev !== undefined) this.spliceOrderEntry(prev, r, key);
+      this.placeInOrderList(target, r, key, "last");
+      return;
+    }
+    child.set(relOneKey(r), target);
   }
 
   addRelation(key: EntityKey, r: Relation, target: EntityKey): void {
@@ -731,7 +822,10 @@ export class LoroSnapshot implements CRDTSnapshot {
       const k = relOneKey(r);
       const cur = m.get(k);
       if (cur === undefined) return;
-      if (target === undefined || String(cur) === target) m.delete(k);
+      if (target === undefined || String(cur) === target) {
+        m.delete(k);
+        if (r.ordered && !isContainer(cur)) this.spliceOrderEntry(entityKey(String(cur)), r, key);
+      }
     } else if (target === undefined) {
       // Target-less: drop every edge of this relation from `key`.
       for (const rawKey of m.keys()) {
@@ -929,11 +1023,16 @@ export class LoroSnapshot implements CRDTSnapshot {
    */
   private frontierAfter(prevTips: OpId[], change: JsonChange): OpId[] {
     const { peer, counter } = parseJsonOpId(change.id);
-    // The change's op-span in COUNTERS. Our doc is map-only (set/delete/create-container are one counter
-    // each), so `change.ops.length` is exactly the span. NB: `doc.getChangeAt(id).length` is WRONG here —
-    // it returns the coalesced INTERNAL change (e.g. length 2 across an undo+redo), overshooting the
-    // per-commit boundary this JsonChange represents (verified in the spike).
-    const lastOp: OpId = { peer, counter: counter + change.ops.length - 1 };
+    // The change's op-span in COUNTERS — summed PER OP since the ordered-relations layout (M0 probe,
+    // plan-ordered-relations §7): map ops are one counter each, but MovableList inserts MERGE into
+    // one op spanning `value.length` counters and deletes span `len`. The old `change.ops.length`
+    // shortcut undercounts any commit touching a `relO:` list, corrupting every diff boundary after
+    // it. Span dispatch is BY CONTAINER KIND, not content shape — a hostile peer can write an
+    // ARRAY-valued map register, which must still count as one counter. NB: `doc.getChangeAt(id)
+    // .length` remains WRONG here (coalesced internal change; verified in the spike).
+    let span = 0;
+    for (const op of change.ops) span += opCounterSpan(op);
+    const lastOp: OpId = { peer, counter: counter + span - 1 };
     const deps = change.deps.map(parseJsonOpId);
     const survives = (t: OpId): boolean =>
       t.peer !== peer && !deps.some((d) => d.peer === t.peer && d.counter >= t.counter);
@@ -1063,6 +1162,142 @@ export class LoroSnapshot implements CRDTSnapshot {
     }
     if (this.committing) throw new Error(`strata: ${op} during commit() is not allowed.`);
     if (this.quarantined && o?.allowQuarantined !== true) throw new PendingImportError();
+  }
+
+  // --- ordered relations (plan-ordered-relations §4; adapter-level, NOT on the frozen ladder) ------
+
+  /** The parent's `relO:` list, or undefined when absent/poisoned (a non-MovableList value at the
+   *  key is HOSTILE input — ignored wholesale, §4.1). */
+  private orderList(parent: EntityKey, r: Relation): LoroMovableList | undefined {
+    const v = this.childMap(parent)?.get(relOrderKey(r));
+    return v instanceof LoroMovableList ? v : undefined;
+  }
+
+  /** Mint-once (§4.1): get the parent's list, creating it if absent. A hostile plain value at the
+   *  key HEALS here (setContainer overwrites it — the spawn-heals convention, item 12). */
+  private ensureOrderList(parent: EntityKey, r: Relation): LoroMovableList {
+    return this.orderList(parent, r) ?? this.ensureChild(parent).setContainer(relOrderKey(r), new LoroMovableList());
+  }
+
+  /**
+   * OPPORTUNISTIC PRUNE (§4.1: a LOCAL mutation touching parent P's sequence may prune stale
+   * entries in the same commit; reconcile NEVER calls this). Drops every entry that is not a
+   * first-occurrence live child of `parent` (dead, reparented-away, foreign junk, duplicates —
+   * judged by the child's own `rel1:` cell, the membership authority). Leaves the list holding
+   * exactly the live children in converged relative order, which makes local index math exact.
+   * UNDO NOTE (rev-m3): prune deletes ride the SAME commit (= same undo step) as the user's
+   * mutation, so undoing it RE-ASSERTS the pruned stale entries lamport-latest — harmless by
+   * construction (D7 filters them on every peer; sequences never assign membership), pinned in
+   * ordered-m3.test.ts.
+   */
+  private pruneOrderList(parent: EntityKey, r: Relation, list: LoroMovableList): void {
+    const seen = new Set<string>();
+    for (let i = list.length - 1; i >= 0; i--) {
+      const raw = list.get(i);
+      const child = typeof raw === "string" ? raw : undefined;
+      const edge = child === undefined ? undefined : this.childMap(entityKey(child))?.get(relOneKey(r));
+      const isLiveChild =
+        child !== undefined && edge !== undefined && !isContainer(edge) && String(edge) === parent;
+      if (!isLiveChild) {
+        list.delete(i, 1);
+      }
+    }
+    // Second pass forward for duplicates (keep FIRST occurrence — D7 parity).
+    for (let i = 0; i < list.length; ) {
+      const child = String(list.get(i));
+      if (seen.has(child)) {
+        list.delete(i, 1);
+      } else {
+        seen.add(child);
+        i++;
+      }
+    }
+  }
+
+  /** Place `child` in `parent`'s pruned list per `place` — NATIVE `move` when already present
+   *  (M0 pin: delete+insert emulation duplicates under concurrent native moves), insert when not.
+   *  Absent/self anchors degrade to "last" (M1 §3.3 parity). */
+  private placeInOrderList(parent: EntityKey, r: Relation, child: EntityKey, place: OrderPlaceKey): void {
+    const list = this.ensureOrderList(parent, r);
+    this.pruneOrderList(parent, r, list);
+    const arr = list.toArray().map(String);
+    const from = arr.indexOf(child);
+    // Resolve `place` to an INSERTION SLOT in the current array (0..arr.length). A racing/foreign/
+    // self anchor degrades to "last" (never a throw — M1 §3.3 parity; this IS the tx seal-time
+    // re-check: a record-time-valid anchor whose sibling vanished mid-transaction lands here).
+    let slot: number;
+    if (place === "first") {
+      slot = 0;
+    } else if (place === "last") {
+      slot = arr.length;
+    } else {
+      const anchor = "before" in place ? place.before : place.after;
+      const at = anchor === child ? -1 : arr.indexOf(anchor);
+      if (at < 0 && DEV) {
+        devWarn(
+          `strata: ordered place anchor for "${r.name}" is not a live sibling at seal — placed "last" (anchors race with reparents by design).`,
+        );
+      }
+      slot = at < 0 ? arr.length : "before" in place ? at : at + 1;
+    }
+    if (from < 0) {
+      list.insert(slot, child);
+      return;
+    }
+    // Already present: NATIVE move (M0 pin — emulation duplicates under concurrent moves).
+    // loro move(from, to) takes the FINAL index; removing `from` shifts later slots left by one.
+    const to = from < slot ? slot - 1 : slot;
+    if (to !== from) list.move(from, to);
+  }
+
+  /** Remove `child`'s entry (all occurrences) from `parent`'s list — reparent/remove/despawn splice. */
+  private spliceOrderEntry(parent: EntityKey, r: Relation, child: EntityKey): void {
+    const list = this.orderList(parent, r);
+    if (list === undefined) return;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (String(list.get(i)) === child) list.delete(i, 1);
+    }
+  }
+
+  /**
+   * {@link OrderSource} for the projector (plan-ordered-relations §4.2 + THE M2 WIRING RULE): the
+   * doc's CONVERGED sequence — raw strings, unfiltered (stale/duplicate entries are D7's job),
+   * `undefined` when absent or poisoned. Constant-final during a drain (the import completed
+   * before translation), which is exactly why the projector must read THIS and never the binding
+   * baseline.
+   */
+  readOrder(key: EntityKey, r: Relation): readonly EntityKey[] | undefined {
+    const list = this.orderList(key, r);
+    if (list === undefined) return undefined;
+    const out: EntityKey[] = [];
+    for (const v of list.toArray()) if (typeof v === "string") out.push(entityKey(v));
+    return out;
+  }
+
+  /** Ordered placed set (tx seal / local writes): the frozen placeless {@link setRelation} plus an
+   *  explicit placement. Stages ops like every other write; commit() seals. */
+  setRelationPlaced(key: EntityKey, r: Relation, target: EntityKey, place?: OrderPlaceKey): void {
+    if (!r.ordered) throw new Error(`strata: setRelationPlaced requires an ordered relation — "${r.name}".`);
+    if (place === undefined) {
+      this.setRelation(key, r, target); // placeless: append-new / keep-position (M1 parity)
+      return;
+    }
+    const child = this.ensureChild(key);
+    const prevVal = child.get(relOneKey(r));
+    const prev = prevVal === undefined || isContainer(prevVal) ? undefined : entityKey(String(prevVal));
+    child.set(relOneKey(r), target);
+    if (prev !== undefined && prev !== target) this.spliceOrderEntry(prev, r, key);
+    this.placeInOrderList(target, r, key, place);
+  }
+
+  /** Ordered reorder-in-place — NATIVE move (M0/P8.7 pin). False when `key` has no edge under `r`
+   *  (the caller DEV-warns; races must never throw). */
+  moveRelationPlaced(key: EntityKey, r: Relation, place: OrderPlaceKey): boolean {
+    if (!r.ordered) throw new Error(`strata: moveRelationPlaced requires an ordered relation — "${r.name}".`);
+    const cur = this.childMap(key)?.get(relOneKey(r));
+    if (cur === undefined || isContainer(cur)) return false;
+    this.placeInOrderList(entityKey(String(cur)), r, key, place);
+    return true;
   }
 
   // --- Part III M1 store-support surface (adapter-level; NOT on the frozen CRDTSnapshot) ------------
@@ -1290,9 +1525,39 @@ export class LoroSnapshot implements CRDTSnapshot {
     const spawns: ChangeEvent[] = [];
     const mutations: ChangeEvent[] = [];
     const despawns: ChangeEvent[] = [];
+    // The FOURTH bucket (plan-ordered-relations §4.2): order-invalidation facts, deduped per
+    // (parent, rel), emitted AFTER mutations and BEFORE despawns — "order applies after spawns and
+    // edge facts" as an EMISSION rule, not an accident of pair iteration.
+    const orders: ChangeEvent[] = [];
+    const orderSeen = new Set<string>();
+    const pushOrder = (key: EntityKey, relName: string): void => {
+      const r = relationByName(relName);
+      if (r === undefined || !r.ordered) return this.warnUnknown("ordered relation", relName);
+      const dedup = `${key}\u0000${relName}`;
+      if (orderSeen.has(dedup)) return;
+      orderSeen.add(dedup);
+      orders.push({ kind: "order-invalidate", key, rel: r, origin });
+    };
 
     for (const [cid, diff] of pairs) {
-      if (diff.type !== "map") continue; // our layout is all maps
+      if (diff.type === "list") {
+        // A MovableList diff — legal ONLY at ["entities", <parent>, "relO:<Name>"] (§4.1). A pure
+        // reorder commit surfaces as EXACTLY this pair (M0 probe); the deltas are never
+        // interpreted — any list change means "order changed at (parent, rel)", re-read at apply.
+        const path = this.doc.getPathToContainer(cid);
+        if (
+          path !== undefined &&
+          path.length === 3 &&
+          path[0] === "entities" &&
+          String(path[2]).startsWith(REL_ORDER)
+        ) {
+          pushOrder(entityKey(String(path[1])), String(path[2]).slice(REL_ORDER.length));
+        } else if (DEV) {
+          this.warnUnknown("list container", path === undefined ? String(cid) : path.join("/"));
+        }
+        continue;
+      }
+      if (diff.type !== "map") continue; // every other kind is foreign to our layout
       const updated = diff.updated;
       const cidStr = String(cid);
 
@@ -1330,11 +1595,19 @@ export class LoroSnapshot implements CRDTSnapshot {
         if (path === undefined || path.length !== 2 || path[0] !== "entities") continue;
         const key = entityKey(String(path[1]));
         for (const mapKey of Object.keys(updated)) {
+          if (mapKey.startsWith(REL_ORDER)) {
+            // The item-12 CARVE-OUT (§4.2): a container value at a relO: key is the ONE legal
+            // container-at-cell-key — the list's CREATION event. Its deletion (an old build's
+            // despawn wiping every key) or a hostile plain value routes the same way: any change
+            // at the key coalesces to one payload-free order cell; the converged re-read decides.
+            pushOrder(key, mapKey.slice(REL_ORDER.length));
+            continue;
+          }
           this.translateChildKey(key, mapKey, updated[mapKey], origin, spawns, mutations, despawns);
         }
       }
     }
-    return { origin, commitId, events: [...spawns, ...mutations, ...despawns] };
+    return { origin, commitId, events: [...spawns, ...mutations, ...orders, ...despawns] };
   }
 
   /**
@@ -1351,6 +1624,7 @@ export class LoroSnapshot implements CRDTSnapshot {
   private translateConverged(origin: Origin): ChangeBatch {
     const spawns: ChangeEvent[] = [];
     const mutations: ChangeEvent[] = [];
+    const orders: ChangeEvent[] = []; // one per POPULATED (parent, rel) — §4.2's bootstrap routing
     const despawns: ChangeEvent[] = []; // stays empty; keeps translateChildKey's contract exact
     for (const rawKey of this.entitiesMap.keys()) {
       const key = entityKey(String(rawKey));
@@ -1358,6 +1632,20 @@ export class LoroSnapshot implements CRDTSnapshot {
       if (m === undefined) continue; // poisoned root entry (non-map value) — childMap warned
       for (const mk of m.keys()) {
         const mapKey = String(mk);
+        if (mapKey.startsWith(REL_ORDER)) {
+          // Ordering hint, not a cell: one converged order fact per populated list (the emptied
+          // list of a despawned parent yields nothing — it reads absent everywhere, §4.1).
+          const r = relationByName(mapKey.slice(REL_ORDER.length));
+          if (r === undefined || !r.ordered) {
+            this.warnUnknown("ordered relation", mapKey.slice(REL_ORDER.length));
+            continue;
+          }
+          const list = m.get(mapKey);
+          if (list instanceof LoroMovableList && list.length > 0) {
+            orders.push({ kind: "order-invalidate", key, rel: r, origin });
+          }
+          continue;
+        }
         this.translateChildKey(key, mapKey, m.get(mapKey), origin, spawns, mutations, despawns);
       }
     }
@@ -1375,7 +1663,7 @@ export class LoroSnapshot implements CRDTSnapshot {
       }
       mutations.push({ kind: "resource-set", res, value: val as ComponentValue, origin });
     }
-    return { origin, commitId: "bootstrap", events: [...spawns, ...mutations, ...despawns] };
+    return { origin, commitId: "bootstrap", events: [...spawns, ...mutations, ...orders, ...despawns] };
   }
 
   /** Translate one child-map key change into its doc-fact, resolving the name (unknown → skip + warn). */

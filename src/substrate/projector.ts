@@ -154,11 +154,13 @@ export class Projector {
    * converged sequence and apply the D7 effective order wholesale. An UNKNOWN parent key is inert
    * (nothing is projected under it; a pure order fact must never mint identity — hostile/stale
    * facts stay harmless), matching the edge-authority law: sequences never create membership.
+   * Returns whether a re-derivation actually APPLIED (rev-m3 finding 2: the binding's
+   * `lastAppliedFrame` counts real applies only — the inert paths must not advance it).
    */
-  applyOrder(parentKey: EntityKey, r: Relation): void {
+  applyOrder(parentKey: EntityKey, r: Relation): boolean {
     const parent = this.keyToHandle.get(parentKey);
-    if (parent === undefined) return;
-    this.rederiveOrder(parent, parentKey, r);
+    if (parent === undefined) return false;
+    return this.rederiveOrder(parent, parentKey, r);
   }
 
   /**
@@ -168,9 +170,9 @@ export class Projector {
    * runtime-only locals — invisible to the doc, peer-local by definition, so their placement
    * cannot diverge across peers; keyed completion is doc-derived and deterministic everywhere.
    */
-  private rederiveOrder(parent: Entity, parentKey: EntityKey, r: Relation): void {
+  private rederiveOrder(parent: Entity, parentKey: EntityKey, r: Relation): boolean {
     const current = this.runtime.getReverse(parent, r);
-    if (current.length === 0) return;
+    if (current.length === 0) return false;
     const raw = this.orderSource?.readOrder(parentKey, r) ?? EMPTY_ORDER;
     const byKey = new Map<EntityKey, Entity>();
     for (const h of current) {
@@ -197,6 +199,7 @@ export class Projector {
     for (const [, h] of keyedRest) effective.push(h);
     for (const h of keylessRest) effective.push(h);
     this.runtime.setOrderedChildren(r, parent, effective);
+    return true;
   }
 
   applyRelationAdd(key: EntityKey, r: Relation, target: EntityKey): void {
