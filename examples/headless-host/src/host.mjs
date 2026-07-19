@@ -62,40 +62,40 @@ function getOrCreateRoom(name) {
   const existing = rooms.get(name);
   if (existing !== undefined) return existing;
 
+  // Restore via THE RELOAD RECIPE (S4 Tier A): import the on-disk snapshot into a BARE LoroDoc BEFORE
+  // createDurableStore. The constructor then adopts the doc's existing docId (its once-if-absent meta
+  // write never fires), so the import is pristine-fast AND a shallow (garbage-collected) autosave imports
+  // clean — a shallow snapshot imports only into a pristine doc, never through applyRemote on an already-
+  // constructed store. attachDurable's seed() projects the cold-loaded state into the World, so no
+  // world.sync() is needed to see it.
   let doc = new LoroDoc();
-  let store = createDurableStore(doc);
-  let world = createWorld({ name: `room:${name}` });
-  attachDurable(world, store);
-
-  // Restore: the EMPTY-DOC bootstrap fast path — import the whole on-disk snapshot into the fresh store,
-  // then project it. If the file is corrupt / causally impossible it quarantines: rename it aside and
-  // start fresh, never brick boot (the canvas-editor autosave precedent).
+  let restored = false;
   const file = fileFor(name);
   if (existsSync(file)) {
     try {
-      store.applyRemote(new Uint8Array(readFileSync(file)));
-      world.sync();
-      console.log(
-        `[headless-host] room="${name}" restored from disk (${documentDigest(store).entityCount} entities)`,
-      );
+      doc.import(new Uint8Array(readFileSync(file)));
+      restored = true;
     } catch (err) {
-      if (err instanceof PendingImportError) {
-        const quarantined = `${file}.quarantined-${Date.now()}`;
-        renameSync(file, quarantined);
-        console.warn(
-          `[headless-host] room="${name}" disk snapshot quarantined → ${quarantined}; starting fresh`,
-        );
-        // A failed import PERMANENTLY quarantines that snapshot instance — every later applyRemote on it
-        // throws before enqueuing — so "starting fresh" must mean a FRESH doc + store + world. Keeping the
-        // poisoned store would brick the room: every client join would quarantine-drop forever.
-        doc = new LoroDoc();
-        store = createDurableStore(doc);
-        world = createWorld({ name: `room:${name}` });
-        attachDurable(world, store);
-      } else {
-        throw err;
-      }
+      // ANY throw means the file is unusable — loro throws a bare non-Error string on undecodable bytes
+      // AND on a shallow-history / causally-impossible import, so the catch is TOTAL (not
+      // PendingImportError-keyed): rename it aside and start fresh, never brick boot (the canvas-editor
+      // autosave precedent). A failed import may leave the bare doc partially mutated, so discard it.
+      const quarantined = `${file}.quarantined-${Date.now()}`;
+      renameSync(file, quarantined);
+      console.warn(
+        `[headless-host] room="${name}" disk snapshot unusable → ${quarantined}; starting fresh`,
+      );
+      doc = new LoroDoc();
     }
+  }
+
+  const store = createDurableStore(doc);
+  const world = createWorld({ name: `room:${name}` });
+  attachDurable(world, store);
+  if (restored) {
+    console.log(
+      `[headless-host] room="${name}" restored from disk (${documentDigest(store).entityCount} entities)`,
+    );
   }
 
   /** @type {Room} */

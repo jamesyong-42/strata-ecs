@@ -432,9 +432,25 @@ export class DurableStore {
    * This is a legitimate transport surface: an increment presupposes its base was shipped first, and a
    * joining peer has no base — so it needs the snapshot, not the increment stream. Keep the byte-moving
    * in the app; the store only encodes (Loro stays quarantined behind the adapter, §14.2).
+   *
+   * `{ mode: "shallow" }` (S4 Tier A) exports a HISTORY-TRUNCATED snapshot — every entity's live STATE is
+   * present, but the oplog below the current frontier is garbage-collected — for AT-REST autosave / disk
+   * compaction, where smaller bytes matter and history replay does not (probed ×1.59 fresh / ×2.62 under
+   * churn). No argument keeps today's byte-identical FULL snapshot. Two LAWS bind a shallow snapshot:
+   *   1. RESTORE VIA THE RELOAD RECIPE. Import the bytes into a bare `LoroDoc` FIRST, THEN wrap it with
+   *      `createDurableStore`. A shallow snapshot imports clean ONLY into a pristine doc; pushed through
+   *      `applyRemote` on an already-constructed store it quarantines (the store's construction docId
+   *      commit is a divergent op the shallow base lacks). The reload recipe is also the pristine-fast
+   *      restore path for full snapshots — one recipe for both.
+   *   2. NO CROSS-BASE INCREMENT EXCHANGE. A doc restored from a shallow base cannot swap increments
+   *      across the truncation boundary with a FULL-history peer: an increment whose deps predate the
+   *      boundary quarantines ({@link PendingImportError}) on either side — mixing bases forces a
+   *      re-bootstrap. Peers restored from the SAME shallow base delta-sync (and undo) normally.
+   * Honest limit: shallow does NOT reclaim despawned entities' empty containers (~30B each — the
+   * no-delete layout floor; only a Tier B epoch re-seed reclaims those).
    */
-  exportSnapshot(): Uint8Array {
-    return this.snapshot.export();
+  exportSnapshot(opts?: { mode?: "shallow" }): Uint8Array {
+    return this.snapshot.export(opts);
   }
 
   /**

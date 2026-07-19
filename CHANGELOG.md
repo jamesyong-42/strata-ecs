@@ -6,6 +6,28 @@ All notable changes to strata-ecs are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`DurableStore.exportSnapshot({ mode: "shallow" })` — an at-rest, history-compacted snapshot.** The
+  no-argument call is unchanged (a full snapshot, byte-identical to before); the new `shallow` mode
+  exports the complete live state with the oplog below the current frontier garbage-collected, so an
+  autosave / disk file stays smaller as history accumulates. Two laws bind the bytes: restore them via
+  the RELOAD RECIPE — import into a bare `LoroDoc` *before* `createDurableStore`, never through
+  `applyRemote` on a constructed store (a shallow snapshot imports clean only into a pristine doc); and a
+  shallow-restored document cannot exchange increments across the truncation boundary with a full-history
+  peer (mixing bases forces a re-bootstrap), though peers restored from the same shallow base delta-sync
+  and undo normally. It does not reclaim despawned entities' empty containers (the no-delete layout
+  floor).
+
+### Fixed
+
+- **A cross-boundary import into a shallow-restored document is now quarantined, not thrown raw.** When a
+  full-history peer's increment references history a shallow snapshot has truncated, Loro throws a bare
+  (non-`Error`) string that previously escaped `applyRemote` uncaught; it now maps to `PendingImportError`
+  like any other unrecoverable import, so the transport's existing quarantine-and-re-bootstrap contract
+  covers it. Genuinely undecodable bytes still pass through untouched (the transport owns that total
+  catch) — only the shallow-history boundary case is remapped.
+
 ### Performance
 
 - **A joiner's bootstrap import no longer builds the undo machinery.** The document adapter used to

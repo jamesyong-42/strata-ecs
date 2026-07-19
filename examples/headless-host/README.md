@@ -49,9 +49,11 @@ Rooms are the URL path, so `ws://localhost:8788/design` and `.../physics` are tw
 - **`PendingImportError` ⇒ re-bootstrap; quarantine is permanent for a document instance.** A store that
   ever throws `PendingImportError` on import is poisoned for good — there is no in-place repair. A client
   that quarantines reconnects and re-bootstraps from scratch (a brand-new document). The host **drops**
-  any socket whose bytes quarantine it. If the host's **own** store quarantines while restoring from disk,
-  it renames `data/<room>.bin` → `data/<room>.bin.quarantined-<ts>` and starts the room fresh — it never
-  bricks boot (the canvas-editor autosave precedent).
+  any socket whose bytes quarantine it. On boot it restores each room with the **reload recipe** — import
+  the on-disk snapshot into a bare `LoroDoc` *before* `createDurableStore` (pristine-fast, and the only
+  way a shallow / history-compacted autosave imports clean) — and if that bare import throws at all, it
+  renames `data/<room>.bin` → `data/<room>.bin.quarantined-<ts>` and starts the room fresh, never bricking
+  boot (the canvas-editor autosave precedent).
 - **The schema is process-global.** `defineComponent`/`defineResource`/… register names in one table
   shared by every `World` in the process; a duplicate name throws. So the multi-room host imports
   `src/schema.mjs` **once** and every room's World speaks that one vocabulary. Bytes crossing the wire are

@@ -103,11 +103,17 @@ export interface MutableSnapshot extends Snapshot {
  * snapshots (the Loro adapter), a no-op elsewhere; default `true` (one commit = one undo step). The
  * param is OPTIONAL so prior implementers of this frozen interface stay assignable. `undo`/`redo` are
  * local-ops-only (§1.3).
+ *
+ * `export` yields the whole converged state as self-contained bytes (a fresh peer imports them as its
+ * base). Its optional `opts.mode: "shallow"` requests a HISTORY-TRUNCATED variant — state complete,
+ * oplog garbage-collected at the current frontier — for at-rest autosave / disk compaction; honored by
+ * history-capable snapshots (the Loro adapter), default (full snapshot) elsewhere. Like `undoable`, the
+ * param is OPTIONAL so prior implementers of this frozen interface stay assignable.
  */
 export interface CRDTSnapshot extends MutableSnapshot {
   applyRemote(bytes: Uint8Array): ChangeBatch[];
   commit(body: () => void, opts?: { undoable?: boolean }): void;
-  export(): Uint8Array;
+  export(opts?: { mode?: "shallow" }): Uint8Array;
   subscribe(fn: (batch: ChangeBatch) => void): Unsubscribe;
   undo(): void;
   redo(): void;

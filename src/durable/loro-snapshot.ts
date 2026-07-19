@@ -178,7 +178,7 @@
  */
 
 import { LoroDoc, LoroMap, LoroMovableList, UndoManager, type Value, isContainer } from "loro-crdt";
-import type { ContainerID, Diff, JsonChange, OpId, VersionVector } from "loro-crdt";
+import type { ContainerID, Diff, ImportStatus, JsonChange, OpId, VersionVector } from "loro-crdt";
 import { DEV, devWarn } from "../core/dev";
 import { type EntityKey, entityKey } from "../core/field";
 import type { Component, Relation, Resource, Tag } from "../core/schema";
@@ -1006,7 +1006,28 @@ export class LoroSnapshot implements CRDTSnapshot {
       this.entitiesMap.keys().length === 0 && this.resourcesMap.keys().length === 0;
     const beforeVV = this.doc.version();
     const beforeFrontiers = this.doc.frontiers();
-    const status = this.doc.import(bytes);
+    let status: ImportStatus;
+    try {
+      status = this.doc.import(bytes);
+    } catch (e) {
+      // CROSS-BOUNDARY IMPORT (S4 Tier A): an increment whose causal deps predate a SHALLOW snapshot's
+      // truncated history makes loro THROW (it cannot buffer it as pending) — a BARE non-Error string,
+      // probe-verified verbatim: "Import Failed: The dependencies of the importing updates are not
+      // included in the shallow history of the doc". Map ONLY this case to the quarantine class: the
+      // recovery contract is identical to a pending import — this doc instance must re-bootstrap. String-
+      // matching on "shallow history" is a KNOWN FRAGILITY: the adapter runs in the CONSUMER's loro
+      // (peerDependency ">=1", not a pin — only our own dev lockfile holds 1.13.6), so a future loro
+      // rewording turns this remap into a passthrough. That degrades gracefully — transports already owe
+      // a total catch (the headless-host law), the same exposure the "Decode error" passthrough has.
+      // Loro throws bare strings, so no structured matching exists. Any OTHER raw throw is a
+      // PASSTHROUGH — quarantining on hostile bytes would let one garbage frame poison the store; the
+      // transport owns the total-catch (the headless-host law).
+      if (typeof e === "string" && e.includes("shallow history")) {
+        this.quarantined = true;
+        throw new PendingImportError();
+      }
+      throw e;
+    }
     if (status.pending !== null) {
       this.quarantined = true;
       throw new PendingImportError();
@@ -1100,13 +1121,25 @@ export class LoroSnapshot implements CRDTSnapshot {
   }
 
   /**
-   * Full converged snapshot. SEALS any staged-but-uncommitted writes FIRST (as a tagged commit + local
-   * batch), rather than letting loro's `export` implicitly seal them — an implicit seal ships them to
-   * peers with NO local echo and NO `strata:<n>` message (so they'd coalesce on the receiver). After the
-   * explicit seal, export the snapshot.
+   * Converged snapshot. SEALS any staged-but-uncommitted writes FIRST (as a tagged commit + local batch),
+   * rather than letting loro's `export` implicitly seal them — an implicit seal ships them to peers with
+   * NO local echo and NO `strata:<n>` message (so they'd coalesce on the receiver). After the explicit
+   * seal, export.
+   *
+   * `mode: "shallow"` (S4 Tier A) requests loro's garbage-collected `shallow-snapshot` truncated at the
+   * current oplog frontier: STATE is complete but HISTORY below the frontier is dropped, so the bytes are
+   * smaller (probed ×1.59 fresh / ×2.62 under churn) — for at-rest autosave / disk compaction. It does NOT
+   * reclaim despawned entities' empty containers (~30B each — the no-delete layout floor; only a Tier B
+   * epoch re-seed reclaims those). The seal-first behavior is identical; the two restore/exchange LAWS a
+   * shallow snapshot carries live on {@link DurableStore.exportSnapshot} (the public surface).
    */
-  export(): Uint8Array {
+  export(opts?: { mode?: "shallow" }): Uint8Array {
     this.sealStaged();
+    if (opts?.mode === "shallow") {
+      // Probe-verified signature (loro-crdt 1.13.6): a shallow snapshot boundaried at the current oplog
+      // frontier — the whole live state, history garbage-collected below the boundary.
+      return this.doc.export({ mode: "shallow-snapshot", frontiers: this.doc.oplogFrontiers() });
+    }
     return this.doc.export({ mode: "snapshot" });
   }
 
