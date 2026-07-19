@@ -18,16 +18,27 @@ import type { Component, Relation, Tag } from "../core/schema";
 // Value import: the barrel exports RuntimeStore type-only post-R2, but an internal value import is
 // fine (the projector IS an internal driver of the engine seam, §5.2).
 import { RuntimeStore } from "../core/runtime-store";
+import type { OrderSource } from "./types";
+
+const EMPTY_ORDER: readonly EntityKey[] = [];
 
 export class Projector {
   private readonly keyToHandle = new Map<EntityKey, Entity>();
   private readonly handleToKey = new Map<Entity, EntityKey>();
+  /** The converged-order read seam (plan-ordered-relations §4.2/§4.3) — wired by the binding
+   *  (M3: the adapter's store-support surface; M2 conformance: the BaselineSnapshot). Null when
+   *  the attached document has no order capability: D7 then runs completion-only. */
+  private orderSource: OrderSource | null = null;
 
   constructor(
     private readonly runtime: RuntimeStore,
     /** The kernel owns BOTH id-spaces — keys via `mintKey`, handles via `runtime.allocateIdentity`. */
     private readonly mintKey: () => EntityKey,
   ) {}
+
+  setOrderSource(src: OrderSource | null): void {
+    this.orderSource = src;
+  }
 
   /** The ONLY place a pair is recorded — `bind` is private, so there is no "allocate but don't link". */
   private bind(key: EntityKey, handle: Entity): void {
@@ -119,7 +130,73 @@ export class Projector {
   applyRelationSet(key: EntityKey, r: Relation, target: EntityKey): void {
     const h = this.resolveByKey(key);
     this.runtime.ensurePlaced(h); // a relation makes the source live + queryable
+    if (r.ordered) {
+      // D7 COROLLARY (plan-ordered-relations §4.2): every ordered edge fact is ALSO an
+      // order-invalidation for BOTH affected parents — without the re-derivation, a placeless
+      // append here would diverge from a fresh joiner's bootstrap derivation. Old parent read
+      // BEFORE the edge moves.
+      const oldParent = this.runtime.getRelation(h, r);
+      const t = this.resolveByKey(target);
+      this.runtime.setRelation(h, r, t);
+      if (oldParent !== undefined && oldParent !== t) {
+        const oldKey = this.handleToKey.get(oldParent);
+        // A keyless old parent is runtime-only (local, never doc-ordered): the M1 splice suffices.
+        if (oldKey !== undefined) this.rederiveOrder(oldParent, oldKey, r);
+      }
+      this.rederiveOrder(t, target, r);
+      return;
+    }
     this.runtime.setRelation(h, r, this.resolveByKey(target)); // arity "one" (:939); target minted if new
+  }
+
+  /**
+   * Apply an `order-invalidate` fact (plan-ordered-relations §4.2): payload-free — re-read the
+   * converged sequence and apply the D7 effective order wholesale. An UNKNOWN parent key is inert
+   * (nothing is projected under it; a pure order fact must never mint identity — hostile/stale
+   * facts stay harmless), matching the edge-authority law: sequences never create membership.
+   */
+  applyOrder(parentKey: EntityKey, r: Relation): void {
+    const parent = this.keyToHandle.get(parentKey);
+    if (parent === undefined) return;
+    this.rederiveOrder(parent, parentKey, r);
+  }
+
+  /**
+   * D7 (plan-ordered-relations D7): effective order = [converged-sequence entries that are live
+   * children of the parent, first occurrence wins] ++ [remaining KEYED children in EntityKey
+   * ascending order] ++ [keyless children in current relative order]. Keyless children are
+   * runtime-only locals — invisible to the doc, peer-local by definition, so their placement
+   * cannot diverge across peers; keyed completion is doc-derived and deterministic everywhere.
+   */
+  private rederiveOrder(parent: Entity, parentKey: EntityKey, r: Relation): void {
+    const current = this.runtime.getReverse(parent, r);
+    if (current.length === 0) return;
+    const raw = this.orderSource?.readOrder(parentKey, r) ?? EMPTY_ORDER;
+    const byKey = new Map<EntityKey, Entity>();
+    for (const h of current) {
+      const k = this.handleToKey.get(h);
+      if (k !== undefined) byKey.set(k, h);
+    }
+    const seen = new Set<Entity>();
+    const effective: Entity[] = [];
+    for (const k of raw) {
+      const h = byKey.get(k);
+      if (h === undefined || seen.has(h)) continue; // stale / foreign / duplicate — filtered (D2)
+      seen.add(h);
+      effective.push(h);
+    }
+    const keyedRest: Array<[EntityKey, Entity]> = [];
+    const keylessRest: Entity[] = [];
+    for (const h of current) {
+      if (seen.has(h)) continue;
+      const k = this.handleToKey.get(h);
+      if (k === undefined) keylessRest.push(h);
+      else keyedRest.push([k, h]);
+    }
+    keyedRest.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    for (const [, h] of keyedRest) effective.push(h);
+    for (const h of keylessRest) effective.push(h);
+    this.runtime.setOrderedChildren(r, parent, effective);
   }
 
   applyRelationAdd(key: EntityKey, r: Relation, target: EntityKey): void {

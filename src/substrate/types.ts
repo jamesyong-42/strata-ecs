@@ -151,8 +151,40 @@ export type ChangeEvent =
   | { kind: "relation-set"; key: EntityKey; rel: Relation; target: EntityKey; origin: Origin }
   | { kind: "relation-add"; key: EntityKey; rel: Relation; target: EntityKey; origin: Origin }
   | { kind: "relation-remove"; key: EntityKey; rel: Relation; target?: EntityKey; origin: Origin }
+  /**
+   * ORDER-INVALIDATION (plan-ordered-relations §4.2): the sibling sequence of ordered relation
+   * `rel` under parent `key` changed. PAYLOAD-FREE by design — consistent with the M4
+   * converged-re-read law, the applier re-reads the converged sequence from an {@link OrderSource}
+   * at drain time and applies the D7 effective order wholesale; the fact itself only names the
+   * (parent, rel) cell. `key` is the PARENT (the sequence owner), not a child.
+   */
+  | { kind: "order-invalidate"; key: EntityKey; rel: Relation; origin: Origin }
   | { kind: "resource-set"; res: Resource; value: ComponentValue; origin: Origin }
   | { kind: "resource-remove"; res: Resource; origin: Origin };
+
+/**
+ * The effective-order READ seam (plan-ordered-relations §4.3 / review F7): ordered-relation reads
+ * ride an ADAPTER-LEVEL capability, never the frozen {@link MutableSnapshot}/{@link CRDTSnapshot}
+ * interfaces. `readOrder` returns the RAW converged sequence for (parent, rel) — it may contain
+ * stale entries (reparent losers), duplicates (same-destination races), or foreign keys (hostile
+ * peers); the projector's D7 application filters ALL of that against edge authority. `undefined`
+ * means "no sequence recorded" — D7 then degrades to the pure completion order. Implemented by
+ * `BaselineSnapshot` (M2, the ladder oracle) and the Loro adapter's store-support surface (M3).
+ */
+export interface OrderSource {
+  readOrder(key: EntityKey, r: Relation): readonly EntityKey[] | undefined;
+}
+
+/**
+ * `OrderPlace` at the durable currency (plan-ordered-relations §4.3): anchors are `EntityKey`s,
+ * not runtime handles — the shape ordered writes take at the snapshot ladder (baseline now, the
+ * adapter store-support surface + tx seal in M3, where record-time handle anchors resolve to keys).
+ */
+export type OrderPlaceKey =
+  | "first"
+  | "last"
+  | { readonly before: EntityKey }
+  | { readonly after: EntityKey };
 
 /**
  * The doc-facts of EXACTLY ONE commit (§1.3). Both `subscribe` and `applyRemote` deliver a batch,

@@ -60,6 +60,12 @@ function cellKeyOf(e: ChangeEvent): string {
       return e.target === undefined
         ? JSON.stringify(["R", e.key, e.rel.name])
         : JSON.stringify(["R", e.key, e.rel.name, e.target]);
+    case "order-invalidate":
+      // The (parent, rel, order) cell (plan-ordered-relations §4.2). Distinct "O" family so it can
+      // never collide with the parent's own edge slot; payload-free, so plain last-fact-wins IS the
+      // ≤1-per-(parent,rel)-per-segment dedupe. Owned by the parent key (despawn dominance erases
+      // pending invalidations for a dead parent — its sequence dies with it).
+      return JSON.stringify(["O", e.key, e.rel.name]);
     case "resource-set":
     case "resource-remove":
       return JSON.stringify(["S", e.res.name]);

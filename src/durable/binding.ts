@@ -618,6 +618,16 @@ class DurableBinding implements InboundSource {
    */
   private reconcile(ev: ChangeEvent): void {
     switch (ev.kind) {
+      // plan-ordered-relations M2→M3 seam (rev-m2 finding 6): the grammar already carries
+      // `order-invalidate`, but no adapter EMITS it until M3 wires the Loro list translation.
+      // Handle it explicitly now — projector-side apply is already correct and idempotent — so
+      // the M3 wiring cannot silently swallow order facts if this switch is forgotten. NOTE the
+      // projector's OrderSource must be the doc's CONVERGED read (constant-final during a drain;
+      // projector-first/baseline-second order below makes the binding baseline STALE here) —
+      // never the binding's baseline.
+      case "order-invalidate":
+        this.projector.applyOrder(ev.key, ev.rel);
+        break;
       case "spawn":
         this.projector.applySpawn(ev.key);
         this.baseline.spawn(ev.key);

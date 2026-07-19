@@ -22,6 +22,8 @@ export type {
   Origin,
   ChangeEvent,
   ChangeBatch,
+  OrderSource,
+  OrderPlaceKey,
 } from "./types";
 
 // --- canonical values + cell equality (§2) ---

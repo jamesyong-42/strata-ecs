@@ -27,7 +27,8 @@
 
 import type { EntityKey } from "../core/field";
 import type { Component, Relation, Resource, Tag } from "../core/schema";
-import type { ComponentValue, EntityRecord, MutableSnapshot } from "./types";
+import { relationByName } from "../core/schema";
+import type { ComponentValue, EntityRecord, MutableSnapshot, OrderPlaceKey, OrderSource } from "./types";
 import { canon, canonResource } from "./canon";
 
 /**
@@ -41,7 +42,7 @@ interface ReverseEdge {
   arity: "one" | "many";
 }
 
-export class BaselineSnapshot implements MutableSnapshot {
+export class BaselineSnapshot implements MutableSnapshot, OrderSource {
   /** The existence cell (§4.1): keys explicitly spawned and not despawned. Liveness ALSO derives from cells. */
   private readonly spawned = new Set<EntityKey>();
   /** key → componentName → canonical value (§2). */
@@ -54,6 +55,14 @@ export class BaselineSnapshot implements MutableSnapshot {
   private readonly relMany = new Map<EntityKey, Map<string, Set<EntityKey>>>();
   /** target → the edges pointing AT it (the §1.3 reverse index). Keyed by the edge TARGET. */
   private readonly reverse = new Map<EntityKey, ReverseEdge[]>();
+  /**
+   * ORDERED sibling sequences (plan-ordered-relations §3.2 at EntityKey currency): parent →
+   * relationName → children in sibling order. Maintained in LOCKSTEP with the arity-one edges for
+   * ordered relations, on every write path of the frozen interface (placeless `setRelation`
+   * appends "last" on a NEW edge and keeps position on a re-set — the projector-parity default)
+   * plus the placed/move extensions below. The ladder oracle's order truth.
+   */
+  private readonly orderSeqs = new Map<EntityKey, Map<string, EntityKey[]>>();
   /** resourceName → canonical value. */
   private readonly resources = new Map<string, ComponentValue>();
 
@@ -140,6 +149,9 @@ export class BaselineSnapshot implements MutableSnapshot {
       }
       this.reverse.delete(key);
     }
+    // Ordered sequences: `key` as PARENT dies with its sequences; `key` as CHILD was spliced from
+    // its parent's sequence by clearOutgoing above.
+    this.orderSeqs.delete(key);
   }
 
   setComponent(key: EntityKey, c: Component, v: ComponentValue): void {
@@ -172,6 +184,39 @@ export class BaselineSnapshot implements MutableSnapshot {
     if (prev !== undefined) this.dropReverse(prev, key, r.name); // replace: old target loses its incoming edge
     m.set(r.name, target);
     this.addReverse(target, key, r.name, "one");
+    if (r.ordered) {
+      // Placeless set: NEW edge appends "last"; re-set of the SAME target keeps position — the
+      // exact runtime parity (M1 §3.3) the P8 cross-path determinism property rides on.
+      if (prev === target) return;
+      if (prev !== undefined) this.spliceSeq(prev, r.name, key);
+      this.insertSeq(target, r.name, key, "last");
+    }
+  }
+
+  /**
+   * Ordered write extensions (plan-ordered-relations §4.3): NOT part of the frozen
+   * {@link MutableSnapshot} — they live on the implementation the way the Loro adapter's
+   * store-support surface does. Same semantics as the runtime: placed set (idempotent re-set with
+   * a place = move), move-in-place (false when no edge), absent anchors degrade to "last".
+   */
+  setRelationPlaced(key: EntityKey, r: Relation, target: EntityKey, place?: OrderPlaceKey): void {
+    if (!r.ordered) throw new Error(`strata: setRelationPlaced requires an ordered relation — "${r.name}".`);
+    this.setRelation(key, r, target); // edge + lockstep default handling (new→"last", same→keep)
+    if (place === undefined) return;
+    this.insertSeq(target, r.name, key, place); // re-place (insertSeq splices any existing occurrence)
+  }
+
+  moveRelationPlaced(key: EntityKey, r: Relation, place: OrderPlaceKey): boolean {
+    if (!r.ordered) throw new Error(`strata: moveRelationPlaced requires an ordered relation — "${r.name}".`);
+    const parent = this.relOne.get(key)?.get(r.name);
+    if (parent === undefined) return false;
+    this.insertSeq(parent, r.name, key, place);
+    return true;
+  }
+
+  /** {@link OrderSource}: the RAW recorded sequence — the ladder oracle's converged order. */
+  readOrder(key: EntityKey, r: Relation): readonly EntityKey[] | undefined {
+    return this.orderSeqs.get(key)?.get(r.name);
   }
 
   addRelation(key: EntityKey, r: Relation, target: EntityKey): void {
@@ -197,6 +242,7 @@ export class BaselineSnapshot implements MutableSnapshot {
       if (target === undefined || target === cur) {
         m!.delete(r.name);
         this.dropReverse(cur, key, r.name);
+        if (r.ordered) this.spliceSeq(cur, r.name, key);
       }
     } else {
       const set = this.relMany.get(key)?.get(r.name);
@@ -230,11 +276,15 @@ export class BaselineSnapshot implements MutableSnapshot {
     return false;
   }
 
-  /** Remove every OUTGOING edge from `key` (both arities), keeping the reverse index in sync. */
+  /** Remove every OUTGOING edge from `key` (both arities), keeping the reverse index — and, for
+   *  ordered relations, the target's sibling sequence — in sync. */
   private clearOutgoing(key: EntityKey): void {
     const one = this.relOne.get(key);
     if (one !== undefined) {
-      for (const [name, target] of one) this.dropReverse(target, key, name);
+      for (const [name, target] of one) {
+        this.dropReverse(target, key, name);
+        if (relationByName(name)?.ordered) this.spliceSeq(target, name, key);
+      }
       this.relOne.delete(key);
     }
     const many = this.relMany.get(key);
@@ -244,6 +294,36 @@ export class BaselineSnapshot implements MutableSnapshot {
       }
       this.relMany.delete(key);
     }
+  }
+
+  /** Remove `child` from `parent`'s sequence under `relName` (edge already unlinked). */
+  private spliceSeq(parent: EntityKey, relName: string, child: EntityKey): void {
+    const arr = this.orderSeqs.get(parent)?.get(relName);
+    if (arr === undefined) return;
+    const i = arr.indexOf(child);
+    if (i >= 0) arr.splice(i, 1);
+  }
+
+  /** Place `child` in `parent`'s sequence per `place` — splices any existing occurrence first
+   *  (re-placement is a move; no duplicates); absent/self anchors degrade to "last" (§3.3). */
+  private insertSeq(parent: EntityKey, relName: string, child: EntityKey, place: OrderPlaceKey): void {
+    let byRel = this.orderSeqs.get(parent);
+    if (byRel === undefined) this.orderSeqs.set(parent, (byRel = new Map()));
+    let arr = byRel.get(relName);
+    if (arr === undefined) byRel.set(relName, (arr = []));
+    const existing = arr.indexOf(child);
+    if (existing >= 0) arr.splice(existing, 1);
+    let index: number;
+    if (place === "first") {
+      index = 0;
+    } else if (place === "last") {
+      index = arr.length;
+    } else {
+      const anchor = "before" in place ? place.before : place.after;
+      const at = anchor === child ? -1 : arr.indexOf(anchor);
+      index = at < 0 ? arr.length : "before" in place ? at : at + 1;
+    }
+    arr.splice(index, 0, child);
   }
 
   private addReverse(target: EntityKey, source: EntityKey, relName: string, arity: "one" | "many"): void {

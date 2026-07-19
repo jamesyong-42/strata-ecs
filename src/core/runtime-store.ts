@@ -1501,10 +1501,15 @@ export class RuntimeStore implements ECSStore {
   }
 
   /** @internal Overwrite a parent's sibling sequence wholesale — snapshot import's D7 application
-   *  (§3.5) and, in M2, the projector's order-cell application. Assigns sequence, never membership:
-   *  the caller passes exactly the parent's current children. */
+   *  (§3.5) and the projector's order-cell application (M2). Assigns sequence, never membership:
+   *  the caller passes exactly the parent's current children. Bumps the relation's membership
+   *  stamp like every other order mutation (rev-m2 finding 1: a REMOTE pure reorder must wake an
+   *  observeQuery naming R exactly as a local moveRelation does — the stamp lives in this wrapper
+   *  so no future caller can reintroduce the silent path; the snapshot-import call site's extra
+   *  bump is a legal over-fire). */
   setOrderedChildren(rel: Relation, parent: Entity, children: Entity[]): void {
     this.relations.setOrderedChildren(rel, parent, children);
+    this.bumpRel(rel.id);
   }
 
   // ---------------------------------------------------------------------------
