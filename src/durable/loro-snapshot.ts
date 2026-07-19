@@ -440,7 +440,22 @@ export class LoroSnapshot implements CRDTSnapshot {
    * name-derived and peer-independent, so this matches an imported peer's meta ops too (petition 3b).
    */
   private readonly metaRootId: string;
-  private readonly undoManager: UndoManager;
+  /**
+   * The undo/redo machinery — CONSTRUCTED LAZILY (S3), `undefined` until the first UNDOABLE local commit
+   * (or the first {@link beginUndoGroup}) via {@link ensureUndoManager}. A loro `UndoManager` attached at
+   * import time makes `doc.import` of a big snapshot super-linear (a joiner's bootstrap wall), so a
+   * pristine joiner — which only ever `applyRemote`s a snapshot and seals its META_ORIGIN docId write —
+   * imports manager-free. Every history reader/writer is nullable-safe: an absent manager reads as empty
+   * stacks (`canUndo`/`canRedo` false, `undo`/`redo` false no-ops) and never constructs; ONLY a real
+   * undoable commit or an undo group does (the measured perf record lives in docs/plan-petitions-s2-s4.md).
+   */
+  private undoManager: UndoManager | undefined;
+  /**
+   * The undo-stack depth cap captured at construction — the exact `maxUndoSteps` {@link ensureUndoManager}
+   * passes to the lazy `UndoManager` (loro's default 100). Held as a field because the manager it configures
+   * is built later than the constructor.
+   */
+  private readonly maxUndoSteps: number;
   /** App metadata hooks riding the undo stack (plan-undo U1): capture on push, restore on pop. */
   private historyHooks: HistoryHooks | null = null;
   /** Notified whenever the undo/redo stacks may have changed (any local seal, import, clear). */
@@ -500,29 +515,49 @@ export class LoroSnapshot implements CRDTSnapshot {
     // The last-emitted frontier starts at the committed head (imported history is already sealed; a fresh
     // doc is []). No pending ops at construction, so `frontiers()` is the committed head here.
     this.sealedTo = this.doc.frontiers();
-    // Local-ops-only undo (finding 7). `mergeInterval: 0` makes ONE sealed commit ONE undo step — loro's
-    // default TIME-merges rapid commits into a single step, but the transaction model (M3) is
-    // one-transaction = one-commit = one-undo-step, so we opt out of time grouping. Constructed here so
-    // it tracks only this session's commits (pre-existing history is not undoable — "before our session").
-    // `excludeOriginPrefixes` keeps two classes of commit OFF the undo stack: META_ORIGIN — out-of-band
-    // meta writes (docId, `ensureMeta`), a user's undo must never roll back the document id; and
-    // NON_UNDOABLE_ORIGIN — app transactions that opted out via `transaction(fn, { undoable: false })`
-    // (migrations / read-repair / janitorial transforms), which must not push a step the user could undo
-    // into. Both still surface as ordinary batches to subscribers and peers (the origin is a LOCAL undo
-    // concern only).
-    this.undoManager = new UndoManager(doc, {
+    // Undo-stack depth cap captured for the LAZY construction (S3). The public knob is
+    // createDurableStore's `maxUndoSteps` (plan-undo U1); loro's default is 100. No UndoManager is
+    // built here — see `ensureUndoManager` for the construction options and the reason it is deferred.
+    this.maxUndoSteps = opts?.maxUndoSteps ?? 100;
+  }
+
+  /**
+   * Construct the undo/redo machinery ON DEMAND and cache it (S3 lazy-undo, docs/plan-petitions-s2-s4.md).
+   * Idempotent — returns the existing manager if already built. Called at the two (and only two) triggers
+   * that make an undo step possible: the entry of an UNDOABLE {@link commit} (BEFORE its body stages any
+   * op — the A1 pin: a manager constructed after staging does not track the commit) and {@link
+   * beginUndoGroup}. NEVER called from `applyRemote`, the META_ORIGIN paths (`ensureMeta`/`metaTransaction`
+   * seal on the doc directly), a non-undoable commit, or any history READER — so a pristine joiner imports
+   * manager-free.
+   *
+   * The options and the onPush/onPop wiring are the exact ones the constructor used to build eagerly.
+   * `mergeInterval: 0` makes ONE sealed commit ONE undo step (the transaction model is
+   * one-transaction = one-commit = one-undo-step, so we opt out of loro's default time-merge).
+   * `excludeOriginPrefixes` keeps two classes of commit OFF the undo stack: META_ORIGIN — out-of-band meta
+   * writes (docId, `ensureMeta`), a user's undo must never roll back the document id; and
+   * NON_UNDOABLE_ORIGIN — app transactions that opted out via `transaction(fn, { undoable: false })`
+   * (migrations / read-repair / janitorial transforms), which must not push a step the user could undo
+   * into. Both still surface as ordinary batches to subscribers and peers (the origin is a LOCAL undo
+   * concern only). Constructed lazily means pre-existing history AND everything before the first undoable
+   * commit is not undoable — "before our session" — which is exactly the eager semantics too (the manager
+   * only ever tracked commits sealed after its own construction).
+   */
+  private ensureUndoManager(): UndoManager {
+    if (this.undoManager !== undefined) return this.undoManager;
+    const um = new UndoManager(this.doc, {
       mergeInterval: 0,
-      // Explicit loro default — the public knob is createDurableStore's `maxUndoSteps` (plan-undo U1).
-      maxUndoSteps: opts?.maxUndoSteps ?? 100,
+      maxUndoSteps: this.maxUndoSteps,
       excludeOriginPrefixes: [META_ORIGIN, NON_UNDOABLE_ORIGIN],
     });
     // History-hook multiplex (plan-undo U1): loro's onPush/onPop are SINGLE-SLOT setters, so the adapter
     // owns both once and fans out. onPush captures the app's metadata for the step being pushed
     // (isUndo=true → the undo stack, i.e. an ordinary commit; false → the redo stack, i.e. during
-    // undo()); onPop hands the stored value back when a step is applied. Both callbacks run INSIDE the
-    // wasm call, so they are exception-isolated here (a throwing app hook must never unwind loro) and
-    // `inHistoryHook` makes doc re-entry from a hook throw at every entry point this adapter owns.
-    this.undoManager.setOnPush((isUndo) => {
+    // undo()); onPop hands the stored value back when a step is applied. Both callbacks read
+    // `this.historyHooks` AT FIRE TIME, so `setHistoryHooks` needs no manager — hooks installed before the
+    // lazy construction still fire on the first real push. Both run INSIDE the wasm call, so they are
+    // exception-isolated here (a throwing app hook must never unwind loro) and `inHistoryHook` makes doc
+    // re-entry from a hook throw at every entry point this adapter owns.
+    um.setOnPush((isUndo) => {
       let value: Value = null;
       const capture = this.historyHooks?.capture;
       if (capture) {
@@ -547,7 +582,7 @@ export class LoroSnapshot implements CRDTSnapshot {
       }
       return { value, cursors: [] };
     });
-    this.undoManager.setOnPop((isUndo, item) => {
+    um.setOnPop((isUndo, item) => {
       const restore = this.historyHooks?.restore;
       if (restore === undefined) return;
       this.inHistoryHook = true;
@@ -559,6 +594,16 @@ export class LoroSnapshot implements CRDTSnapshot {
         this.inHistoryHook = false;
       }
     });
+    this.undoManager = um;
+    return um;
+  }
+
+  /**
+   * @internal White-box probe for the S3 lazy-undo tests: has the UndoManager been constructed yet? NOT
+   * public surface — the R2 `stripInternal` rule drops `@internal`-tagged members from the shipped d.ts.
+   */
+  get hasUndoManagerForTest(): boolean {
+    return this.undoManager !== undefined;
   }
 
   /** Max existing `strata:<n>` message across this peer's own changes, + 1 (0 on a fresh doc). */
@@ -897,6 +942,13 @@ export class LoroSnapshot implements CRDTSnapshot {
     if (this.inHistoryHook)
       throw new Error("strata: commit() inside a history hook (capture/restore) is not allowed.");
     if (this.committing) throw new Error("strata: nested commit() is not allowed.");
+    // LAZY UNDO CONSTRUCTION (S3): an UNDOABLE commit builds the manager HERE, at commit entry, BEFORE the
+    // body stages any op — the A1 pin (a manager constructed after ops are staged does not track that
+    // commit). A non-undoable commit ({ undoable: false }) never constructs; nor do the META_ORIGIN paths
+    // (ensureMeta/metaTransaction seal on the doc directly, never through this method). This is also the
+    // transaction seal path: runTransaction → tx.seal → snapshot.commit(body, opts) stages every doc write
+    // inside `body`, so constructing before `body` runs covers it. Idempotent past the first undoable commit.
+    if (opts?.undoable !== false) this.ensureUndoManager();
     this.committing = true;
     try {
       body();
@@ -1081,6 +1133,9 @@ export class LoroSnapshot implements CRDTSnapshot {
    */
   undo(): boolean {
     this.assertHistoryOpLegal("undo()");
+    // No manager yet (S3 lazy): the stack is empty by construction — return false WITHOUT constructing and
+    // WITHOUT the setNextCommitMessage wrapping (there is no self-commit to tag).
+    if (this.undoManager === undefined) return false;
     this.doc.setNextCommitMessage(this.nextMsg());
     const did = this.undoManager.undo();
     if (did) this.flushLocal(); // flushLocal notifies history listeners; a false undo changed nothing
@@ -1089,6 +1144,7 @@ export class LoroSnapshot implements CRDTSnapshot {
 
   redo(): boolean {
     this.assertHistoryOpLegal("redo()");
+    if (this.undoManager === undefined) return false; // empty stack, no manager — see undo()
     this.doc.setNextCommitMessage(this.nextMsg());
     const did = this.undoManager.redo();
     if (did) this.flushLocal();
@@ -1098,16 +1154,19 @@ export class LoroSnapshot implements CRDTSnapshot {
   // --- history surface (plan-undo U1) ---------------------------------------------------------------
 
   canUndo(): boolean {
-    return this.undoManager.canUndo();
+    return this.undoManager?.canUndo() ?? false; // no manager (S3 lazy) → empty stack
   }
 
   canRedo(): boolean {
-    return this.undoManager.canRedo();
+    return this.undoManager?.canRedo() ?? false;
   }
 
   /** Empty BOTH stacks (e.g. around an app-level restore, so "undo" can't cross it). */
   clearHistory(): void {
     this.assertHistoryOpLegal("clearHistory()", { allowQuarantined: true });
+    // No manager yet (S3 lazy): both stacks are already empty — a true no-op, and it must NOT construct
+    // (nothing to clear, no state change to publish).
+    if (this.undoManager === undefined) return;
     this.undoManager.clear();
     this.notifyHistoryChange();
   }
@@ -1121,14 +1180,18 @@ export class LoroSnapshot implements CRDTSnapshot {
     this.assertHistoryOpLegal("beginUndoGroup()");
     if (this.grouping) throw new Error("strata: undo groups do not nest — endUndoGroup() first.");
     this.grouping = true;
-    this.undoManager.groupStart();
+    // groupStart is a history-relevant action (S3 trigger b): construct the manager here so an undoGroup
+    // that is the very first thing this store ever does still collapses its commits into one step.
+    this.ensureUndoManager().groupStart();
   }
 
   endUndoGroup(): void {
     if (!this.grouping) return; // idempotent — tolerates double-end and the remote auto-end
     this.grouping = false;
+    // `grouping` was set true only after beginUndoGroup constructed the manager, so it is present here;
+    // the optional chain is a TS-level guard, never a runtime nullability path.
     try {
-      this.undoManager.groupEnd();
+      this.undoManager?.groupEnd();
     } catch {
       // A remote import mid-group already ended it inside loro (documented auto-end); the group's
       // commits are on the stack either way, so this is a benign race, not a failure.
@@ -1465,6 +1528,13 @@ export class LoroSnapshot implements CRDTSnapshot {
    * Seal staged-but-uncommitted writes as one tagged commit + local batch (the `export()` path). A no-op
    * when nothing is staged (`getPendingTxnLength() === 0`) — so a bare `export()` neither commits nor
    * burns a sequence number.
+   *
+   * LAZY-UNDO DIVERGENCE (deliberate): this seal does NOT construct the UndoManager, so ops staged
+   * DIRECTLY on the snapshot (outside `commit(body)`) and sealed here are not an undo step, where the old
+   * eager construction captured them. Closing it is impossible lazily — a manager constructed here would
+   * sit AFTER staging, which the A1 pin (s3m0-lazy-undo.probe) proves loses the step anyway. Unreachable
+   * from the typed public surface (`store.snapshot` is @internal) and a no-op for the M3 executor, which
+   * stages everything inside `snapshot.commit(body)`.
    */
   private sealStaged(): void {
     if (this.doc.getPendingTxnLength() === 0) return;

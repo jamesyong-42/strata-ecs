@@ -4,6 +4,20 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [Unreleased]
+
+### Performance
+
+- **A joiner's bootstrap import no longer builds the undo machinery.** The document adapter used to
+  attach a Loro `UndoManager` the moment a store was constructed — so every peer paid the manager's
+  cost while importing the opening snapshot, even a fresh joiner that has nothing to undo. The
+  manager is now constructed LAZILY, at the first UNDOABLE local edit (or the first `undoGroup`), so a
+  pristine joiner imports with a manager-free document. Undo/redo semantics are unchanged: everything
+  before the first undoable edit was never undoable anyway (the manager only ever tracked commits
+  sealed after it existed), and every history reader/writer is a no-op until that first edit. The
+  measured gain varies with document size and heap state — larger documents benefit most — so no
+  single speedup number is promised here; the profiling record lives in the internal plan notes.
+
 ## [0.9.0] — 2026-07-19
 
 ### Added
