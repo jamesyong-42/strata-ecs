@@ -7,10 +7,11 @@
   "main": "src/main.mjs",
   "scripts": {
     "start": "electron .",
-    "package": "node scripts/package.mjs"
+    "package": "node scripts/package.mjs",
+    "test": "node test/mesh-smoke.mjs"
   },
   "dependencies": {
-    "@vibecook/truffle": "0.6.0"
+    "@vibecook/truffle": "0.7.6"
   },
   "devDependencies": {
     "@electron/packager": "^20.0.2",
