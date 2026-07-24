@@ -1,0 +1,13 @@
+{
+  "name": "@strata-ecs/bench-sync",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sync-path benchmark: what a peer pays to apply a remote edit as the document grows. One process per cell.",
+  "scripts": {
+    "bench": "node run.mjs"
+  },
+  "dependencies": {
+    "@vibecook/strata-ecs": "workspace:*"
+  }
+}

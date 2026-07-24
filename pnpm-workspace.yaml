@@ -3,6 +3,10 @@
 # The canvas-editor example is isolated the same way (vite/typescript stay out of strata's graph).
 packages:
   - "bench/compare"
+  # The sync-path benchmark — what a peer pays to APPLY a remote edit as the document grows.
+  # Deliberately declares no loro-crdt of its own — it resolves loro THROUGH strata so there is
+  # provably one wasm instance; the version under test is the root pin (see bench/sync/README.md).
+  - "bench/sync"
   - "examples/canvas-editor"
   # The WebSocket relay for the canvas-editor collab demo — a dumb byte-relay (its only dep is `ws`),
   # isolated the same way so the server's dep never enters strata's own graph.

@@ -10,9 +10,13 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   // scripts/ are repo tooling run under plain Node (no TS toolchain). Unlike bench/compare
   // they guard CI behavior, so they stay linted — they just need the Node globals declared.
+  // bench/sync is plain Node too, but unlike bench/compare it carries no untyped rival-ECS surface —
+  // it is the evidence behind sync-path claims, so it stays linted alongside scripts/.
   {
-    files: ["scripts/**/*.mjs"],
-    languageOptions: { globals: { console: "readonly", process: "readonly" } },
+    files: ["scripts/**/*.mjs", "bench/sync/**/*.mjs"],
+    languageOptions: {
+      globals: { console: "readonly", process: "readonly", performance: "readonly" },
+    },
   },
   {
     rules: {
