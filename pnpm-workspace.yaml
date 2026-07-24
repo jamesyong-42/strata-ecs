@@ -3,12 +3,15 @@
 # The canvas-editor example is isolated the same way (vite/typescript stay out of strata's graph).
 #
 # ONE LORO COPY, ALWAYS. loro-crdt is wasm with instance-identity checks: a LoroDoc built by one copy
-# and handed to code resolving another dies with `expected instance of LoroDoc`. Members declaring
-# loro-crdt (currently examples/headless-host) MUST resolve the SAME version as the root, so bump
-# loro with `pnpm update -r loro-crdt` — never `pnpm add -w` alone, which moves the root and leaves
-# members pinned by the lockfile. The skew is invisible to `pnpm run ci` and `pnpm test:stress`
-# (both stay fully green); only the headless-host smoke, which hands a doc across the seam, catches
-# it — so run it after any loro change.
+# and handed to code resolving another dies with `expected instance of LoroDoc`. This is now enforced
+# STRUCTURALLY rather than by convention — the root's `pnpm.overrides` maps loro-crdt to `$loro-crdt`,
+# so every member and transitive dependant resolves the ROOT's version whatever they declare, and
+# `pnpm check:deps` (first step of `pnpm run ci`) asserts exactly one copy is resolvable.
+# Bump it with `pnpm update -r loro-crdt`, which moves every member together.
+# Why the belt AND braces: the skew is invisible where people look — `pnpm run ci` and
+# `pnpm test:stress` stay FULLY GREEN with two copies in the tree, because nothing there hands a doc
+# across a package seam. Only the headless-host smoke does, and it fails as four unrelated-looking
+# end-to-end errors. That cost two misdiagnoses before the override existed.
 packages:
   - "bench/compare"
   # The sync-path benchmark — what a peer pays to APPLY a remote edit as the document grows.

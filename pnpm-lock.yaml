@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  loro-crdt: ^1.13.8
+
 importers:
 
   .:

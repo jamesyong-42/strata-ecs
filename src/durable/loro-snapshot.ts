@@ -1780,9 +1780,23 @@ export class LoroSnapshot implements CRDTSnapshot {
         continue;
       }
       // A per-entity child map: path is ["entities", <EntityKey>]. Containers are never deleted, so a
-      // child container ALWAYS resolves under the no-delete layout.
+      // child container ALWAYS resolves under the no-delete layout. If one does NOT — a legacy-layout
+      // peer whose root delete detached the child map earlier in this same import — its facts are
+      // unpathable and dropped, so say so (005 §1.4 "detect, never misbind, never throw"). Convergence
+      // is unaffected: the accompanying despawn still reports and the binding re-reads converged state.
+      // NB `translatePairs` deliberately stays SILENT at the same guard — meta reaches it there and
+      // relies on it (the `["meta"]` path is length 1), whereas this loop skipped meta above.
       const path = this.doc.getPathToContainer(container);
-      if (path === undefined || path.length !== 2 || path[0] !== "entities") continue;
+      if (path === undefined || path.length !== 2 || path[0] !== "entities") {
+        if (DEV) {
+          // call-site DEV gate: the name is built HERE, so warnUnknown's own gate is not enough.
+          this.warnUnknown(
+            "entity container",
+            path === undefined ? String(container) : path.join("/"),
+          );
+        }
+        continue;
+      }
       const key = entityKey(String(path[1]));
       const m = this.childMap(key); // total: a poisoned (non-map) root entry reads as absent
       for (const [mapKey, raw] of cells) {

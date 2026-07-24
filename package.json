@@ -76,7 +76,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:stress:smoke",
+    "check:deps": "node scripts/check-single-loro.mjs",
+    "ci": "pnpm check:deps && pnpm typecheck && pnpm lint && pnpm test && pnpm test:stress:smoke",
     "example:canvas": "pnpm --filter @strata-ecs/example-canvas-editor dev",
     "example:desktop": "pnpm --filter @strata-ecs/example-canvas-desktop start",
     "example:headless": "pnpm --filter @strata-ecs/example-headless-host start",
@@ -85,6 +86,9 @@
     "prepublishOnly": "pnpm run ci && pnpm build"
   },
   "pnpm": {
+    "overrides": {
+      "loro-crdt": "$loro-crdt"
+    },
     "onlyBuiltDependencies": [
       "esbuild",
       "@fails-components/webtransport-transport-http3-quiche",
