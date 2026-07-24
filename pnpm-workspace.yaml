@@ -1,6 +1,14 @@
 # The strata library is the workspace root; the comparative benchmark is an isolated member so its
 # rival-ECS dependencies (bitecs, becsy, miniplex, koota, mitata) never enter strata's own package.
 # The canvas-editor example is isolated the same way (vite/typescript stay out of strata's graph).
+#
+# ONE LORO COPY, ALWAYS. loro-crdt is wasm with instance-identity checks: a LoroDoc built by one copy
+# and handed to code resolving another dies with `expected instance of LoroDoc`. Members declaring
+# loro-crdt (currently examples/headless-host) MUST resolve the SAME version as the root, so bump
+# loro with `pnpm update -r loro-crdt` — never `pnpm add -w` alone, which moves the root and leaves
+# members pinned by the lockfile. The skew is invisible to `pnpm run ci` and `pnpm test:stress`
+# (both stay fully green); only the headless-host smoke, which hands a doc across the seam, catches
+# it — so run it after any loro change.
 packages:
   - "bench/compare"
   # The sync-path benchmark — what a peer pays to APPLY a remote edit as the document grows.
