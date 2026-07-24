@@ -4,6 +4,53 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [0.11.0] — 2026-07-24
+
+### Performance
+
+- **Applying a remote change no longer costs a document-sized reconstruction.** `applyRemote`
+  rebuilt each incoming commit by asking Loro to diff two versions (`doc.diff`), which is cheap when
+  the versions are causally linear but expensive when they straddle concurrent history — exactly the
+  shape of a remote import. It now derives the same facts from the change's own operations, which
+  Loro has already produced as the per-commit splitter's input, so the work is proportional to the
+  edit rather than to the document. Measured with `pnpm bench:sync` on a ~120-byte change:
+  **158 ms → 61 ms at 10,000 entities, 405 ms → 163 ms at 25,000** (~2.5x, and the same improvement
+  for a peer that is only receiving). Local commits are untouched and remain flat. Batch boundaries,
+  event ordering, and name resolution are unchanged — every cell still routes through the same
+  translator, so poisoned-cell skips and spawn-first emission are identical by construction.
+
+  One deliberate behaviour change: a commit deleting an **already-absent** key emits an operation but
+  nets to no diff, so the receiver now reports a redundant remove where it previously reported
+  nothing. Removing an absent cell is a no-op, and the contract has always been "may over-fire, never
+  miss", but a consumer counting batches per commit will see the difference.
+
+### Changed
+
+- **`loro-crdt` is now developed and tested against 1.13.8** (the peer range is unchanged at `>=1`).
+  1.13.8 makes applying a change dramatically cheaper for a peer that is *only receiving* —
+  **61 ms → 3.9 ms at 10,000 entities, 163 ms → 9.4 ms at 25,000** on top of the change above. A peer
+  that is also editing sees no benefit from it; that path is bounded by Loro's import reconciling
+  against concurrent local history, which is being tracked upstream.
+
+### Docs
+
+- **The guide is now explicit about how large a *shared* document can get.** The ~100k-object figure
+  describes a local document; a collaboratively-edited one has a much lower ceiling (roughly 3,000
+  objects for an actively-editing peer, ~40,000 for a receive-only one) because applying an incoming
+  edit still scales with document size. Measured numbers and the workaround are in
+  [Going multiplayer](https://jamesyong-42.github.io/strata-ecs/#collab-scale).
+- Added `SECURITY.md` (what the trust boundary is, why the example servers are out of scope) and
+  `CONTRIBUTING.md` (the gate, and the traps that have actually cost time here).
+
+### Internal
+
+- `bench/sync` — a benchmark for the sync path, asking whether applying an edit scales with the edit
+  or with the document. One process per measurement, because warming Loro's wasm heap on a smaller
+  document made a larger one measure ~30x faster than it is.
+- A single resolved `loro-crdt` copy is now enforced structurally (`pnpm.overrides`) and asserted by
+  `pnpm check:deps`. Two copies produce `expected instance of LoroDoc` at a package seam, which no
+  unit suite detects.
+
 ## [0.10.0] — 2026-07-19
 
 ### Added

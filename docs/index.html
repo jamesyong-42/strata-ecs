@@ -483,7 +483,8 @@
         <ul>
           <li>Infinite canvases, whiteboards, node &amp; graph editors, design and diagram tools</li>
           <li>Documents with thousands to ~100k live objects that must hold 60&nbsp;fps</li>
-          <li>Apps that will eventually want undo, autosave, or multiplayer without re-architecting</li>
+          <li>Apps that will eventually want undo, autosave, or multiplayer without re-architecting
+            — multiplayer carries its own <a href="#collab-scale">document-size ceiling</a></li>
           <li>React apps whose document state needs to live <em>outside</em> the render cycle</li>
         </ul>
       </div>
@@ -1168,6 +1169,37 @@
       collaborative layers attach without a rewrite. Below: how each layer works, and where your
       app's job stops and the framework's begins.
     </p>
+
+    <div class="note" id="collab-scale">
+      <span class="tag">Note — how big a shared document can get</span>
+      <p>
+        Applying one incoming edit currently costs time proportional to the <em>whole document</em>,
+        not to the size of the edit. Measured on an M1 Max with <code>pnpm bench:sync</code>, a peer
+        receiving a single ~120-byte change pays roughly:
+      </p>
+      <div class="tbl"><table>
+        <thead><tr><th>The receiving peer</th><th>Cost per incoming edit</th><th>Stays inside a 60&nbsp;fps frame up to</th></tr></thead>
+        <tbody>
+          <tr><td>is also editing</td><td>~6&nbsp;ms per 1,000 objects</td><td>~3,000 objects</td></tr>
+          <tr><td>is only receiving</td><td>~0.4&nbsp;ms per 1,000 objects</td><td>~40,000 objects</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        So a 10,000-object board costs an actively-editing peer roughly 60&nbsp;ms per change arriving
+        from someone else. Edits arrive at gesture boundaries rather than per frame — a drag commits
+        once, on release — so this is felt as an occasional hitch rather than a dropped frame rate, but
+        it does put a practical ceiling on <em>shared</em> documents well below the ~100k a local
+        document handles comfortably. Editing your own copy is unaffected: local commits are flat at
+        ~0.35&nbsp;ms whatever the document size, as is the initial join.
+      </p>
+      <p>
+        The cost is Loro's, not this library's — it is <code>import</code> reconciling an incoming
+        change against concurrent local history, reproducible in a handful of lines with no
+        strata&#8209;ecs in the picture, and we are tracking it upstream. If your documents run larger
+        than a few thousand shared objects, splitting them into several smaller ones keeps every edit
+        cheap, because the cost is per document.
+      </p>
+    </div>
 
     <!-- ---------- DURABLE ---------- -->
     <h3 id="durable">The document layer</h3>

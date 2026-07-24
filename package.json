@@ -1,6 +1,6 @@
 {
   "name": "@vibecook/strata-ecs",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "An entity-component-system for TypeScript apps that edit documents — typed-array fast, reactive, with CRDT-backed multiplayer (Loro) as opt-in layers.",
   "type": "module",
   "license": "MIT",
