@@ -30,6 +30,7 @@ const VARIANTS = [
   ["bootstrap", "fresh joiner imports the whole room (one-time join cost)"],
   ["steady_pristine", "receiver holds the room, no local edits, applies ONE small remote edit"],
   ["steady_local", "…and has made its own edit — the real collaborative case"],
+  ["local_commit", "a peer editing its OWN doc — no remote traffic; is local editing doc-sized too?"],
   ["bare_loro", "floor: plain loro applying the same delta, no strata in the path"],
 ];
 

@@ -30,8 +30,8 @@ importers:
         specifier: ^20.10.6
         version: 20.10.6
       loro-crdt:
-        specifier: ^1.13.8
-        version: 1.13.8
+        specifier: ^1.13.6
+        version: 1.13.6
       prettier:
         specifier: ^3.0.0
         version: 3.9.4
@@ -1498,9 +1498,6 @@ packages:
 
   loro-crdt@1.13.6:
     resolution: {integrity: sha512-OsnKW64J+1XdCMafAqR+aASn/wQEgDzwcDwu6dDOVSxxbLPFgnU6LX8ja+hd5PnEcT+kuz9eXSagvlYXsRbQIw==}
-
-  loro-crdt@1.13.8:
-    resolution: {integrity: sha512-GfhD4Q7UU8lghobRjQhw19qH3B80h5ilRj3snv/QsfxK0hbiVfnDpHsvnEXg8+iMfg5S6cNMczgXJh3haxXTbA==}
 
   loupe@3.2.1:
     resolution: {integrity: sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ==}
@@ -3279,8 +3276,6 @@ snapshots:
   lodash.merge@4.6.2: {}
 
   loro-crdt@1.13.6: {}
-
-  loro-crdt@1.13.8: {}
 
   loupe@3.2.1: {}
 

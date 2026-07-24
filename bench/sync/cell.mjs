@@ -93,6 +93,24 @@ for (let rep = 0; rep < REPS; rep++) {
     continue;
   }
 
+  if (VARIANT === "local_commit") {
+    // A peer editing its OWN document — no remote traffic at all. `commit()` seals and then
+    // flushLocal()s, which derives the local batch the same way applyRemote derives a remote one,
+    // so this asks whether plain local editing is document-sized too.
+    const doc = new LoroDoc();
+    doc.setPeerId(2 + rep);
+    const store = createDurableStore(doc);
+    store.snapshot.applyRemote(base);
+    const t0 = now();
+    store.snapshot.commit(() => {
+      store.snapshot.setComponent(entityKey(`1-${rep}`), Pos, { x: 777, y: 777 });
+    });
+    ms.push(now() - t0);
+    const v = readCell(doc, entityKey(`1-${rep}`), "SyncBenchPos");
+    if (v && v.x === 777) verified++;
+    continue;
+  }
+
   if (VARIANT === "bare_loro") {
     // Floor: plain loro applying the same delta, no strata in the path.
     const doc = new LoroDoc();

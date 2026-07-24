@@ -743,12 +743,14 @@ describe("CRDT-path fuzz — commit/export/applyRemote reproduce the ladder (the
       a.snap.subscribe((bt) => aLocal.push(bt));
 
       // Chunk the op stream into commit() scopes of random size.
+      let commits = 0;
       for (let i = 0; i < ops.length; ) {
         const n = 1 + Math.floor(rng() * 5);
         const chunk = ops.slice(i, i + n);
         a.snap.commit(() => {
           for (const op of chunk) applyToStore(a.snap, op);
         });
+        commits++;
         i += n;
       }
 
@@ -767,7 +769,15 @@ describe("CRDT-path fuzz — commit/export/applyRemote reproduce the ladder (the
       const b2 = peer(seed * 2 + 200);
       b2.snap.commit(() => b2.snap.spawn(K("zz-preseed"))); // outside the fuzz key pool
       const b2Batches = b2.snap.applyRemote(a.snap.export());
-      expect(b2Batches.length).toBe(aLocal.length);
+      // One batch per commit that put OPS on the wire. That can EXCEED A's own non-empty local echo:
+      // a commit deleting an ALREADY-ABSENT key still emits a delete op, but nets to no local diff —
+      // so A skips the batch, while the receiver (which classifies from the change's ops rather than
+      // from a net diff, to stay O(delta) — see translateOps) reports a redundant remove. Removing an
+      // absent cell is a no-op, so the state assertions below are unaffected, and the reactive
+      // contract is "may over-fire, never miss". Seed 99 exercises it: 32 commits, 30 non-empty,
+      // the two extras both `resource-remove`. Bound it honestly instead of asserting equality.
+      expect(b2Batches.length).toBeGreaterThanOrEqual(aLocal.length);
+      expect(b2Batches.length).toBeLessThanOrEqual(commits);
       const fromB2 = new BaselineSnapshot();
       for (const bt of b2Batches) for (const e of normalizeBatch(bt.events)) applyEvent(fromB2, e);
       expect(diffStores(fromB2, a.snap, keys, CFM_SCHEMA)).toBeNull();

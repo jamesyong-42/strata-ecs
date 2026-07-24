@@ -255,41 +255,6 @@ function tryParseRelManyKey(mapKey: string): [string, string] | undefined {
     : undefined;
 }
 
-/** A `JsonOpID` is a `"counter@peer"` string (loro finding 3). Split on the LAST '@' (peer is numeric). */
-function parseJsonOpId(id: string): { peer: `${number}`; counter: number } {
-  const at = id.lastIndexOf("@");
-  return { counter: Number(id.slice(0, at)), peer: id.slice(at + 1) as `${number}` };
-}
-
-/**
- * Counter span of one oplog op (M0 probe, pinned in ordered-m0.probe.test.ts): list-kind
- * (MovableList AND plain List — same JSON op shapes) insert → `value.length` (contiguous inserts
- * merge into ONE array-valued op) · delete → `len` · move/set → 1; every map op → 1. Dispatch on
- * the CONTAINER kind so a hostile array-valued map register cannot inflate a map op's span.
- *
- * Text (probe-pinned, M4): inserts merge into one op spanning the text's UNICODE CODE POINTS —
- * `[...text].length`, NOT `.length` (an astral emoji is one counter but two UTF-16 units);
- * deletes span `len`. KNOWN RESIDUAL: hostile LoroTree commits still count 1 per op (unprobed;
- * mis-splits only that foreign writer's own commit boundaries — honest changes' counters come
- * from their own change.id) — recorded in plan-ordered-relations §4.5b.
- */
-function opCounterSpan(op: JsonChange["ops"][number]): number {
-  const kind = String(op.container);
-  const content = op.content as { type?: string; value?: unknown; len?: number; text?: string };
-  if (kind.endsWith("List")) {
-    // "List" catches MovableList + plain List (same JSON op shapes).
-    if (content.type === "insert" && Array.isArray(content.value)) return content.value.length;
-    if (content.type === "delete" && typeof content.len === "number") return content.len;
-    return 1; // move / set
-  }
-  if (kind.endsWith("Text")) {
-    if (content.type === "insert" && typeof content.text === "string") return [...content.text].length;
-    if (content.type === "delete" && typeof content.len === "number") return content.len;
-    return 1; // mark etc.
-  }
-  return 1; // map / tree / counter ops are one counter each (tree unprobed — see header)
-}
-
 /**
  * The reserved commit ORIGIN for the durable layer's meta writes (docId etc. — the `meta` root map,
  * per the 005 §10 as-built amendments). It is passed to `commit({ origin })` on a meta write and matched by the
@@ -298,6 +263,14 @@ function opCounterSpan(op: JsonChange["ops"][number]): number {
  * commits; origin and message are independent loro commit fields.
  */
 const META_ORIGIN = "strata-meta";
+
+/**
+ * How `exportJsonUpdates` encodes a CONTAINER-valued map entry: a marker STRING, not a container
+ * handle (probe-pinned — `entities.set(k, <LoroMap>)` emits `"🦜:cid:0@1:Map"` where a plain string
+ * value emits itself). {@link LoroSnapshot.decodeOpValue} needs it because `isContainer`, which every
+ * poisoned-cell guard rests on, cannot see a container through the JSON encoding.
+ */
+const JSON_CONTAINER_MARKER = "\u{1F99C}:cid:";
 
 /**
  * The reserved commit ORIGIN for APP transactions that opt out of undo — `transaction(fn, { undoable:
@@ -1059,7 +1032,6 @@ export class LoroSnapshot implements CRDTSnapshot {
 
     const schema = this.doc.exportJsonUpdates(beforeVV, this.doc.version(), false); // false: real peer ids
     const batches: ChangeBatch[] = [];
-    let prev: OpId[] = beforeFrontiers;
     for (const change of schema.changes) {
       // A commit with no `strata:<n>` tag is a foreign writer whose commits may have COALESCED in their
       // oplog — our per-commit boundaries are best-effort for them. Warn ONCE (per instance). EXEMPTION
@@ -1080,10 +1052,11 @@ export class LoroSnapshot implements CRDTSnapshot {
             "batch boundaries are best-effort for this peer (005 §1.3).",
         );
       }
-      const cur = this.frontierAfter(prev, change);
-      const batch = this.translatePairs(this.doc.diff(prev, cur, false), "remote", change.id);
+      // O(delta): the change's own ops name every touched cell, and the doc answers what each one now
+      // says. Replaces a per-change `doc.diff` against a hand-built frontier, which cost O(document)
+      // here because a remote import straddles concurrent history (see translateOps).
+      const batch = this.translateOps(change, "remote");
       if (batch.events.length > 0) batches.push(batch);
-      prev = cur;
     }
     // Advance the last-emitted head to include the imported ops, so the NEXT local seal diffs from here
     // (not re-emitting these remote ops as "local").
@@ -1093,31 +1066,6 @@ export class LoroSnapshot implements CRDTSnapshot {
     // invalidate redo) — recompute downstream. Cheap: the binding's publish is set-on-change.
     this.notifyHistoryChange();
     return batches;
-  }
-
-  /**
-   * The document frontier after applying `change` on top of `prevTips` — the tip set that `doc.diff`
-   * uses as its "to" version. A change's last op becomes a tip; a previous tip survives iff it is NOT
-   * on the change's peer (same-peer ops are totally ordered, so the change supersedes them) AND not
-   * reached by any of the change's deps (a dep at-or-past a tip's counter makes that tip an ancestor).
-   * This reproduces `vvToFrontiers` for our append-only map history without tripping its redo panic.
-   */
-  private frontierAfter(prevTips: OpId[], change: JsonChange): OpId[] {
-    const { peer, counter } = parseJsonOpId(change.id);
-    // The change's op-span in COUNTERS — summed PER OP since the ordered-relations layout (M0 probe,
-    // plan-ordered-relations §7): map ops are one counter each, but MovableList inserts MERGE into
-    // one op spanning `value.length` counters and deletes span `len`. The old `change.ops.length`
-    // shortcut undercounts any commit touching a `relO:` list, corrupting every diff boundary after
-    // it. Span dispatch is BY CONTAINER KIND, not content shape — a hostile peer can write an
-    // ARRAY-valued map register, which must still count as one counter. NB: `doc.getChangeAt(id)
-    // .length` remains WRONG here (coalesced internal change; verified in the spike).
-    let span = 0;
-    for (const op of change.ops) span += opCounterSpan(op);
-    const lastOp: OpId = { peer, counter: counter + span - 1 };
-    const deps = change.deps.map(parseJsonOpId);
-    const survives = (t: OpId): boolean =>
-      t.peer !== peer && !deps.some((d) => d.peer === t.peer && d.counter >= t.counter);
-    return [lastOp, ...prevTips.filter(survives)];
   }
 
   /**
@@ -1719,6 +1667,155 @@ export class LoroSnapshot implements CRDTSnapshot {
       }
     }
     return { origin, commitId, events: [...spawns, ...mutations, ...orders, ...despawns] };
+  }
+
+  /**
+   * Translate ONE change's OPS into a batch — the O(delta) replacement for the `doc.diff(prev, cur)`
+   * reconstruction the remote path used to run per change.
+   *
+   * WHY (bench/sync, and the measurement that motivated it): `doc.diff` is cheap when its two versions
+   * are causally linear (that is why {@link flushLocal} still uses it — a local seal only ever extends
+   * this peer's own history, measured FLAT at ~0.35ms from 1k to 25k entities), and expensive when they
+   * STRADDLE CONCURRENT HISTORY, which is exactly the shape of a remote import into a doc that has its
+   * own commits. There the cost tracked total document size, not delta size: ~120 bytes of incoming edit
+   * cost 158ms at 10k entities and 405ms at 25k, for a fixed-size edit. Since the op list already names
+   * every container and key the change touched — for 0.2ms, `exportJsonUpdates` having already produced
+   * it as the per-change splitter's input — the diff was re-deriving, at document cost, information
+   * already in hand.
+   *
+   * VALUES COME FROM THE OP PAYLOAD, not from a converged re-read. That distinction is load-bearing and
+   * was found the hard way: a first cut read converged values and broke three pins, including the
+   * finding-(b) regression pin — `[spawn+set][set][despawn]` must yield three batches with the EARLIER
+   * facts intact, and a converged read makes all three report the final (despawned) state, erasing the
+   * ladder these batches exist to reproduce. The M4 "re-read converged at drain time" law governs how the
+   * BINDING applies a fact; the adapter's job here is the opposite — report what each commit actually
+   * said, in order. An `insert` op carries that commit's value; a `delete` op means absent.
+   *
+   * Ordering, bucketing and name resolution are unchanged — every cell still routes through
+   * {@link translateChildKey}, so poisoned-cell skips and spawn-first emission are identical by
+   * construction, exactly as {@link translateConverged} shares it.
+   */
+  private translateOps(change: JsonChange, origin: Origin): ChangeBatch {
+    const spawns: ChangeEvent[] = [];
+    const mutations: ChangeEvent[] = [];
+    const despawns: ChangeEvent[] = [];
+    // The FOURTH bucket, emitted after mutations and before despawns — same rule as translatePairs.
+    const orders: ChangeEvent[] = [];
+    const orderSeen = new Set<string>();
+    const pushOrder = (key: EntityKey, relName: string): void => {
+      const r = relationByName(relName);
+      if (r === undefined || !r.ordered) return this.warnUnknown("ordered relation", relName);
+      const dedup = `${key}\u0000${relName}`;
+      if (orderSeen.has(dedup)) return;
+      orderSeen.add(dedup);
+      orders.push({ kind: "order-invalidate", key, rel: r, origin });
+    };
+
+    // Bucket the change's ops by container, keeping each key's LAST value within this change (two
+    // writes to one cell in one commit are one fact — the later one, exactly as a net diff reported it).
+    const maps = new Map<string, { container: ContainerID; cells: Map<string, unknown> }>();
+    const lists = new Map<string, ContainerID>();
+    for (const op of change.ops) {
+      const cid = String(op.container);
+      // Dispatch on CONTAINER KIND, never on content shape, so a hostile array-valued map register
+      // cannot be mistaken for a list.
+      if (cid.endsWith("List")) {
+        lists.set(cid, op.container);
+        continue;
+      }
+      if (!cid.endsWith("Map")) continue; // Text/Tree/Counter are foreign to our layout
+      const content = op.content as { type?: string; key?: unknown; value?: unknown };
+      if (typeof content.key !== "string") continue; // a map op with no key is not a cell fact
+      let entry = maps.get(cid);
+      if (entry === undefined) maps.set(cid, (entry = { container: op.container, cells: new Map() }));
+      // `insert` carries the value this commit wrote; `delete` means absent.
+      entry.cells.set(content.key, content.type === "delete" ? undefined : content.value);
+    }
+
+    // A MovableList change is legal ONLY at ["entities", <parent>, "relO:<Name>"]; deltas are never
+    // interpreted — any list change means "order changed at (parent, rel)", re-read at apply.
+    for (const container of lists.values()) {
+      const path = this.doc.getPathToContainer(container);
+      if (
+        path !== undefined &&
+        path.length === 3 &&
+        path[0] === "entities" &&
+        String(path[2]).startsWith(REL_ORDER)
+      ) {
+        pushOrder(entityKey(String(path[1])), String(path[2]).slice(REL_ORDER.length));
+      } else if (DEV) {
+        this.warnUnknown("list container", path === undefined ? String(container) : path.join("/"));
+      }
+    }
+
+    for (const { container, cells } of maps.values()) {
+      const cidStr = String(container);
+      if (cidStr === this.metaRootId) continue; // meta is transparent to batch translation
+      if (cidStr === this.entitiesRootId) {
+        // Root "entities": a DELETE is a despawn by a peer that removed the whole container (the
+        // legacy layout). Our own despawns surface on the child map as exists→undefined instead.
+        for (const [rawKey, val] of cells) {
+          if (val === undefined) despawns.push({ kind: "despawn", key: entityKey(rawKey), origin });
+        }
+        continue;
+      }
+      if (cidStr === this.resourcesRootId) {
+        for (const [name, raw] of cells) {
+          const res = resourceByName(name);
+          if (res === undefined) {
+            this.warnUnknown("resource", name);
+            continue;
+          }
+          const val = this.decodeOpValue(raw, this.resourcesMap, name);
+          if (isContainer(val)) {
+            this.warnUnknown("resource container", name); // a hostile setContainer at a resource key
+            continue;
+          }
+          mutations.push(
+            val === undefined
+              ? { kind: "resource-remove", res, origin }
+              : { kind: "resource-set", res, value: val as ComponentValue, origin },
+          );
+        }
+        continue;
+      }
+      // A per-entity child map: path is ["entities", <EntityKey>]. Containers are never deleted, so a
+      // child container ALWAYS resolves under the no-delete layout.
+      const path = this.doc.getPathToContainer(container);
+      if (path === undefined || path.length !== 2 || path[0] !== "entities") continue;
+      const key = entityKey(String(path[1]));
+      const m = this.childMap(key); // total: a poisoned (non-map) root entry reads as absent
+      for (const [mapKey, raw] of cells) {
+        if (mapKey.startsWith(REL_ORDER)) {
+          // The item-12 carve-out: a container value at a relO: key is the list's CREATION event;
+          // any change at the key coalesces to one payload-free order cell.
+          pushOrder(key, mapKey.slice(REL_ORDER.length));
+          continue;
+        }
+        const val = this.decodeOpValue(raw, m, mapKey);
+        this.translateChildKey(key, mapKey, val, origin, spawns, mutations, despawns);
+      }
+    }
+    return { origin, commitId: change.id, events: [...spawns, ...mutations, ...orders, ...despawns] };
+  }
+
+  /**
+   * A JSON-op value in the form {@link translateChildKey} expects.
+   *
+   * `exportJsonUpdates` encodes a container value as {@link JSON_CONTAINER_MARKER} + its id rather than
+   * as a handle, so `isContainer` — which every poisoned-cell guard rests on — would read it as an
+   * ordinary string and leak the marker into an event as though it were the cell's value. On seeing the
+   * marker we fall back to a TARGETED converged read of that one key (O(1)): a genuine container yields
+   * a real handle, and the reverse case resolves for free — a peer legitimately storing a string that
+   * BEGINS with the marker reads back its own string rather than being skipped.
+   *
+   * RESIDUAL (hostile only): a container written at a cell key and then OVERWRITTEN later in the same
+   * buffer resolves to the later value, so this commit's batch reports that value instead of skipping.
+   * Narrower than the case it replaces, and confined to a peer already violating the layout.
+   */
+  private decodeOpValue(raw: unknown, m: LoroMap | undefined, key: string): unknown {
+    if (typeof raw === "string" && raw.startsWith(JSON_CONTAINER_MARKER)) return m?.get(key);
+    return raw;
   }
 
   /**
