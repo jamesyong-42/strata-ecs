@@ -126,7 +126,10 @@ export function cellEquals(a: ComponentValue | undefined, b: ComponentValue | un
  * reactive layer's `Object.is`-based shallowEqual on signed zero; the divergence is load-bearing,
  * do not "fix" it.
  *
- * `undefined` means CELL ABSENT: both-undefined is equal, one-undefined is not. THROWS on a
+ * `undefined` means CELL ABSENT: both-undefined is equal, one-undefined is not — and a comparison
+ * against undefined SHORT-CIRCUITS, so malformation in the other operand goes unvalidated there.
+ * `null` is REFUSED loudly (review finding: it is not the absent sentinel — undefined is, and a
+ * bare `null` used to escape as a contextless TypeError from the encoder). Otherwise THROWS on a
  * malformed value exactly as a local write would (missing no-default field, unknown enum label) —
  * a differ compares values it is about to write, and the write would throw the same. COMPONENTS
  * ONLY: resources skip column coercion ({@link canonResource}), so this equality is WRONG for
@@ -135,6 +138,11 @@ export function cellEquals(a: ComponentValue | undefined, b: ComponentValue | un
  */
 export function valueEquals(c: Component, a: unknown, b: unknown): boolean {
   if (a === undefined || b === undefined) return a === b;
+  if (a === null || b === null) {
+    throw new Error(
+      `strata: valueEquals("${c.name}") takes component value objects or undefined (= cell absent) — got null.`,
+    );
+  }
   return cellEquals(canon(c, a as ComponentValue), canon(c, b as ComponentValue));
 }
 

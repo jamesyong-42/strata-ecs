@@ -459,8 +459,11 @@ export class World {
    *  is what makes it a poll contract (unlike the reactive layer's frame stamp). The FIRST call
    *  arms stamp collection (the {@link World.orderStamp} mirror) — dormant until then, so worlds
    *  that never poll pay one branch per resource write. Pull-only change detection: poll cheaply,
-   *  compare against the last value you saw; cleared by {@link World.reset}. Independent of the
-   *  reactive layer — polling never arms stamping-wide reactivity, and needs no observer. */
+   *  compare against the last value you saw. {@link World.reset} BUMPS every held resource's stamp
+   *  (a reset destroys the value — that transition is observable, and the number never moves
+   *  backward). Arming is world-wide: the first `resourceStamp` read of ANY resource starts stamp
+   *  collection for all of them. Independent of the reactive layer — polling never arms it, and
+   *  needs no observer. */
   resourceStamp(res: Resource): number {
     return this.store.resourceStamp(res);
   }

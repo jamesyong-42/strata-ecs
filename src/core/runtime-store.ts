@@ -167,6 +167,8 @@ export class RuntimeStore implements ECSStore {
   private readonly resourceStamps = new Map<ResourceId, number>();
   private resourceStampsArmed = false;
   private resourceStampCounter = 0;
+  /** DEV-only warn-once roster for the resourceStamp identity guard (review finding 4). */
+  private readonly resourceStampWarned = new Set<ResourceId>();
   /**
    * Per-resource `lastWrittenFrame` (Patch Note 003 §1.2), a dense array indexed by `ResourceId`
    * (ids are dense). Bumped in `setResource` only — resources have no column/structural path — behind
@@ -1136,7 +1138,13 @@ export class RuntimeStore implements ECSStore {
     this.tags.reset();
     this.relations.reset();
     this.orderStamps.clear(); // stamps die with the sequences; reset is a full invalidation for order caches too
-    this.resourceStamps.clear(); // petition 10 — write stamps die with the values (reads 0 after reset; the counter stays monotonic so post-reset writes still read as changed)
+    // Petition 10 (review finding 1) — BUMP, don't clear: reset destroys every held resource value,
+    // and a poller that observed a value at stamp 0 (armed after the write) must see the number move
+    // or it serves the dead value forever (`import(bytes,{replace:true})` reproduces this on document
+    // open). Mirrors the reactive loop above; per-resource monotonicity is unconditional — the number
+    // NEVER moves backward. Armed-gated like every stamp site; runs BEFORE the clear so ids are known.
+    if (this.resourceStampsArmed)
+      for (const id of this.resources.keys()) this.bumpResourceStamp(id as ResourceId);
     this.resources.clear();
     // Free every live slot with a generation bump — stale handles now read dead, never aliased.
     this.table.reset();
@@ -1488,13 +1496,19 @@ export class RuntimeStore implements ECSStore {
    * compare to the last value you saw.
    */
   resourceStamp(res: Resource): number {
-    if (DEV && resourceById(res.id) !== res) {
-      // A handle that is not THE registered resource (a copy, or a survivor of the test-only
-      // schema reset) is never the one `setResource` stamps — polling it reads a forever-0 and
-      // keeps stale caches silently, the same misuse class as orderStamp on an unordered
-      // relation. Warn + 0, and deliberately do NOT arm collection.
-      devWarn(`strata: resourceStamp on "${res.name}" — not the registered resource; always 0.`);
-      return 0;
+    // Diagnostics-ONLY identity guard (review finding 2): a handle that is not THE registered
+    // resource (a spread copy, a dual-module-instance handle, a survivor of the test-only schema
+    // reset) still reads the id's live stamp and arms collection — stamps are keyed by id, so the
+    // reading itself is not wrong, and a DEV-only early-return would make the return value AND the
+    // arming boundary differ between builds. Warned ONCE per id (finding 4: the documented usage is
+    // a per-frame poll — an unthrottled warn buries the console at 60 Hz).
+    if (DEV && resourceById(res.id) !== res && !this.resourceStampWarned.has(res.id)) {
+      this.resourceStampWarned.add(res.id);
+      devWarn(
+        `resourceStamp on "${res.name}" — not the registered resource handle for this id ` +
+          `(copy / duplicate module instance / stale registry?). The reading is the registered ` +
+          `resource's stamp; fix the handle.`,
+      );
     }
     if (!this.resourceStampsArmed) this.resourceStampsArmed = true;
     return this.resourceStamps.get(res.id) ?? 0;

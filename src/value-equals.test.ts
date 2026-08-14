@@ -39,10 +39,11 @@ const Pos = defineComponent("VEQPos", { x: "f32", y: "f32" });
 
 const w = createWorld();
 
-/** Write `v` through a real store and read it back — the differ's "projected value" side. */
-function readBack<S>(C: Component<S>, v: S): unknown {
+/** Write `v` through a real store and read it back — the differ's "projected value" side.
+ *  Loosely typed on purpose: the fixed-point test feeds a read-back (unknown) straight back in. */
+function readBack(C: Component, v: unknown): unknown {
   const e = w.spawn();
-  w.addComponent(e, C, v);
+  w.addComponent(e, C as Component<Record<string, unknown>>, v as Record<string, unknown>);
   const r = w.read(e, C);
   w.destroy(e);
   return r;
@@ -100,5 +101,34 @@ describe("valueEquals — absent cells and malformation", () => {
     expect(() => valueEquals(Pos, { x: 1 }, { x: 1, y: 2 })).toThrow(); // missing no-default field
     const base = { f32v: 0, f64v: 0, u8v: 0, i8v: 0, u16v: 0, flag: false, label: null };
     expect(() => valueEquals(Battery, { ...base, team: "Green" }, { ...base, team: "Red" })).toThrow(); // unknown enum label
+  });
+  it("null is refused loudly — it is not the absent sentinel (review finding 1)", () => {
+    expect(() => valueEquals(Pos, null, null)).toThrow(/valueEquals\("VEQPos"\).*null/);
+    expect(() => valueEquals(Pos, null, { x: 1, y: 2 })).toThrow(/null/);
+    expect(() => valueEquals(Pos, { x: 1, y: 2 }, null)).toThrow(/null/);
+  });
+  it("a comparison against undefined short-circuits before validation (documented)", () => {
+    expect(valueEquals(Pos, { x: 1 }, undefined)).toBe(false); // malformed left operand, no throw
+  });
+  it("a value of the WRONG component throws at runtime (unknown params compile anything)", () => {
+    expect(() => valueEquals(Pos, { x: 1, y: 2 }, { hp: 3 })).toThrow(/missing required field/);
+  });
+});
+
+describe("valueEquals — canon idempotency (the bridge to reconcile's raw-read comparison)", () => {
+  // Reconcile judges cellEquals(RAW runtime read, canonical value); valueEquals judges
+  // cellEquals(canon(a), canon(b)). The two coincide iff canon is a FIXED POINT on store
+  // read-backs — pin it observationally: re-writing a read-back reads back field-wise identical.
+  it("a store read-back is a fixed point: writing it again reproduces it exactly", () => {
+    const fixtures: Array<Record<string, unknown>> = [
+      { f32v: 0.1, f64v: 0.1, u8v: 300, i8v: -1, u16v: 70000, team: "Blue", flag: true, label: "hi" },
+      { f32v: NaN, f64v: -0, u8v: 0, i8v: 0, u16v: 0, team: "Red", flag: false, label: null },
+      { f32v: 1e39, f64v: 1e39, u8v: 256, i8v: 128, u16v: 65536, team: "Blue", flag: true, label: "" },
+    ];
+    for (const v of fixtures) {
+      const once = readBack(Battery, v);
+      const twice = readBack(Battery, once);
+      expect(valueEquals(Battery, once, twice)).toBe(true);
+    }
   });
 });
