@@ -85,17 +85,6 @@
     "smoke:headless": "pnpm --filter @strata-ecs/example-headless-host test",
     "prepublishOnly": "pnpm run ci && pnpm build"
   },
-  "pnpm": {
-    "overrides": {
-      "loro-crdt": "$loro-crdt"
-    },
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "@fails-components/webtransport-transport-http3-quiche",
-      "electron",
-      "@vibecook/truffle"
-    ]
-  },
   "peerDependencies": {
     "loro-crdt": ">=1",
     "react": ">=18"

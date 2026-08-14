@@ -4,9 +4,11 @@
 #
 # ONE LORO COPY, ALWAYS. loro-crdt is wasm with instance-identity checks: a LoroDoc built by one copy
 # and handed to code resolving another dies with `expected instance of LoroDoc`. This is now enforced
-# STRUCTURALLY rather than by convention — the root's `pnpm.overrides` maps loro-crdt to `$loro-crdt`,
+# STRUCTURALLY rather than by convention — the `overrides` entry BELOW maps loro-crdt to `$loro-crdt`,
 # so every member and transitive dependant resolves the ROOT's version whatever they declare, and
 # `pnpm check:deps` (first step of `pnpm run ci`) asserts exactly one copy is resolvable.
+# (The override lived in package.json's "pnpm" block until 2026-08-14; pnpm ≥10.x reads workspace
+# settings from THIS file only and was silently ignoring it — check:deps was the sole backstop.)
 # Bump it with `pnpm update -r loro-crdt`, which moves every member together.
 # Why the belt AND braces: the skew is invisible where people look — `pnpm run ci` and
 # `pnpm test:stress` stay FULLY GREEN with two copies in the tree, because nothing there hands a doc
@@ -28,3 +30,12 @@ packages:
   # The headless/Node document host — authoritative Worlds server-side, syncing over ws + persisting to
   # disk; isolated the same way so its ws/loro-crdt deps stay out of strata's own graph.
   - "examples/headless-host"
+
+# Workspace-level settings (the post-pnpm-10 home; the package.json "pnpm" block is no longer read).
+overrides:
+  loro-crdt: "$loro-crdt"
+onlyBuiltDependencies:
+  - esbuild
+  - "@fails-components/webtransport-transport-http3-quiche"
+  - electron
+  - "@vibecook/truffle"
