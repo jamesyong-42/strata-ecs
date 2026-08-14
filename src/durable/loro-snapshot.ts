@@ -298,12 +298,66 @@ export const DOC_ID_KEY = "docId";
 
 /** The durable layer's reserved commit-message namespace (finding 3): `strata:<monotonic per-doc n>`. */
 const MSG_PREFIX = "strata:";
+/**
+ * Petition 9 — a commit carrying user meta multiplexes it AFTER the anti-coalescing tag:
+ * `strata:<n>;<json>`. The FIRST `;` is the one separator (the integer part never contains one;
+ * the JSON payload may contain any number — parsers split once and never scan the payload).
+ * Meta-less commits stay byte-identical to the bare `strata:<n>` form. An OLD build parsing a
+ * suffixed message fails its integer parse and classifies the writer as foreign (DEV warn +
+ * best-effort batch boundaries + commit-seq reseed on restart) — the documented mixed-version
+ * posture; the exact-pin discipline covers it.
+ */
+const MSG_META_SEP = ";";
+/** Receive-side parse bound (review finding 3): never JSON.parse a suffix beyond 4x the send cap
+ *  (durable-store.ts META_MAX_BYTES = 1024) — a hostile peer's compressed update can carry a
+ *  multi-MB message at ~250x amplification, and the parsed copy would be RETAINED on batch.meta.
+ *  Oversize reads as absent, the never-throws discipline. */
+const MSG_META_MAX_PARSE = 4096;
 const strataMsg = (n: number): string => MSG_PREFIX + n;
-/** The `n` of a `strata:<n>` message, or `undefined` if the message is not a strata tag (foreign writer). */
+/** The `n` of a `strata:<n>` / `strata:<n>;<json>` message, or `undefined` if the message is not
+ *  a strata tag (foreign writer). Splits at the FIRST separator. The bare arm keeps 0.11.0's
+ *  `Number()` semantics verbatim; the NEW separator arm is STRICT digits (review finding 4 — the
+ *  lax coercions it briefly admitted, `strata:;…`/whitespace/`1e3`, were a widening this petition
+ *  promised not to make; own-minted messages are always plain digits). */
 function strataMsgSeq(msg: string | null | undefined): number | undefined {
   if (msg === null || msg === undefined || !msg.startsWith(MSG_PREFIX)) return undefined;
-  const n = Number(msg.slice(MSG_PREFIX.length));
-  return Number.isInteger(n) && n >= 0 ? n : undefined;
+  const body = msg.slice(MSG_PREFIX.length);
+  const sep = body.indexOf(MSG_META_SEP);
+  if (sep === -1) {
+    const n = Number(body);
+    return Number.isInteger(n) && n >= 0 ? n : undefined;
+  }
+  const intPart = body.slice(0, sep);
+  return /^\d+$/.test(intPart) ? Number(intPart) : undefined;
+}
+/**
+ * Petition 9 — the meta payload of a `strata:<n>;<json>` message, or `undefined` when absent or
+ * malformed. PEER-CONTROLLED INPUT: never throws (the tryCanon discipline) — bad JSON, or a
+ * payload that is not a plain object (array/null/scalar), reads as absent. A message that fails
+ * the seq parse is a foreign writer's; its suffix is not ours to interpret.
+ */
+function strataMsgMeta(msg: string | null | undefined): Record<string, unknown> | undefined {
+  if (strataMsgSeq(msg) === undefined) return undefined;
+  const sep = (msg as string).indexOf(MSG_META_SEP);
+  if (sep === -1) return undefined;
+  if ((msg as string).length - sep - 1 > MSG_META_MAX_PARSE) return undefined; // finding 3: bound the untrusted parse
+  try {
+    // An own `__proto__` key anywhere (wire finding 2: it survives JSON.parse as an own key and
+    // detonates under a consumer's Object.assign merge) soft-rejects the WHOLE meta as absent —
+    // a hostile record is not laundered into consumers half-sanitized. Our own sender refuses to
+    // mint one, so only foreign/hostile writers can hit this arm.
+    let hostile = false;
+    const v: unknown = JSON.parse((msg as string).slice(sep + 1), function (key, value: unknown) {
+      if (key === "__proto__") hostile = true;
+      return value;
+    });
+    if (hostile) return undefined;
+    return v !== null && typeof v === "object" && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -911,7 +965,7 @@ export class LoroSnapshot implements CRDTSnapshot {
    * buffers ops and only writes the doc after `fn` returns (design.md §12.2/§12.3); this adapter faithfully
    * surfaces whatever reached the doc.
    */
-  commit(body: () => void, opts?: { undoable?: boolean }): void {
+  commit(body: () => void, opts?: { undoable?: boolean; meta?: Record<string, unknown> }): void {
     if (this.inHistoryHook)
       throw new Error("strata: commit() inside a history hook (capture/restore) is not allowed.");
     if (this.committing) throw new Error("strata: nested commit() is not allowed.");
@@ -922,6 +976,11 @@ export class LoroSnapshot implements CRDTSnapshot {
     // transaction seal path: runTransaction → tx.seal → snapshot.commit(body, opts) stages every doc write
     // inside `body`, so constructing before `body` runs covers it. Idempotent past the first undoable commit.
     if (opts?.undoable !== false) this.ensureUndoManager();
+    // Review finding 2: serialize the meta suffix at ENTRY, not in the finally — a throwing
+    // stringify (circular via the widened frozen interface; DurableStore.transaction canonicalizes
+    // first, but snapshot.commit is directly reachable) inside the finally would skip both the seal
+    // and `committing = false`, wedging the snapshot for life with ops dangling unsealed.
+    const metaSuffix = opts?.meta === undefined ? "" : MSG_META_SEP + JSON.stringify(opts.meta);
     this.committing = true;
     try {
       body();
@@ -936,13 +995,19 @@ export class LoroSnapshot implements CRDTSnapshot {
       // future loro ever does linger. Never pass `origin: undefined` (loro distinguishes absent from
       // explicit-undefined), hence the conditional object rather than a spread.
       const staged = this.doc.getPendingTxnLength() > 0;
+      // Petition 9 — a caller-supplied meta rides the message after the anti-coalescing tag
+      // (serialized at entry, see metaSuffix above). The caller (DurableStore.transaction) has
+      // already canonicalized + cap-checked it; a partial seal from a throwing body carries the
+      // SAME message it would have carried on success, so the local echo and every receiver agree
+      // on the commit's meta exactly as they do on its ops.
+      const message = this.nextMsg() + metaSuffix;
       const options =
         opts?.undoable === false && staged
-          ? { message: this.nextMsg(), origin: NON_UNDOABLE_ORIGIN }
-          : { message: this.nextMsg() };
+          ? { message, origin: NON_UNDOABLE_ORIGIN }
+          : { message };
       this.doc.commit(options);
       this.committing = false;
-      this.flushLocal(); // diff from `sealedTo` (the last-emitted head) → everything this commit sealed
+      this.flushLocal(opts?.meta); // diff from `sealedTo` (the last-emitted head) → everything this commit sealed
     }
   }
 
@@ -1528,12 +1593,17 @@ export class LoroSnapshot implements CRDTSnapshot {
    * to the new head. Skips an empty seal (no frontier movement) and a batch that translated to no events.
    * `sealedTo` — not a freshly-read frontier — is the "from": a fresh read already counts staged ops.
    */
-  private flushLocal(): void {
+  private flushLocal(meta?: Record<string, unknown>): void {
     const before = this.sealedTo;
     const after = this.doc.frontiers();
     if (this.doc.cmpFrontiers(before, after) === 0) return;
     this.sealedTo = after;
     const batch = this.translatePairs(this.doc.diff(before, after, false), "local", undefined);
+    // Petition 9 — the local echo carries the seal's own canonicalized meta, THREADED (the object
+    // is in hand; the message string is never parsed on the local path). Only the transaction
+    // commit passes one: undo/redo self-commits, metaTransaction, and sealStaged call bare
+    // flushLocal(), so their batches carry none by construction (the v1 self-commit policy).
+    if (meta !== undefined) batch.meta = meta;
     if (batch.events.length > 0) this.emit(batch);
     // Every local seal moves history state (a commit pushes an undo step + clears redo; an undo/redo
     // self-commit pops/pushes) — this ONE site covers them all (plan-undo U1).
@@ -1810,7 +1880,16 @@ export class LoroSnapshot implements CRDTSnapshot {
         this.translateChildKey(key, mapKey, val, origin, spawns, mutations, despawns);
       }
     }
-    return { origin, commitId: change.id, events: [...spawns, ...mutations, ...orders, ...despawns] };
+    const batch: ChangeBatch = {
+      origin,
+      commitId: change.id,
+      events: [...spawns, ...mutations, ...orders, ...despawns],
+    };
+    // Petition 9 — surface the commit's meta on the remote batch (never-throws parse; a foreign or
+    // malformed suffix reads as absent). The local path threads the object instead (flushLocal).
+    const meta = strataMsgMeta(change.msg);
+    if (meta !== undefined) batch.meta = meta;
+    return batch;
   }
 
   /**

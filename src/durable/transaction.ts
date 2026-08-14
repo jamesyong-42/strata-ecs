@@ -397,7 +397,7 @@ class Transaction implements Mutator {
    * synchronous runtime + baseline writes are undo-agnostic (undo is a document-op concern), so the option
    * only reaches the seal.
    */
-  seal(opts?: { undoable?: boolean }): void {
+  seal(opts?: { undoable?: boolean; meta?: Record<string, unknown> }): void {
     // Stage 1 — synchronous pre-existing value writes (the §13.2 agreement point), before any doc write.
     for (const op of this.ops) {
       if (op.kind === "write") {
@@ -521,7 +521,7 @@ export function runTransaction<R>(
   snapshot: CRDTSnapshot,
   tr: TxRuntime,
   fn: (tx: Mutator) => R,
-  opts?: { undoable?: boolean },
+  opts?: { undoable?: boolean; meta?: Record<string, unknown> },
 ): R {
   const tx = new Transaction(snapshot, tr);
   try {

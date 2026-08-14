@@ -8,6 +8,28 @@ All notable changes to strata-ecs are documented here. The format follows
 
 ### Added
 
+- **`transaction(fn, { meta })` — per-commit user metadata** (petition 9). A small
+  JSON-serializable record stamped on the commit itself: it multiplexes into the commit message
+  beside the anti-coalescing tag (`strata:<n>;<json>`), reaches every peer, and surfaces as
+  `batch.meta` on both the local-echo and remote change batches in one canonical shape
+  (JSON-round-tripped at entry). Built for provenance — `{ plugin, label }`-class ids, not
+  payloads: the serialized form is hard-capped at 1KB (throws at entry, before the body runs)
+  and dev-warns above 256B, because it lives in every update forever (a typical
+  `{ plugin, label }` stamp adds ~39 bytes to a ~140-byte single-commit increment, uncompressed —
+  the live-sync cost; identical stamps compress well at rest). Undo/redo self-commits carry no
+  meta (the undone commit's meta is history's to answer); a meta-less commit stays byte-identical
+  to previous releases. Two honesty notes: the receive side bounds AND sanitizes what peers send
+  (oversize, malformed, non-record, or `__proto__`-carrying suffixes read as absent — the cap is
+  enforced where untrusted data enters, not only where trusted data leaves), and a **shallow**
+  at-rest save keeps only the compaction boundary's commit message, so per-commit provenance
+  below the boundary is erased with the history it annotates. Mixed versions: an older peer
+  receiving a meta-carrying commit sees a dev-only foreign-writer warning and nothing else —
+  batch boundaries are unaffected (messages stay distinct, so nothing coalesces). The one real
+  asymmetry is a DOWNGRADE: a peer that wrote meta commits and then reopens its doc on an older
+  build re-seeds its commit counter from bare messages only and may repeat sequence integers its
+  meta-era commits used — measured to have zero functional effect (Loro coalesces on message
+  identity, never the integer, and a later upgraded build re-seeds correctly).
+
 - **`valueEquals(c, a, b)`** — the canonical component-cell equality, exported on the root barrel
   (petition 10). Both values are pushed through the component's column path (f32 `fround`, integer
   wrap, enum labels, default fill) and compared exactly as the sync layer judges settlement: NaN
@@ -16,11 +38,14 @@ All notable changes to strata-ecs are documented here. The format follows
   the cases the columns normalize and re-emits ops forever on settled cells. Components only:
   resources deliberately skip column coercion, so this equality does not apply to them.
 - **`world.resourceStamp(res)`** — a monotonic per-resource write stamp for pull-based change
-  detection (petition 10). Bumped by every `setResource` and every effective `removeResource`
+  detection (petition 10). Bumped by every `setResource`, every effective `removeResource`
   (same-frame rewrites included — it is a write counter, not the reactive layer's frame stamp),
-  dormant until the first read arms it, cleared by `world.reset()`, and fully independent of the
-  reactive layer: polling never arms reactivity-wide stamping, and un-polled worlds pay one branch
-  per resource write. The `orderStamp` contract applied to resources.
+  and by `world.reset()` for every resource that held a value (a wholesale wipe — including
+  `import(bytes, {replace: true})` — is a change a poller must see; the number never moves
+  backward). Dormant until the first `resourceStamp` read of any resource arms collection
+  world-wide, and fully independent of the reactive layer:
+  polling never arms reactivity-wide stamping, and un-polled worlds pay one branch per resource
+  write. The `orderStamp` contract applied to resources.
 
 ## [0.11.0] — 2026-07-24
 

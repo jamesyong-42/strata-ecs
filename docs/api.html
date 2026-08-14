@@ -443,7 +443,7 @@
     </p>
     <div class="chips">
       <span class="chip"><b>v0</b> · pre-release</span>
-      <span class="chip">107 exports</span>
+      <span class="chip">5 entry points</span>
       <span class="chip pre"><b>import</b> "@vibecook/strata-ecs"</span>
     </div>
     <nav class="switch" aria-label="Modules">
@@ -667,7 +667,7 @@
       <ul class="notes">
         <li><span class="nl">Reactive</span> <code>setResource</code> replaces the value object wholesale, so a resource watch is equality-suppressed (<a href="#core-Reactive"><code>observeResource</code></a>, <a href="#react-useResource"><code>useResource</code></a>).</li>
         <li><span class="nl">Update</span> <code>world.updateResource(res, fn)</code> is the read-modify-write in one call — <code>fn</code> receives the current value and returns the next. It throws if the resource was never set (there is nothing to update; call <code>setResource</code> first).</li>
-        <li><span class="nl">Poll</span> <code>world.resourceStamp(res): number</code> is a monotonic per-resource write stamp — bumped by every <code>setResource</code> and every effective <code>removeResource</code>, same-frame rewrites included. It arms on first read and is pull-only: poll it cheaply, compare against the last value you saw. Independent of the reactive layer (polling never arms it), and cleared by <code>world.reset()</code>.</li>
+        <li><span class="nl">Poll</span> <code>world.resourceStamp(res): number</code> is a monotonic per-resource write stamp — bumped by every <code>setResource</code>, every effective <code>removeResource</code> (same-frame rewrites included), and by <code>world.reset()</code> for every resource that held a value (a wholesale wipe is a change). The first read of <em>any</em> resource arms collection world-wide; the stamp never moves backward, and polling is pull-only: read it cheaply, compare against the last value you saw. Independent of the reactive layer — polling never arms the reactive layer.</li>
       </ul>
     </article>
 
@@ -715,7 +715,8 @@
       <ul class="notes">
         <li><span class="nl">Cells</span> <code>NaN</code> equals <code>NaN</code> (a NaN cell must never strand) and <code>±0</code> collapse — deliberately different from the reactive layer's <code>Object.is</code>-based shallow equality on signed zero. The divergence is load-bearing; don't "fix" it.</li>
         <li><span class="nl">Absent</span> <code>undefined</code> means <em>cell absent</em>: both-<code>undefined</code> is equal, one-<code>undefined</code> is not.</li>
-        <li><span class="nl">Throws</span> A malformed value (missing no-default field, unknown enum label) throws exactly as the equivalent local write would.</li>
+        <li><span class="nl">Throws</span> A malformed value (missing no-default field, unknown enum label) throws exactly as the equivalent local write would — but only when both operands are present: a comparison against <code>undefined</code> short-circuits before validation. <code>null</code> is refused loudly (it is not the absent sentinel — <code>undefined</code> is). A value shaped for a <em>different</em> component also fails at runtime only — the parameters are deliberately untyped.</li>
+        <li><span class="nl">Explicit undefined</span> On a defaulted numeric field, <code>{ max: undefined }</code> is a <em>present</em> key and stores <code>0</code> — it does not fill the default the way an <em>omitted</em> key does. <code>valueEquals</code> is exactly faithful to that write, so spread-built patch objects carrying explicit <code>undefined</code> compare unequal to their default-filled siblings.</li>
         <li><span class="nl">Components only</span> Resources skip column coercion, so this equality is wrong for them — compare resource values with your own domain equality.</li>
       </ul>
     </article>
@@ -1350,6 +1351,7 @@
         <li><span class="nl d">Access</span> A value commit to a pre-existing component <em>inside a system</em> rides 001 enforcement — the system must declare it in <code>access.write</code>, or a dev build throws once an observer has armed enforcement.</li>
         <li><span class="nl d">Ordered</span> <code>tx.setRelation</code> takes a <code>place</code> and <code>tx.moveRelation</code> reorders within the parent (<a href="#core-OrderPlace"><code>OrderPlace</code></a>). A <code>before</code> / <code>after</code> anchor is resolved when the call is recorded and re-checked at commit — if it is no longer a sibling then, the child degrades to <code>"last"</code>.</li>
         <li><span class="nl">Undoability</span> <code>opts.undoable: false</code> excludes this transaction's commit from the <strong>local</strong> undo stack — for document migrations, format upgrades, and read-repair at open. It is otherwise an ordinary commit: peers receive it as a normal remote batch, history hooks don't fire for it, and a pending redo survives it. Contrast <code>clearHistory()</code>, which empties both stacks wholesale.</li>
+        <li><span class="nl">Meta</span> <code>opts.meta</code> stamps a small JSON record <em>on this commit</em> — provenance like <code>{ plugin, label }</code> — carried in the document's history and readable by every peer (it rides the commit message beside the anti-coalescing tag). Ids, not payloads: the serialized form throws over 1KB at entry, before <code>fn</code> runs, and dev-warns over 256B. Undoing a meta-carrying commit ships no meta of its own. Absent <code>meta</code>, the commit is byte-identical to today's. Because meta lives in the <em>history</em>, a <strong>shallow</strong> at-rest save keeps only the compaction boundary's message — provenance below the boundary is erased with the history it annotates.</li>
       </ul>
     </article>
 
@@ -1912,7 +1914,10 @@ interface DurableStoreOptions {
   subscribeOutbound(fn: (bytes: Uint8Array) => void): Unsubscribe;  // OUTBOUND wire
 }</script>
 
-<script type="text/plain" data-code="durable-transaction">transaction<R>(fn: (tx: Mutator) => R, opts?: { undoable?: boolean }): R;
+<script type="text/plain" data-code="durable-transaction">transaction<R>(
+  fn: (tx: Mutator) => R,
+  opts?: { undoable?: boolean; meta?: Record<string, unknown> },
+): R;
 
 interface Mutator {   // the tx vocabulary — same surface as world/ctx, sealed as one commit
   spawn(init?: SpawnInit): Entity;      // identity minted NOW; placement rides projection

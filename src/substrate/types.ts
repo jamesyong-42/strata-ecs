@@ -112,7 +112,7 @@ export interface MutableSnapshot extends Snapshot {
  */
 export interface CRDTSnapshot extends MutableSnapshot {
   applyRemote(bytes: Uint8Array): ChangeBatch[];
-  commit(body: () => void, opts?: { undoable?: boolean }): void;
+  commit(body: () => void, opts?: { undoable?: boolean; meta?: Record<string, unknown> }): void;
   export(opts?: { mode?: "shallow" }): Uint8Array;
   subscribe(fn: (batch: ChangeBatch) => void): Unsubscribe;
   undo(): void;
@@ -205,4 +205,15 @@ export interface ChangeBatch {
   events: ChangeEvent[];
   /** Optional adapter-provided commit identity (logging / dedup). */
   commitId?: string;
+  /**
+   * Petition 9 (005 §10 as-built amendment, ADDITIVE) — the commit's user metadata, when its
+   * `transaction(fn, { meta })` carried one. One shape both directions: a LOCAL echo carries the
+   * seal's own canonicalized record (threaded, never parsed from the message); a REMOTE batch
+   * carries the payload parsed from the commit message with the never-throws discipline (a
+   * malformed or oversize peer suffix reads as absent, never an error). Absent on meta-less
+   * commits, undo/redo self-commits, and coalesced bootstrap batches (many commits, no single
+   * meta). A commit whose events all net to nothing emits NO batch, so its meta reaches the wire
+   * but is never surfaced — an audit consumer sees a gap, not a divergence (both sides agree).
+   */
+  meta?: Record<string, unknown>;
 }

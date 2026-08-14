@@ -59,6 +59,7 @@
 
 import type { LoroDoc } from "loro-crdt"; // the ONE loro import — parameter type ONLY (Loro stays in the adapter)
 import { type Component, type Entity, type EntityKey, entityKey } from "../core";
+import { DEV, devWarn } from "../core/dev";
 import type { ChangeBatch, Unsubscribe } from "../substrate";
 import {
   DOC_ID_KEY,
@@ -68,6 +69,62 @@ import {
   type OutboundCursor,
 } from "./loro-snapshot";
 import { type Mutator, runTransaction, type TxRuntime } from "./transaction";
+
+/** Petition 9 — the serialized-meta budget: hard failure at 1KB (it lives in every update forever), advisory from 256B. */
+const META_MAX_BYTES = 1024;
+const META_WARN_BYTES = 256;
+const utf8 = new TextEncoder();
+
+/**
+ * Petition 9 — validate + canonicalize a transaction's `meta` at entry (before `fn` runs). Returns
+ * the JSON round-trip of the record, so the LOCAL echo's `batch.meta` is byte-for-byte the shape a
+ * REMOTE peer parses — one shape both directions, and serializability is proven up front (a
+ * circular record throws HERE, at the caller). Plain records only: an array, class instance
+ * masquerading as data, or scalar is a caller bug, refused loudly rather than half-carried.
+ */
+function canonicalizeTxMeta(meta: Record<string, unknown>): Record<string, unknown> {
+  if (meta === null || typeof meta !== "object" || Array.isArray(meta)) {
+    throw new Error("strata: transaction meta must be a plain JSON-serializable record.");
+  }
+  const json = JSON.stringify(meta); // throws on circular/BigInt — the caller's failure, at entry
+  // Review finding 1: validate the OUTPUT, not just the input — `toJSON()` can rewrite a
+  // record-shaped input into a string/array/null/number (Date is the everyday case), or into
+  // nothing at all (stringify returns undefined). Half-carrying that breaks the one-shape law
+  // (local echo would surface a non-record the remote parser refuses) — refuse loudly instead.
+  // Review finding (wire 2): an own `__proto__` key ANYWHERE in the structure is refused — it
+  // survives JSON round-trips as an own key, and a consumer merging with `Object.assign` fires
+  // Object.prototype's setter, replacing the target's prototype. Never legitimate provenance.
+  let dunderProto = false;
+  const canonical: unknown =
+    json === undefined
+      ? undefined
+      : JSON.parse(json, function (key, value: unknown) {
+          if (key === "__proto__") dunderProto = true;
+          return value;
+        });
+  if (dunderProto) {
+    throw new Error('strata: transaction meta must not carry a "__proto__" key (at any depth).');
+  }
+  if (canonical === null || typeof canonical !== "object" || Array.isArray(canonical)) {
+    throw new Error(
+      "strata: transaction meta must be a plain JSON-serializable record — " +
+        "a toJSON() that rewrites it to a non-record is refused.",
+    );
+  }
+  const bytes = utf8.encode(json).length;
+  if (bytes > META_MAX_BYTES) {
+    throw new Error(
+      `strata: transaction meta is ${bytes}B serialized — over the ${META_MAX_BYTES}B cap. ` +
+        `Meta lives in every update forever: carry ids, not payloads.`,
+    );
+  }
+  if (DEV && bytes > META_WARN_BYTES)
+    devWarn(
+      `transaction meta is ${bytes}B serialized (advisory budget ${META_WARN_BYTES}B) — ` +
+        `it is carried in the document forever; prefer ids over payloads.`,
+    );
+  return canonical as Record<string, unknown>;
+}
 
 /** Options for {@link createDurableStore} (plan-undo U1). */
 export interface DurableStoreOptions {
@@ -224,6 +281,15 @@ export class DurableStore {
    * iteration-safe; structure rides projection) — no iteration guard. On any throw nothing commits
    * and the transaction rolls back (minted identities invalidated, keys burned — transaction.ts).
    *
+   * `opts.meta` (petition 9) — a small JSON-serializable plain record stamped ON THIS COMMIT and
+   * carried in the document forever: it rides the commit message beside the anti-coalescing tag,
+   * reaches every peer, and surfaces on both the local-echo and remote `ChangeBatch` as `batch.meta`
+   * (one canonical JSON-round-tripped shape in both directions). Use ids, not payloads — provenance
+   * like `{ plugin, label }` — the serialized form is HARD-CAPPED at 1KB (throws at entry, before
+   * `fn` runs) and DEV-warns above 256B. Undo/redo of a meta-carrying commit ships NO meta of its
+   * own (the undone commit's meta is history's to answer). Values that JSON cannot represent
+   * (functions, `undefined`) are dropped by serialization; a circular record throws at entry.
+   *
    * `opts.undoable` (default `true`: one transaction = one undo step) governs the LOCAL undo stack only.
    * `undoable: false` excludes this transaction's commit from THIS peer's undo stack — a later `undo()`
    * skips straight past it to the user's last real edit, and the history hooks (`capture`) do NOT fire for
@@ -236,7 +302,10 @@ export class DurableStore {
    * Legal ONLY on an ATTACHED store (the recorder needs the projector + baseline the binding installs)
    * and NOT re-entrantly (one open transaction per store — a nested `transaction` throws).
    */
-  transaction<R>(fn: (tx: Mutator) => R, opts?: { undoable?: boolean }): R {
+  transaction<R>(
+    fn: (tx: Mutator) => R,
+    opts?: { undoable?: boolean; meta?: Record<string, unknown> },
+  ): R {
     if (this.txRuntime === null) {
       throw new Error(
         "strata: doc.transaction requires an attached store — call attachDurable(world, store) first.",
@@ -247,9 +316,15 @@ export class DurableStore {
         "strata: nested doc.transaction is not allowed — one open transaction per store.",
       );
     }
+    // Petition 9 — canonicalize + cap-check the meta at ENTRY, before `fn` runs: the failure is
+    // the caller's, at the caller, never a mid-seal surprise or a docs promise.
+    const sealOpts =
+      opts?.meta === undefined
+        ? opts
+        : { undoable: opts.undoable, meta: canonicalizeTxMeta(opts.meta) };
     this.txOpen = true;
     try {
-      return runTransaction(this.snapshot, this.txRuntime, fn, opts);
+      return runTransaction(this.snapshot, this.txRuntime, fn, sealOpts);
     } finally {
       this.txOpen = false;
     }
