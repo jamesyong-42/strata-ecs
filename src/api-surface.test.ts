@@ -48,6 +48,7 @@ const SURFACE = {
     "field",
     "phase",
     "validatePipelineAccess",
+    "valueEquals",
   ],
   durable: [
     "DurableSyncStatus",

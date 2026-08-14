@@ -115,6 +115,29 @@ export function cellEquals(a: ComponentValue | undefined, b: ComponentValue | un
   return true;
 }
 
+/**
+ * PUBLIC (root barrel; petition 10 / design-009 BF-D20) — canonical COMPONENT-cell equality, the
+ * predicate reconcile itself judges settlement by: both values are pushed through {@link canon}
+ * (encode → column-coerce → decode) and compared with {@link cellEquals}. Exported so a consumer
+ * differ (drop writes that equal the projected value) can never disagree with reconcile — a
+ * hand-rolled comparison drifts on exactly the cases canon normalizes (f32 fround, integer wrap,
+ * enum labels, defaults). This is the CELL equality: NaN equals NaN (a NaN cell must not strand)
+ * and ±0 collapse (a column round-trip loses zero's sign) — deliberately DIFFERENT from the
+ * reactive layer's `Object.is`-based shallowEqual on signed zero; the divergence is load-bearing,
+ * do not "fix" it.
+ *
+ * `undefined` means CELL ABSENT: both-undefined is equal, one-undefined is not. THROWS on a
+ * malformed value exactly as a local write would (missing no-default field, unknown enum label) —
+ * a differ compares values it is about to write, and the write would throw the same. COMPONENTS
+ * ONLY: resources skip column coercion ({@link canonResource}), so this equality is WRONG for
+ * them — frounding a resource cell strands it against the raw runtime value (the inverted-§2.1
+ * trap); a resource sibling ships with its own design round, not by reusing this.
+ */
+export function valueEquals(c: Component, a: unknown, b: unknown): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return cellEquals(canon(c, a as ComponentValue), canon(c, b as ComponentValue));
+}
+
 /** A per-cell reject — quarantines exactly one malformed inbound fact, naming the offending field (§2.3). */
 export type TryCanonResult =
   | { ok: true; value: ComponentValue }

@@ -4,6 +4,24 @@ All notable changes to strata-ecs are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semver](https://semver.org) (pre-1.0: minor versions may break APIs).
 
+## [Unreleased]
+
+### Added
+
+- **`valueEquals(c, a, b)`** — the canonical component-cell equality, exported on the root barrel
+  (petition 10). Both values are pushed through the component's column path (f32 `fround`, integer
+  wrap, enum labels, default fill) and compared exactly as the sync layer judges settlement: NaN
+  equals NaN, ±0 collapse, `undefined` means cell-absent. Built for consumer differs — dropping
+  writes that equal the current projected value — where a hand-rolled comparison drifts on exactly
+  the cases the columns normalize and re-emits ops forever on settled cells. Components only:
+  resources deliberately skip column coercion, so this equality does not apply to them.
+- **`world.resourceStamp(res)`** — a monotonic per-resource write stamp for pull-based change
+  detection (petition 10). Bumped by every `setResource` and every effective `removeResource`
+  (same-frame rewrites included — it is a write counter, not the reactive layer's frame stamp),
+  dormant until the first read arms it, cleared by `world.reset()`, and fully independent of the
+  reactive layer: polling never arms reactivity-wide stamping, and un-polled worlds pay one branch
+  per resource write. The `orderStamp` contract applied to resources.
+
 ## [0.11.0] — 2026-07-24
 
 ### Performance

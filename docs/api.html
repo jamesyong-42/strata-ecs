@@ -443,7 +443,7 @@
     </p>
     <div class="chips">
       <span class="chip"><b>v0</b> · pre-release</span>
-      <span class="chip">106 exports</span>
+      <span class="chip">107 exports</span>
       <span class="chip pre"><b>import</b> "@vibecook/strata-ecs"</span>
     </div>
     <nav class="switch" aria-label="Modules">
@@ -488,6 +488,7 @@
         <tr><td class="band b-core"><a href="#core-SystemAccess"><code>SystemAccess</code></a></td><td class="k">type</td><td>A system's declared read/write column envelope.</td></tr>
         <tr><td class="band b-core"><a href="#core-EntityEditor"><code>EntityEditor</code></a></td><td class="k">type</td><td>The immediate whole-component value-write surface.</td></tr>
         <tr><td class="band b-core"><a href="#core-validatePipelineAccess"><code>validatePipelineAccess</code></a></td><td class="k">fn</td><td>Dev-only advisory pipeline access diagnostics.</td></tr>
+        <tr><td class="band b-core"><a href="#core-valueEquals"><code>valueEquals</code></a></td><td class="k">fn</td><td>Canonical component-cell equality, as reconcile judges it.</td></tr>
         <tr><td class="band b-core"><a href="#core-createWorld"><code>createWorld</code></a></td><td class="k">fn</td><td>Create a world over a fresh runtime store.</td></tr>
         <tr><td class="band b-core"><a href="#core-World"><code>World</code></a></td><td class="k">class</td><td>The application-facing handle — mutate, query, tick, sync.</td></tr>
         <tr><td class="band b-core"><a href="#core-Reactive"><code>Reactive</code></a></td><td class="k">class</td><td>The poll-at-boundary reactive observer layer.</td></tr>
@@ -666,6 +667,7 @@
       <ul class="notes">
         <li><span class="nl">Reactive</span> <code>setResource</code> replaces the value object wholesale, so a resource watch is equality-suppressed (<a href="#core-Reactive"><code>observeResource</code></a>, <a href="#react-useResource"><code>useResource</code></a>).</li>
         <li><span class="nl">Update</span> <code>world.updateResource(res, fn)</code> is the read-modify-write in one call — <code>fn</code> receives the current value and returns the next. It throws if the resource was never set (there is nothing to update; call <code>setResource</code> first).</li>
+        <li><span class="nl">Poll</span> <code>world.resourceStamp(res): number</code> is a monotonic per-resource write stamp — bumped by every <code>setResource</code> and every effective <code>removeResource</code>, same-frame rewrites included. It arms on first read and is pull-only: poll it cheaply, compare against the last value you saw. Independent of the reactive layer (polling never arms it), and cleared by <code>world.reset()</code>.</li>
       </ul>
     </article>
 
@@ -696,6 +698,25 @@
       </p>
       <ul class="notes">
         <li><span class="nl">Persist</span> Use the object form for any component that reaches the durable or ephemeral layers; a reordered array silently remaps stored data.</li>
+      </ul>
+    </article>
+
+    <article class="entry e-core" id="core-valueEquals">
+      <h3><span class="k">function</span>valueEquals<a class="anchor" href="#core-valueEquals">#</a></h3>
+      <figure class="code" data-file="core-valueEquals" data-kind="function"></figure>
+      <p>
+        Canonical <em>component-cell</em> equality — the predicate the sync layer itself judges settlement
+        by. Both values are pushed through the component's column path (encode, coerce, decode: f32
+        <code>fround</code>, integer wrap, enum labels, default fill) and compared field-wise. Use it
+        anywhere you decide whether a write is a no-op against a current value — a hand-rolled comparison
+        drifts on exactly the cases the columns normalize, and a differ that disagrees with the sync layer
+        re-emits ops forever on cells it considers settled.
+      </p>
+      <ul class="notes">
+        <li><span class="nl">Cells</span> <code>NaN</code> equals <code>NaN</code> (a NaN cell must never strand) and <code>±0</code> collapse — deliberately different from the reactive layer's <code>Object.is</code>-based shallow equality on signed zero. The divergence is load-bearing; don't "fix" it.</li>
+        <li><span class="nl">Absent</span> <code>undefined</code> means <em>cell absent</em>: both-<code>undefined</code> is equal, one-<code>undefined</code> is not.</li>
+        <li><span class="nl">Throws</span> A malformed value (missing no-default field, unknown enum label) throws exactly as the equivalent local write would.</li>
+        <li><span class="nl">Components only</span> Resources skip column coercion, so this equality is wrong for them — compare resource values with your own domain equality.</li>
       </ul>
     </article>
 
@@ -1594,6 +1615,8 @@ type Arity = "one" | "many";   // ordered relations are arity "one" only</script
   schema: Sch,
 ): Resource<ValueOf<Sch>, Sch>;</script>
 
+<script type="text/plain" data-code="core-valueEquals">function valueEquals(c: Component, a: unknown, b: unknown): boolean;</script>
+
 <script type="text/plain" data-code="core-field">function field<const T extends FieldType>(type: T): FieldSpec<T, false>;
 function field<const T extends FieldType>(
   type: T,
@@ -1730,6 +1753,7 @@ type Pipeline = readonly Phase[];   // positional — array order is run order</
   tagsOf(e): Tag[];                      // EVERY tag set — iteration-safe; NOT reactive; dead/stale/identity-only reads []
   getRelation(e, r): Entity | undefined; getRelations(e, r): Entity[]; getReverse(e, r): Entity[]; // ordered: sibling order
   orderStamp(parent, r): number;         // per-parent order version — arms on first read, pull-only
+  resourceStamp(res: Resource): number;  // per-resource write stamp — arms on first read, pull-only
   getResource<S>(res: Resource<S>): S | undefined;   firstOf(q: Query): Entity | undefined;
   isAlive(e): boolean; isPlaced(e): boolean; isIdentityOnly(e): boolean;
 

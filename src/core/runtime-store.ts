@@ -156,6 +156,18 @@ export class RuntimeStore implements ECSStore {
   private orderStampsArmed = false;
   private orderStampCounter = 0;
   /**
+   * Per-resource monotonic WRITE stamps (petition 10) — the orderStamp mechanics applied to the
+   * resource write chokepoints: dormant until the first `resourceStamp()` read arms collection,
+   * then bumped from a shared counter on every `setResource` and every effective `removeResource`,
+   * so EVERY write moves the number (same-frame rewrites included). Deliberately NOT the
+   * frame-based `resourceFrames` above: frames only advance through the reactive layer, so a
+   * never-reactive world would stamp every write at the same frame and a poller would miss all
+   * but the first — the counter is what makes the poll contract hold without arming reactivity.
+   */
+  private readonly resourceStamps = new Map<ResourceId, number>();
+  private resourceStampsArmed = false;
+  private resourceStampCounter = 0;
+  /**
    * Per-resource `lastWrittenFrame` (Patch Note 003 §1.2), a dense array indexed by `ResourceId`
    * (ids are dense). Bumped in `setResource` only — resources have no column/structural path — behind
    * the `reactiveOn` gate. Grown lazily on first stamp past the current length; a never-stamped id
@@ -639,6 +651,13 @@ export class RuntimeStore implements ECSStore {
     this.resourceFrames[id] = this.stampFrame; // frame+1 inside a callback — deterministic next-notify delivery
   }
 
+  /** Petition 10 — bump `id`'s write stamp if collection is armed (see `resourceStamps`). Gated on
+   *  its OWN armed flag, independent of `reactiveOn`: polling must not tax reactive worlds, and
+   *  reactivity must not tax pollers. */
+  private bumpResourceStamp(id: ResourceId): void {
+    if (this.resourceStampsArmed) this.resourceStamps.set(id, ++this.resourceStampCounter);
+  }
+
   /** @internal The frame of the most recent `setResource(id)` — 0 when never stamped/out of range (003 §1.2). */
   resourceFrame(id: ResourceId): number {
     return id < this.resourceFrames.length ? this.resourceFrames[id] : 0;
@@ -1117,6 +1136,7 @@ export class RuntimeStore implements ECSStore {
     this.tags.reset();
     this.relations.reset();
     this.orderStamps.clear(); // stamps die with the sequences; reset is a full invalidation for order caches too
+    this.resourceStamps.clear(); // petition 10 — write stamps die with the values (reads 0 after reset; the counter stays monotonic so post-reset writes still read as changed)
     this.resources.clear();
     // Free every live slot with a generation bump — stale handles now read dead, never aliased.
     this.table.reset();
@@ -1460,6 +1480,26 @@ export class RuntimeStore implements ECSStore {
     return this.orderStamps.get(rel.id)?.get(parent) ?? 0;
   }
 
+  /**
+   * Petition 10 — the resource's monotonic write stamp: 0 when never written since arming,
+   * strictly increasing afterwards (bumped by `setResource` and every effective `removeResource`);
+   * the FIRST call arms stamp collection (the `orderStamp` mirror), so writes BEFORE the first
+   * read are unstamped and a poller baselines at 0. Pull-only: poll it cheaply (one Map lookup),
+   * compare to the last value you saw.
+   */
+  resourceStamp(res: Resource): number {
+    if (DEV && resourceById(res.id) !== res) {
+      // A handle that is not THE registered resource (a copy, or a survivor of the test-only
+      // schema reset) is never the one `setResource` stamps — polling it reads a forever-0 and
+      // keeps stale caches silently, the same misuse class as orderStamp on an unordered
+      // relation. Warn + 0, and deliberately do NOT arm collection.
+      devWarn(`strata: resourceStamp on "${res.name}" — not the registered resource; always 0.`);
+      return 0;
+    }
+    if (!this.resourceStampsArmed) this.resourceStampsArmed = true;
+    return this.resourceStamps.get(res.id) ?? 0;
+  }
+
   /** Arity "many": add an edge (idempotent). Places the source; the target is not placed. */
   addRelation(e: Entity, rel: Relation, target: Entity): void {
     if (this.rejectMutationInEmit("addRelation")) return; // 002 §6
@@ -1534,6 +1574,7 @@ export class RuntimeStore implements ECSStore {
     }
     this.resources.set(res.id, obj);
     this.bumpResource(res.id); // resource-version stamp (003 §1.2) — gated on reactiveOn
+    this.bumpResourceStamp(res.id); // petition 10 — poll write stamp, gated on its own armed flag
   }
 
   /**
@@ -1546,7 +1587,10 @@ export class RuntimeStore implements ECSStore {
    */
   removeResource<S>(res: Resource<S>): void {
     if (DEV && this.writeHooks !== null) this.fireWrite("resource"); // petition 4 — fires at entry (may over-fire on an absent-resource no-op; never misses a real remove)
-    if (this.resources.delete(res.id)) this.bumpResource(res.id); // stamp ONLY if it was present
+    if (this.resources.delete(res.id)) {
+      this.bumpResource(res.id); // stamp ONLY if it was present
+      this.bumpResourceStamp(res.id); // petition 10 — same present-only condition: an absent remove is stampless
+    }
   }
 
   getResource<S>(res: Resource<S>): S | undefined {

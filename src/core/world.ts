@@ -454,6 +454,16 @@ export class World {
     }
     this.store.setResource(res, fn(current));
   }
+  /** Petition 10 — the resource's monotonic write stamp: 0 until written (after arming), bumped by
+   *  every `setResource` and every effective `removeResource` — same-frame rewrites included, which
+   *  is what makes it a poll contract (unlike the reactive layer's frame stamp). The FIRST call
+   *  arms stamp collection (the {@link World.orderStamp} mirror) — dormant until then, so worlds
+   *  that never poll pay one branch per resource write. Pull-only change detection: poll cheaply,
+   *  compare against the last value you saw; cleared by {@link World.reset}. Independent of the
+   *  reactive layer — polling never arms stamping-wide reactivity, and needs no observer. */
+  resourceStamp(res: Resource): number {
+    return this.store.resourceStamp(res);
+  }
 
   // --- the frame ---
 

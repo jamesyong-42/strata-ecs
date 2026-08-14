@@ -12,3 +12,7 @@
  * the Part I build plan.
  */
 export * from "./core";
+// Petition 10 — reconcile-grade component-cell equality for consumer differs (design-009 BF-D20).
+// It lives in the substrate (canon.ts, beside the primitives it wraps) but is public on THIS
+// barrel only; the substrate barrel itself stays internal.
+export { valueEquals } from "./substrate/canon";

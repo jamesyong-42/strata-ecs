@@ -916,6 +916,7 @@ const READERS = new Set<string>([
   // plan-ordered-relations §3.3: a pull-only version read (its bump sites live with the
   // relation mutators); the first call arms collection but never writes ECS state.
   "orderStamp",
+  "resourceStamp",
   "firstOf",
   "query",
   "count",
